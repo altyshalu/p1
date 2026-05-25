@@ -1,0 +1,20 @@
+key: learning-worker
+description: Produce memory write candidates from run artifacts. L2 decides what becomes durable memory.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [summary]
+output_schema:
+  type: object
+  required: [memory_writes, procedural_change_candidate]
+stop_conditions:
+  - memory_candidates_created
+memory_policy:
+  writes: l2_curated
+side_effect_policy:
+  procedural_changes: candidate_only

@@ -1,0 +1,21 @@
+key: approval-adapter
+description: Record the approval gate state for draft-only outputs. It never grants publishing rights by itself.
+worker_type: human_gate
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [require_human_approval]
+output_schema:
+  type: object
+  required: [approval]
+stop_conditions:
+  - approval_status_recorded
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  publish_allowed: false
+  approval_required: true

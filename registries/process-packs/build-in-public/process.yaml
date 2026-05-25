@@ -1,0 +1,31 @@
+key: build-in-public
+name: Build in Public Distribution Loop
+version: 0.2.0
+purpose: Turn explicit progress inputs into reviewed channel-specific public drafts through a bounded L2 supervisor loop.
+max_supervisor_turns: 8
+max_tasks_per_turn: 3
+allowed_workers:
+  - signal-collector
+  - narrative-synthesizer
+  - channel-adapter
+  - quality-judge
+  - approval-adapter
+  - learning-worker
+allowed_tools: []
+completion_criteria:
+  - normalized signals exist
+  - channel drafts exist for requested channels
+  - quality evaluation is present
+  - publishing remains gated unless explicitly approved
+required_inputs:
+  - signals
+  - channels
+side_effects:
+  publish:
+    default: disabled
+    approval_required: true
+memory_policy:
+  l3_direct_writes: false
+  l2_curates_episodic: true
+  l2_curates_semantic: true
+  procedural_changes: candidate_only

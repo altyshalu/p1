@@ -1,0 +1,22 @@
+key: channel-adapter
+description: Adapt narrative atoms into channel-specific draft posts. Produces drafts only; never publishes.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 120
+  max_iterations: 8
+input_schema:
+  type: object
+  required: [atoms, channels]
+output_schema:
+  type: object
+  required: [drafts]
+stop_conditions:
+  - drafts_created_for_selected_channels
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none
+  publish_allowed: false

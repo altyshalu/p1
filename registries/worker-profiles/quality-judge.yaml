@@ -1,0 +1,25 @@
+key: quality-judge
+description: Evaluate draft completeness and side-effect safety against the build-in-public quality rubric.
+worker_type: evaluator
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [drafts]
+output_schema:
+  type: object
+  required: [passed, score, checks]
+grader_spec:
+  eval_key: build-in-public-draft-quality
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: [eval_failed, worker_exception, timeout]
+stop_conditions:
+  - eval_report_created
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

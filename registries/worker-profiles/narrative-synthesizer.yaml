@@ -1,0 +1,21 @@
+key: narrative-synthesizer
+description: Convert normalized signals into grounded narrative atoms for build-in-public content.
+worker_type: hermes_agent
+agent_prompt: Create grounded content_atoms from explicit signals only. Do not invent progress or claims.
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 120
+  max_iterations: 8
+input_schema:
+  type: object
+  required: [signals]
+output_schema:
+  type: object
+  required: [content_atoms]
+stop_conditions:
+  - atoms_grounded_in_signals
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

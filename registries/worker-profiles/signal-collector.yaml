@@ -1,0 +1,23 @@
+key: signal-collector
+description: Normalize explicit progress signals supplied by the user or upstream tools. Must not invent signals.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [signals]
+output_schema:
+  type: object
+  required: [signals]
+stop_conditions:
+  - normalized_signals_created
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [input_validation, worker_exception, timeout]
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none
