@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
 
     hermes_enabled: bool = True
-    hermes_model: str = "deepseek-v4-flash"
+    hermes_model: str = "deepseek-v4-pro"
     hermes_max_iterations: int = 20
     deepseek_api_key: str | None = Field(default=None, validation_alias="DEEPSEEK_API_KEY")
     deepseek_base_url: str = "https://api.deepseek.com"
