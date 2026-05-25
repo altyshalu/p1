@@ -1,7 +1,7 @@
 key: build-in-public-trend-radar
 name: Build in Public Trend Radar
 version: 0.1.0
-purpose: Find AI/dev trend signals, rank them for ABRT relevance, draft build-in-public posts, edit out AI slop, evaluate quality, and stop at human approval.
+purpose: Find AI/dev trend signals through real read-only source tools, rank them for ABRT relevance, draft build-in-public posts, edit out AI slop, evaluate quality, and stop at human approval.
 max_supervisor_turns: 14
 max_tasks_per_turn: 2
 allowed_workers:
@@ -29,7 +29,8 @@ completion_criteria:
   - draft quality evaluation passes
   - publishing remains gated until explicit human approval
 required_inputs:
-  - sources
+  - query
+  - providers
   - channels
 side_effects:
   publish:

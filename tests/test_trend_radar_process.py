@@ -112,28 +112,6 @@ def trend_sources() -> list[dict[str, Any]]:
                 }
             ],
         },
-        {
-            "source": "arxiv",
-            "items": [
-                {
-                    "title": "Evaluating Multi-Agent Execution Systems",
-                    "url": "https://arxiv.org/abs/2605.00001",
-                    "summary": "Paper about evaluators, contracts, and failure repair in agent systems.",
-                    "metrics": {"submitted": "2026-05-25"},
-                }
-            ],
-        },
-        {
-            "source": "huggingface",
-            "items": [
-                {
-                    "title": "fineweb",
-                    "url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb",
-                    "summary": "Dataset for testing L2/L3 orchestration and eval loops.",
-                    "metrics": {"likes": 80},
-                }
-            ],
-        },
     ]
 
 
@@ -174,10 +152,10 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
                         {
                             "task_type": "collect_trend_sources",
                             "worker_profile": "trend-source-collector",
-                            "goal": "Normalize trend sources",
-                            "inputs": {"sources": sources},
+                            "goal": "Collect real trend sources",
+                            "inputs": {"query": "openai codex", "providers": ["github"], "max_results": 1},
                             "artifact_type": "signals",
-                            "allowed_tools": ["github-search-tool", "arxiv-search-tool", "hf-hub-search-tool"],
+                            "allowed_tools": ["github-search-tool"],
                         }
                     ],
                 }

@@ -17,11 +17,19 @@ class LiveApiClient:
             response.raise_for_status()
             return response.json()
 
-    async def create_trend_radar_run(self, *, goal: str, sources: list[dict[str, Any]], channels: list[str]) -> dict[str, Any]:
+    async def create_trend_radar_run(
+        self,
+        *,
+        goal: str,
+        query: str,
+        providers: list[str],
+        channels: list[str],
+        max_results: int,
+    ) -> dict[str, Any]:
         payload = {
             "process_key": "build-in-public-trend-radar",
             "goal": goal,
-            "inputs": {"sources": sources, "channels": channels},
+            "inputs": {"query": query, "providers": providers, "channels": channels, "max_results": max_results},
             "require_human_approval": True,
         }
         async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:

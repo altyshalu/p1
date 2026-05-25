@@ -1,6 +1,12 @@
 import json
 import sys
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 from typing import Any
+
+HTTP_TIMEOUT_SECONDS = 20
+USER_AGENT = "l2l3-protocol/0.1 real-trend-collector"
 
 
 class WorkerInputError(ValueError):
@@ -110,7 +116,33 @@ def learn(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
 
 
 def collect_trend_sources(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    sources = require_list(contract["inputs"], "sources")
+    query = require_text(contract["inputs"].get("query"), "query")
+    providers = [require_text(provider, "provider").lower() for provider in require_list(contract["inputs"], "providers")]
+    max_results = int(contract["inputs"].get("max_results", 5))
+    if max_results < 1:
+        raise WorkerInputError("max_results must be >= 1")
+
+    allowed_toolsets = set(contract.get("allowed_tools", []))
+    source_results: list[dict[str, Any]] = []
+    for provider in providers:
+        if provider == "github":
+            _require_toolset(allowed_toolsets, "github_search", provider)
+            source_results.append({"source": "github", "items": _search_github(query, max_results)})
+        elif provider == "arxiv":
+            _require_toolset(allowed_toolsets, "arxiv_search", provider)
+            source_results.append({"source": "arxiv", "items": _search_arxiv(query, max_results)})
+        elif provider in {"huggingface", "hf"}:
+            _require_toolset(allowed_toolsets, "hf_hub_search", provider)
+            source_results.append({"source": "huggingface", "items": _search_huggingface(query, max_results)})
+        else:
+            raise WorkerInputError(f"unsupported trend provider: {provider}")
+
+    if not source_results:
+        raise WorkerInputError("no trend providers were requested")
+    return {"trend_signals": _normalize_trend_source_results(source_results), "source_results": source_results}
+
+
+def _normalize_trend_source_results(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
     trend_signals: list[dict[str, Any]] = []
     for source_group in sources:
         source = require_text(source_group.get("source"), "source")
@@ -125,7 +157,107 @@ def collect_trend_sources(contract: dict[str, Any], context: dict[str, Any]) -> 
             if not isinstance(metrics, dict):
                 raise WorkerInputError(f"trend item metrics must be an object: {title}")
             trend_signals.append({"source": source, "title": title, "url": url, "summary": summary, "metrics": metrics})
-    return {"trend_signals": trend_signals}
+    if not trend_signals:
+        raise WorkerInputError("real trend search returned no source results")
+    return trend_signals
+
+
+def _require_toolset(allowed_toolsets: set[str], toolset: str, provider: str) -> None:
+    if toolset not in allowed_toolsets:
+        raise WorkerInputError(f"provider requires unavailable toolset: {provider} -> {toolset}")
+
+
+def _request_json(url: str) -> Any:
+    request = Request(url, headers={"accept": "application/json", "user-agent": USER_AGENT})
+    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        status = getattr(response, "status", 200)
+        if status >= 400:
+            raise WorkerInputError(f"tool request failed with status {status}: {url}")
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _request_text(url: str) -> str:
+    request = Request(url, headers={"accept": "application/xml", "user-agent": USER_AGENT})
+    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        status = getattr(response, "status", 200)
+        if status >= 400:
+            raise WorkerInputError(f"tool request failed with status {status}: {url}")
+        return response.read().decode("utf-8")
+
+
+def _search_github(query: str, max_results: int) -> list[dict[str, Any]]:
+    url = "https://api.github.com/search/repositories?" + urlencode(
+        {"q": query, "sort": "stars", "order": "desc", "per_page": max_results}
+    )
+    payload = _request_json(url)
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise WorkerInputError("GitHub search response missing items list")
+    results = []
+    for item in items[:max_results]:
+        results.append(
+            {
+                "title": require_text(item.get("full_name"), "github.full_name"),
+                "url": require_text(item.get("html_url"), "github.html_url"),
+                "summary": require_text(item.get("description") or item.get("full_name"), "github.description"),
+                "metrics": {
+                    "stars": item.get("stargazers_count", 0),
+                    "forks": item.get("forks_count", 0),
+                    "updated_at": item.get("updated_at"),
+                },
+            }
+        )
+    if not results:
+        raise WorkerInputError(f"GitHub search returned no results for query: {query}")
+    return results
+
+
+def _search_arxiv(query: str, max_results: int) -> list[dict[str, Any]]:
+    url = "https://export.arxiv.org/api/query?" + urlencode(
+        {"search_query": f"all:{query}", "start": 0, "max_results": max_results, "sortBy": "submittedDate", "sortOrder": "descending"}
+    )
+    payload = _request_text(url)
+    root = ET.fromstring(payload)
+    namespace = {"atom": "http://www.w3.org/2005/Atom"}
+    results = []
+    for entry in root.findall("atom:entry", namespace)[:max_results]:
+        title = " ".join(entry.findtext("atom:title", default="", namespaces=namespace).split())
+        summary = " ".join(entry.findtext("atom:summary", default="", namespaces=namespace).split())
+        url_text = entry.findtext("atom:id", default="", namespaces=namespace)
+        published = entry.findtext("atom:published", default="", namespaces=namespace)
+        results.append(
+            {
+                "title": require_text(title, "arxiv.title"),
+                "url": require_text(url_text, "arxiv.id"),
+                "summary": require_text(summary, "arxiv.summary"),
+                "metrics": {"published": published},
+            }
+        )
+    if not results:
+        raise WorkerInputError(f"arXiv search returned no results for query: {query}")
+    return results
+
+
+def _search_huggingface(query: str, max_results: int) -> list[dict[str, Any]]:
+    url = "https://huggingface.co/api/models?" + urlencode({"search": query, "limit": max_results, "sort": "likes", "direction": "-1"})
+    payload = _request_json(url)
+    if not isinstance(payload, list):
+        raise WorkerInputError("Hugging Face search response was not a list")
+    results = []
+    for item in payload[:max_results]:
+        model_id = require_text(item.get("modelId") or item.get("id"), "huggingface.modelId")
+        tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+        results.append(
+            {
+                "title": model_id,
+                "url": f"https://huggingface.co/{model_id}",
+                "summary": f"Hugging Face model matching '{query}'. Tags: {', '.join(str(tag) for tag in tags[:8])}",
+                "metrics": {"likes": item.get("likes", 0), "downloads": item.get("downloads", 0)},
+            }
+        )
+    if not results:
+        raise WorkerInputError(f"Hugging Face search returned no results for query: {query}")
+    return results
 
 
 def deduplicate_trends(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:

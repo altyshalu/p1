@@ -68,6 +68,7 @@ class L2Supervisor:
                     "Use only allowed_workers from the process pack.",
                     "Spawn at most max_tasks_per_turn tasks.",
                     "If required inputs are missing, use message_user instead of inventing data.",
+                    "For source collection tasks, pass real search parameters from state.input.inputs; do not ask the user for pre-collected source files.",
                     "If work is complete, use finish with final output.",
                     "If the run cannot continue, use fail with a reason.",
                 ],

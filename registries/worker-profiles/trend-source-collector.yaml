@@ -1,5 +1,5 @@
 key: trend-source-collector
-description: Normalize explicit GitHub, arXiv, and Hugging Face trend source results. Must not invent sources.
+description: Collect real GitHub, arXiv, and Hugging Face trend source results through allowed read-only tools, then normalize them. Must not invent sources.
 worker_type: sandboxed_subprocess
 entrypoint: l2l3_protocol.workers.build_in_public_worker
 allowed_tools: [github-search-tool, arxiv-search-tool, hf-hub-search-tool]
@@ -8,10 +8,22 @@ budget:
   max_seconds: 60
 input_schema:
   type: object
-  required: [sources]
+  required: [query, providers]
+  properties:
+    query:
+      type: string
+    providers:
+      type: array
+    max_results:
+      type: integer
 output_schema:
   type: object
   required: [trend_signals]
+  properties:
+    trend_signals:
+      type: array
+    source_results:
+      type: array
 stop_conditions:
   - trend_signals_normalized
 retry_policy:

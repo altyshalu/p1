@@ -46,37 +46,20 @@ Run the API server first:
 uv run l2l3-protocol
 ```
 
-In another terminal, start a real trend-radar run from explicit source results:
+In another terminal, start a real trend-radar run. Source collection is the first L3 task inside the pipeline:
 
 ```sh
 uv run l2l3-live start trend-radar \
-  --sources-file ./trend-sources.json \
+  --query "agent evaluation runtime" \
+  --provider github \
+  --provider arxiv \
+  --provider huggingface \
   --channel x
 ```
 
-`trend-sources.json` must contain real source results. The live CLI does not ship embedded demo data and will not create a run without explicit inputs:
+The live CLI does not ship embedded source data. It passes the real query/providers into the run; L2 must create a `trend-source-collector` task, and that worker calls the allowed read-only tools for GitHub, arXiv, and Hugging Face. If a provider request fails or returns no usable results, the task fails explicitly.
 
-```json
-{
-  "sources": [
-    {
-      "source": "github",
-      "items": [
-        {
-          "title": "openai/codex",
-          "url": "https://github.com/openai/codex",
-          "summary": "Source result collected from GitHub.",
-          "metrics": {
-            "stars": 0
-          }
-        }
-      ]
-    }
-  ]
-}
-```
-
-The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run from that file, renders task progress, artifacts, evals, and the final draft, then asks for human approval.
+The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run, renders task progress, artifacts, evals, and the final draft, then asks for human approval.
 
 Watch an existing run:
 
