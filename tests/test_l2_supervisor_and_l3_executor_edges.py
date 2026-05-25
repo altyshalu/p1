@@ -12,8 +12,9 @@ from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor, L3WorkerExecuti
 def process_pack() -> dict:
     return {
         "key": "build-in-public",
-        "allowed_workers": ["signal-collector", "narrative-synthesizer"],
+        "allowed_workers": ["signal-collector", "narrative-synthesizer", "approval-adapter"],
         "max_tasks_per_turn": 1,
+        "required_eval_keys": ["quality"],
     }
 
 
@@ -21,6 +22,7 @@ def worker_profiles() -> dict:
     return {
         "signal-collector": {"worker_type": "sandboxed_subprocess", "output_schema": {"required": ["signals"]}},
         "narrative-synthesizer": {"worker_type": "hermes_agent", "output_schema": {"required": ["content_atoms"]}},
+        "approval-adapter": {"worker_type": "human_gate", "output_schema": {"required": ["approval"]}},
     }
 
 
@@ -133,6 +135,77 @@ async def test_l2_supervisor_blocks_internal_repair_escalation_to_user() -> None
 
     assert action.action == "spawn_tasks"
     assert "message_user is not allowed for internal L2 repair mechanics" in hermes.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_l2_supervisor_blocks_finish_before_required_evals_pass() -> None:
+    hermes = FakeHermes(
+        [
+            '{"action":"finish","output":{"final":{"note":"done"}}}',
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "repair",
+                  "worker_profile": "narrative-synthesizer",
+                  "goal": "Repair failed eval inputs.",
+                  "inputs": {"signals": []},
+                  "artifact_type": "content_atoms"
+                }
+              ]
+            }
+            """,
+        ]
+    )
+    state = {"goal": "x", "evals": [{"eval_key": "quality", "passed": False}], "events": []}
+
+    action = await L2Supervisor(hermes).next_action(process_pack(), worker_profiles(), state, 0)
+
+    assert action.action == "spawn_tasks"
+    assert "finish is not allowed until required evals pass" in hermes.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_l2_supervisor_blocks_approval_before_required_evals_pass() -> None:
+    hermes = FakeHermes(
+        [
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "approve",
+                  "worker_profile": "approval-adapter",
+                  "goal": "Record approval gate.",
+                  "inputs": {"require_human_approval": true},
+                  "artifact_type": "generic"
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "repair",
+                  "worker_profile": "narrative-synthesizer",
+                  "goal": "Repair failed eval inputs.",
+                  "inputs": {"signals": []},
+                  "artifact_type": "content_atoms"
+                }
+              ]
+            }
+            """,
+        ]
+    )
+    state = {"goal": "x", "evals": [{"eval_key": "quality", "passed": False}], "events": []}
+
+    action = await L2Supervisor(hermes).next_action(process_pack(), worker_profiles(), state, 0)
+
+    assert action.action == "spawn_tasks"
+    assert "approval-adapter is not allowed until required evals pass" in hermes.prompts[1]
 
 
 @pytest.mark.asyncio

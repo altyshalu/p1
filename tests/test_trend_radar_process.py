@@ -11,6 +11,7 @@ from l2l3_protocol.marketplace.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
+from l2l3_protocol.workers.build_in_public_worker import claim_grounding, normalize_draft_schema, stop_slop_edit, trend_quality
 
 
 class FakeStore:
@@ -113,6 +114,39 @@ def trend_sources() -> list[dict[str, Any]]:
             ],
         },
     ]
+
+
+def test_draft_schema_normalizer_repairs_eval_shapes_and_source_formatting() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "source_format": "separate_section",
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "thread": ["Claim text https://example.com/a"],
+                        "claims": [{"text": "Claim text", "evidence_urls": ["https://example.com/a"]}],
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["text"].endswith("Sources:\n- https://example.com/a")
+    assert draft["claims"][0]["source_url"] == "https://example.com/a"
+    assert draft["publish"] is False
+    assert draft["status"] == "draft"
+    assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+    assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_stop_slop_editor_accepts_thread_drafts_without_user_mapping() -> None:
+    payload = stop_slop_edit({"inputs": {"drafts": [{"channel": "x", "thread": ["A game-changing update."], "sources": []}]}}, {})
+
+    assert payload["edited_drafts"][0]["text"] == "A update."
 
 
 @pytest.mark.asyncio

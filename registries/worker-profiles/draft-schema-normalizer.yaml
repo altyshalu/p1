@@ -1,0 +1,31 @@
+key: draft-schema-normalizer
+description: "Normalize draft artifacts for editors and evaluators: text/thread compatibility, channel/status/publish flags, claims[].source_url, and separated source formatting."
+worker_type: adapter
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [drafts]
+output_schema:
+  type: object
+  required: [drafts]
+stop_conditions:
+  - draft_schema_normalized
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [input_validation, output_schema, worker_exception]
+repair_strategy:
+  autonomous: true
+  use_for:
+    - thread_to_text
+    - evidence_urls_to_source_url
+    - separated_source_formatting
+    - publish_false_guardrail_shape
+  escalation: approval_required_only_for_executable_registry_changes
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

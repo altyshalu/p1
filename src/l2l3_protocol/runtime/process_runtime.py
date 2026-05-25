@@ -101,7 +101,8 @@ class ProcessRuntime:
             await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
         elif action == "request_edit":
             message = payload["message"]
-            await self.store.set_run_status(run_id, RunStatus.WAITING_USER, {"requested_edit": message})
+            state = await self._require_run(run_id)
+            await self.store.set_run_status(run_id, RunStatus.WAITING_USER, {**state.get("output", {}), "requested_edit": message})
         else:
             raise ValueError(f"unknown control action: {action}")
         await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
@@ -158,6 +159,8 @@ class ProcessRuntime:
             return
         await self.store.set_task_status(contract.id, TaskStatus.COMPLETED)
         artifact_type = ArtifactType(task.get("artifact_type") or ArtifactType.GENERIC.value)
+        if contract.worker_profile == "approval-adapter":
+            artifact_type = ArtifactType.APPROVAL_DECISION
         artifact = Artifact(run_id=run_id, task_id=contract.id, artifact_type=artifact_type, payload=payload)
         await self.store.add_artifact(artifact)
         await self.store.add_event(run_id, "task_completed", {"artifact_type": artifact_type.value}, contract.id)
@@ -256,6 +259,7 @@ class ProcessRuntime:
         retryable = set(retry_policy.get("retryable_failure_types", [failure_type]))
         previous = await self._previous_failure_count(run_id, contract.worker_profile, failure_type)
         max_attempts = int(retry_policy.get("max_attempts", 1))
+        retry_count_remaining = max(0, max_attempts - previous - 1) if failure_type in retryable else 0
         payload = {
             "task_id": str(task_id),
             "worker_profile": contract.worker_profile,
@@ -266,9 +270,11 @@ class ProcessRuntime:
             "repair_guidance": self._repair_guidance(contract, profile, failure_type, error),
             "matched_failure_pattern": pattern,
             "mitigation_applied": pattern.get("mitigation") if pattern else None,
-            "retry_count_remaining": max(0, max_attempts - previous - 1) if failure_type in retryable else 0,
+            "retry_count_remaining": retry_count_remaining,
             "eval_result": eval_result.model_dump(mode="json") if eval_result else None,
         }
+        if retry_count_remaining > 0:
+            await self.store.set_task_status(task_id, TaskStatus.NEEDS_REPAIR)
         await self.store.add_event(run_id, "task_failure_context", payload, task_id)
 
     @staticmethod
@@ -283,7 +289,21 @@ class ProcessRuntime:
     def _repair_guidance(contract: TaskContract, profile: dict[str, Any], failure_type: str, error: str) -> dict[str, Any]:
         provider_policy = profile.get("provider_repair_policy")
         if contract.worker_profile != "trend-source-collector" or not provider_policy:
-            return {}
+            return {
+                "l2_can": [
+                    "spawn a schema or eval-input normalizer task when artifacts can be adapted safely",
+                    "spawn a repaired task using prior artifacts and stricter inputs",
+                    "propose a registry_change_candidate when executable worker/profile behavior must change",
+                    "fail explicitly if the failure is not repairable within policy",
+                ],
+                "escalate_to_user_only_for": [
+                    "product/editorial tradeoff",
+                    "external side effect",
+                    "approval-required registry or executable behavior change",
+                ],
+                "failure_type": failure_type,
+                "last_error": error,
+            }
         return {
             "l2_can": [
                 "retry the same provider with provider_repairs using alternative real queries",

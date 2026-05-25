@@ -1,0 +1,7 @@
+pattern_id: draft-evidence-urls-source-url
+worker_id: claim-grounding-judge
+failure_type: eval_failed
+root_cause: Draft claims may carry evidence_urls while the claim-grounding evaluator needs source_url-compatible evidence.
+mitigation: Run draft-schema-normalizer before retrying claim-grounding-judge.
+status: active
+frequency: 1

@@ -332,6 +332,7 @@ class LiveRunApp(App[None]):
         self._render_tasks(run)
         self._render_evals(run)
         self._render_prompt(run)
+        self._render_shortcuts(run)
         self._render_command(run)
 
     def _render_status(self, run: dict[str, Any]) -> None:
@@ -386,6 +387,9 @@ class LiveRunApp(App[None]):
     def _render_prompt(self, run: dict[str, Any]) -> None:
         self.query_one("#prompt", Markdown).update(_prompt_markdown(run))
 
+    def _render_shortcuts(self, run: dict[str, Any]) -> None:
+        self.query_one("#shortcuts", Markdown).update(_run_verdict_markdown(run))
+
     def _render_command(self, run: dict[str, Any]) -> None:
         command = self.query_one("#command", Input)
         status = run.get("status")
@@ -439,6 +443,45 @@ def _shortcut_markdown() -> str:
         "- `f` toggles compact/full event payload mode before opening events.\n\n"
         "> Heavy content lives in separate scrollable windows so the main dashboard stays readable."
     )
+
+
+def _run_verdict_markdown(run: dict[str, Any]) -> str:
+    status = run.get("status", "unknown")
+    latest_failed_evals = _latest_failed_evals(run)
+    lines = ["# Run verdict", ""]
+    if status == "waiting_user" and run.get("output", {}).get("requested_edit"):
+        lines.append(f"**Blocked:** requested edit: `{run['output']['requested_edit']}`")
+    elif latest_failed_evals:
+        failed = ", ".join(sorted(latest_failed_evals))
+        lines.append(f"**Needs repair:** latest required eval failures: `{failed}`")
+    elif status == "waiting_approval":
+        lines.append("**Ready for human approval:** runtime is gated before publishing.")
+    elif status == "completed":
+        lines.append("**Completed:** run reached final state.")
+    elif status == "running":
+        lines.append("**Running:** L2/L3 pipeline is still active.")
+    else:
+        lines.append(f"**Status:** `{status}`")
+    lines.extend(
+        [
+            "",
+            "## Detail windows",
+            "- `F2` prompt / approval gate",
+            "- `F3` drafts",
+            "- `F4` events",
+            "- `f` toggle compact/full event payload mode",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _latest_failed_evals(run: dict[str, Any]) -> set[str]:
+    latest_by_key: dict[str, bool] = {}
+    for eval_result in run.get("evals", []):
+        eval_key = eval_result.get("eval_key")
+        if eval_key:
+            latest_by_key[str(eval_key)] = bool(eval_result.get("passed"))
+    return {key for key, passed in latest_by_key.items() if not passed}
 
 
 def _collect_drafts(run: dict[str, Any]) -> list[dict[str, Any]]:

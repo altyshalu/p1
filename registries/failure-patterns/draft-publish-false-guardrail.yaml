@@ -1,0 +1,7 @@
+pattern_id: draft-publish-false-guardrail
+worker_id: trend-draft-quality-judge
+failure_type: eval_failed
+root_cause: Draft-only artifacts can express publishing safety as publish:false rather than only status:draft.
+mitigation: Normalize publish/status fields and treat publish:false as no external publish side effect.
+status: active
+frequency: 1

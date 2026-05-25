@@ -15,8 +15,14 @@ output_schema:
 grader_spec:
   eval_key: trend-draft-quality
 retry_policy:
-  max_attempts: 1
-  retryable_failure_types: [eval_failed, worker_exception]
+  max_attempts: 3
+  retryable_failure_types: [eval_failed, output_schema, worker_exception]
+repair_strategy:
+  autonomous: true
+  before_retry:
+    - run draft-schema-normalizer to enforce channel/status/publish false
+    - keep source links in a separate Sources section
+  escalation: never_for_draft_only_guardrail_shape
 stop_conditions:
   - trend_quality_report_created
 memory_policy:

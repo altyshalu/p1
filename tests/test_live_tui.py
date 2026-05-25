@@ -10,6 +10,7 @@ from l2l3_protocol.live.tui import (
     _drafts_markdown,
     _events_markdown,
     _prompt_markdown,
+    _run_verdict_markdown,
     _shortcut_markdown,
     _state_text,
     parse_approval_command,
@@ -134,6 +135,14 @@ def test_shortcut_markdown_explains_detail_windows() -> None:
     assert "`F2`" in markdown
     assert "`F3`" in markdown
     assert "`F4`" in markdown
+
+
+def test_run_verdict_highlights_requested_edit_and_failed_evals() -> None:
+    edit_run = {"status": "waiting_user", "output": {"requested_edit": "separate sources"}, "evals": []}
+    failed_eval_run = {"status": "running", "output": {}, "evals": [{"eval_key": "trend-quality", "passed": False}]}
+
+    assert "requested edit" in _run_verdict_markdown(edit_run)
+    assert "trend-quality" in _run_verdict_markdown(failed_eval_run)
 
 
 def test_compact_payload_preserves_toggle_signal() -> None:

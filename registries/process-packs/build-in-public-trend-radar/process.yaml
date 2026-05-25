@@ -10,6 +10,7 @@ allowed_workers:
   - relevance-scorer
   - trend-narrative-strategist
   - trend-draft-writer
+  - draft-schema-normalizer
   - stop-slop-editor
   - claim-grounding-judge
   - trend-draft-quality-judge
@@ -28,6 +29,9 @@ completion_criteria:
   - claim grounding evaluation passes
   - draft quality evaluation passes
   - publishing remains gated until explicit human approval
+required_eval_keys:
+  - trend-claim-grounding
+  - trend-draft-quality
 required_inputs:
   - query
   - providers

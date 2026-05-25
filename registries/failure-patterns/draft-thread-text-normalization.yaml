@@ -1,0 +1,7 @@
+pattern_id: draft-thread-text-normalization
+worker_id: stop-slop-editor
+failure_type: output_schema
+root_cause: Some draft writers produce thread arrays while downstream editors expect a text string.
+mitigation: Run draft-schema-normalizer or let stop-slop-editor normalize thread into text autonomously.
+status: active
+frequency: 1

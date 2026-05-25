@@ -54,10 +54,12 @@ async def test_reject_control_marks_run_failed_with_reason() -> None:
 @pytest.mark.asyncio
 async def test_request_edit_control_moves_run_to_waiting_user() -> None:
     store = FakeStore()
+    store.run.output = {"final": {"drafts": [{"text": "latest draft"}]}}
     run_id = uuid4()
 
     result = await ProcessRuntime(store, None, None, None).apply_control(run_id, "request_edit", {"message": "Make it more direct."})
 
     assert result["status"] == "waiting_user"
     assert result["output"]["requested_edit"] == "Make it more direct."
+    assert result["output"]["final"]["drafts"][0]["text"] == "latest draft"
     assert store.events[-1]["payload"]["action"] == "request_edit"

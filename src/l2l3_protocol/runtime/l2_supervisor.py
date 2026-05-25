@@ -113,6 +113,8 @@ class L2Supervisor:
                         "worker_type": profile.get("worker_type"),
                         "input_schema": profile.get("input_schema", {}),
                         "output_schema": profile.get("output_schema", {}),
+                        "retry_policy": profile.get("retry_policy", {}),
+                        "repair_strategy": profile.get("repair_strategy", {}),
                         "side_effect_policy": profile.get("side_effect_policy", {}),
                     }
                     for key, profile in worker_profiles.items()
@@ -187,6 +189,8 @@ class L2Supervisor:
             raise ValueError("spawn_tasks action requires at least one task")
         if action.action != "spawn_tasks" and action.tasks:
             raise ValueError(f"{action.action} action must not include tasks")
+        if action.action == "finish" and not _required_evals_passed(process_pack, state):
+            raise ValueError("finish is not allowed until required evals pass")
         if action.action == "message_user" and not action.message:
             raise ValueError("message_user action requires message")
         if action.action == "message_user" and not _message_user_allowed(state):
@@ -200,6 +204,8 @@ class L2Supervisor:
                 raise ValueError(f"worker is not allowed by process pack: {task.worker_profile}")
             if task.worker_profile not in worker_profiles:
                 raise ValueError(f"worker profile is not registered: {task.worker_profile}")
+            if task.worker_profile == "approval-adapter" and not _required_evals_passed(process_pack, state):
+                raise ValueError("approval-adapter is not allowed until required evals pass")
 
 
 def _message_user_allowed(state: dict[str, Any]) -> bool:
@@ -219,3 +225,15 @@ def _latest_task_failure_context(state: dict[str, Any]) -> dict[str, Any] | None
         payload = event.get("payload", {})
         return payload if isinstance(payload, dict) else None
     return None
+
+
+def _required_evals_passed(process_pack: dict[str, Any], state: dict[str, Any]) -> bool:
+    required_eval_keys = process_pack.get("required_eval_keys", [])
+    if not required_eval_keys:
+        return True
+    latest_by_key: dict[str, dict[str, Any]] = {}
+    for eval_result in state.get("evals", []):
+        eval_key = eval_result.get("eval_key")
+        if eval_key:
+            latest_by_key[str(eval_key)] = eval_result
+    return all(bool(latest_by_key.get(str(eval_key), {}).get("passed")) for eval_key in required_eval_keys)

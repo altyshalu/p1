@@ -15,8 +15,14 @@ output_schema:
 grader_spec:
   eval_key: trend-claim-grounding
 retry_policy:
-  max_attempts: 1
-  retryable_failure_types: [eval_failed, worker_exception]
+  max_attempts: 3
+  retryable_failure_types: [eval_failed, output_schema, worker_exception]
+repair_strategy:
+  autonomous: true
+  before_retry:
+    - run draft-schema-normalizer to map evidence_urls to source_url
+    - preserve claims and sources from prior artifacts
+  escalation: never_for_schema_mapping
 stop_conditions:
   - claim_grounding_report_created
 memory_policy:

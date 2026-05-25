@@ -15,8 +15,13 @@ output_schema:
 stop_conditions:
   - slop_removed
 retry_policy:
-  max_attempts: 1
-  retryable_failure_types: [input_validation, worker_exception]
+  max_attempts: 2
+  retryable_failure_types: [input_validation, output_schema, worker_exception]
+repair_strategy:
+  autonomous: true
+  before_retry:
+    - run draft-schema-normalizer to convert thread arrays into text strings
+  escalation: never_for_thread_to_text_mapping
 memory_policy:
   writes: artifact_only
 side_effect_policy:

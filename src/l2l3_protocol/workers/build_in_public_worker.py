@@ -402,13 +402,70 @@ def stop_slop_edit(contract: dict[str, Any], context: dict[str, Any]) -> dict[st
     drafts = require_list(contract["inputs"], "drafts")
     edited = []
     for draft in drafts:
-        text = require_text(draft.get("text"), "draft.text")
+        normalized_draft = _normalize_draft_shape(draft)
+        text = require_text(normalized_draft.get("text"), "draft.text")
         cleaned = text
         for phrase in SLOP_PHRASES:
             cleaned = cleaned.replace(phrase, "").replace(phrase.title(), "")
         cleaned = " ".join(cleaned.split())
-        edited.append({**draft, "text": cleaned, "edit_notes": ["Removed predictable AI writing patterns."]})
+        edited.append({**normalized_draft, "text": cleaned, "edit_notes": ["Removed predictable AI writing patterns."]})
     return {"edited_drafts": edited}
+
+
+def normalize_draft_schema(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(contract["inputs"], "drafts")
+    source_format = contract["inputs"].get("source_format", "separate_section")
+    normalized = []
+    for draft in drafts:
+        item = _normalize_draft_shape(draft)
+        if source_format == "separate_section":
+            item["text"] = _format_sources_separately(require_text(item.get("text"), "draft.text"), item.get("sources", []))
+        normalized.append(item)
+    return {"drafts": normalized}
+
+
+def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(draft)
+    if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
+        thread = normalized.get("thread")
+        if isinstance(thread, list) and thread:
+            normalized["text"] = "\n\n".join(str(item).strip() for item in thread if str(item).strip())
+    normalized.setdefault("status", "draft")
+    normalized.setdefault("publish", False)
+    sources = normalized.get("sources")
+    if not isinstance(sources, list):
+        sources = []
+    claims = normalized.get("claims")
+    if isinstance(claims, list):
+        normalized_claims = []
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            normalized_claim = dict(claim)
+            evidence_urls = normalized_claim.get("evidence_urls")
+            if not normalized_claim.get("source_url") and isinstance(evidence_urls, list) and evidence_urls:
+                normalized_claim["source_url"] = str(evidence_urls[0])
+            if normalized_claim.get("source_url") and normalized_claim["source_url"] not in sources:
+                sources.append(normalized_claim["source_url"])
+            normalized_claims.append(normalized_claim)
+        normalized["claims"] = normalized_claims
+    normalized["sources"] = [str(source) for source in sources if str(source).strip()]
+    return normalized
+
+
+def _format_sources_separately(text: str, sources: list[Any]) -> str:
+    clean_text = text.strip()
+    clean_sources = []
+    for source in sources:
+        source_text = str(source).strip()
+        if source_text and source_text not in clean_sources:
+            clean_sources.append(source_text)
+    if not clean_sources:
+        return clean_text
+    source_block = "\n".join(f"- {source}" for source in clean_sources)
+    if "\nSources:\n" in clean_text or clean_text.endswith("\nSources:"):
+        return clean_text
+    return f"{clean_text}\n\nSources:\n{source_block}"
 
 
 def claim_grounding(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -425,7 +482,10 @@ def claim_grounding(contract: dict[str, Any], context: dict[str, Any]) -> dict[s
             if not isinstance(claim.get("text"), str) or not claim["text"].strip():
                 checks["no_empty_claim_text"] = False
                 reasons.append("A claim has empty text.")
-            if not isinstance(claim.get("source_url"), str) or not claim["source_url"].strip():
+            evidence_urls = claim.get("evidence_urls")
+            has_source_url = isinstance(claim.get("source_url"), str) and claim["source_url"].strip()
+            has_evidence_urls = isinstance(evidence_urls, list) and any(isinstance(url, str) and url.strip() for url in evidence_urls)
+            if not has_source_url and not has_evidence_urls:
                 checks["every_claim_has_source_url"] = False
                 reasons.append("A claim is missing source_url.")
     score = sum(1 for passed in checks.values() if passed) / len(checks)
@@ -438,7 +498,7 @@ def trend_quality(contract: dict[str, Any], context: dict[str, Any]) -> dict[str
         "has_drafts": bool(drafts),
         "all_have_channels": all(bool(draft.get("channel")) for draft in drafts),
         "all_have_text": all(bool(draft.get("text")) for draft in drafts),
-        "no_publish_side_effect": all(draft.get("status") == "draft" for draft in drafts),
+        "no_publish_side_effect": all(draft.get("publish") is not True and draft.get("status", "draft") == "draft" for draft in drafts),
         "no_slop_phrases": all(not any(phrase in draft.get("text", "").lower() for phrase in SLOP_PHRASES) for draft in drafts),
     }
     reasons = [check for check, passed in checks.items() if not passed]
@@ -457,6 +517,7 @@ HANDLERS = {
     "trend-deduplicator": deduplicate_trends,
     "relevance-scorer": score_relevance,
     "stop-slop-editor": stop_slop_edit,
+    "draft-schema-normalizer": normalize_draft_schema,
     "claim-grounding-judge": claim_grounding,
     "trend-draft-quality-judge": trend_quality,
     "collect": collect,
@@ -469,6 +530,7 @@ HANDLERS = {
     "deduplicate_trends": deduplicate_trends,
     "score_relevance": score_relevance,
     "stop_slop_edit": stop_slop_edit,
+    "normalize_draft_schema": normalize_draft_schema,
     "claim_grounding": claim_grounding,
     "trend_quality": trend_quality,
 }
