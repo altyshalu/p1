@@ -2,15 +2,13 @@ from collections.abc import AsyncIterator
 import asyncio
 from contextlib import asynccontextmanager
 import json
-from pathlib import Path
 from time import perf_counter
 from uuid import UUID
 
 import structlog
 import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from l2l3_protocol.api.state import app_state, build_memory_router
@@ -45,8 +43,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="L2-L3 Communication Protocol", version="0.1.0", lifespan=lifespan)
-WEB_DIR = Path(__file__).resolve().parents[1] / "web"
-app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
 
 
 @app.middleware("http")
@@ -85,11 +81,6 @@ def make_runtime(store: WorkingMemoryStore) -> ProcessRuntime:
         memory=app_state.memory_router,
         hermes=app_state.hermes,
     )
-
-
-@app.get("/cockpit")
-async def cockpit() -> FileResponse:
-    return FileResponse(WEB_DIR / "cockpit.html")
 
 
 @app.post("/runs")

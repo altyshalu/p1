@@ -9,4 +9,3 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ("/runs/{run_id}/messages", "POST") in routes
     assert ("/runs/{run_id}/control", "POST") in routes
     assert ("/runs/{run_id}/events/stream", "GET") in routes
-    assert ("/cockpit", "GET") in routes

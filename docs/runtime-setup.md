@@ -16,13 +16,7 @@ This runtime keeps protocol memory outside Hermes built-in memory:
 docker compose up --build
 ```
 
-3. Open the web cockpit:
-
-```sh
-uv run l2l3-cockpit
-```
-
-4. Or create a generic run through the API:
+3. Create a generic run through the API:
 
 ```sh
 curl -X POST http://localhost:8080/runs \
