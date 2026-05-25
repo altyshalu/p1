@@ -81,6 +81,7 @@ class L2Supervisor:
                     "Use message_user only for missing user-owned outcome constraints, explicit approval, unsafe/external side effects, spending/posting, or approval-required registry/executable behavior changes.",
                     "Never ask the user to approve internal repair mechanics: retries, worker respawn, rebriefs, schema field mapping, eval retry, provider query variants, threshold/debug analysis, or tool routing.",
                     "For internal failures such as eval_failed, output_schema, invalid_json, worker_exception, timeout, or tool_denied, autonomously choose spawn_tasks, propose_registry_change, or fail.",
+                    "If the needed reusable repair capability does not exist, use propose_registry_change with a concrete reason and candidate spec; do not ask the user to design the worker/tool manually.",
                     "If required inputs are missing and they are factual/user-owned inputs, use message_user. If they can be inferred from artifacts, run input, or prior task outputs, repair autonomously.",
                     "For source collection tasks, pass real search parameters from state.input.inputs; do not ask the user for pre-collected source files.",
                     "When a task_failure_context includes repair_guidance, choose a protocol-safe repair: spawn a repaired task with changed inputs, propose a registry/code change candidate, or fail explicitly. Ask the user only when the decision is truly product/editorial/safety-owned.",
