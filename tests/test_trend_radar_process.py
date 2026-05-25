@@ -105,8 +105,8 @@ def trend_sources() -> list[dict[str, Any]]:
             "source": "github",
             "items": [
                 {
-                    "title": "agent-eval-runtime",
-                    "url": "https://github.com/example/agent-eval-runtime",
+                    "title": "openai-codex",
+                    "url": "https://github.com/openai/codex",
                     "summary": "A runtime for typed agent evals and worker orchestration.",
                     "metrics": {"stars": 420},
                 }
@@ -127,8 +127,8 @@ def trend_sources() -> list[dict[str, Any]]:
             "source": "huggingface",
             "items": [
                 {
-                    "title": "orchestration-bench",
-                    "url": "https://huggingface.co/datasets/example/orchestration-bench",
+                    "title": "fineweb",
+                    "url": "https://huggingface.co/datasets/HuggingFaceFW/fineweb",
                     "summary": "Dataset for testing L2/L3 orchestration and eval loops.",
                     "metrics": {"likes": 80},
                 }
@@ -160,7 +160,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
             "claims": [
                 {
                     "text": "ABRT is testing source collection, ranking, drafting, editing, and eval gates.",
-                    "source_url": "https://github.com/example/agent-eval-runtime",
+                    "source_url": "https://github.com/openai/codex",
                 }
             ],
         }
@@ -231,7 +231,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
                             "angle": "trend_radar",
                             "claim": "Agent runtimes need typed contracts and eval gates.",
                             "why_it_matters": "This is the exact operating model ABRT is building.",
-                            "evidence": ["https://github.com/example/agent-eval-runtime"],
+                            "evidence": ["https://github.com/openai/codex"],
                         }
                     ]
                 }
@@ -250,7 +250,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
                                         "angle": "trend_radar",
                                         "claim": "Agent runtimes need typed contracts and eval gates.",
                                         "why_it_matters": "This is the exact operating model ABRT is building.",
-                                        "evidence": ["https://github.com/example/agent-eval-runtime"],
+                                        "evidence": ["https://github.com/openai/codex"],
                                     }
                                 ],
                                 "channels": ["x"],

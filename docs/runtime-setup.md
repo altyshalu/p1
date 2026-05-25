@@ -46,13 +46,37 @@ Run the API server first:
 uv run l2l3-protocol
 ```
 
-In another terminal, start the trend-radar demo:
+In another terminal, start a real trend-radar run from explicit source results:
 
 ```sh
-uv run l2l3-live demo trend-radar
+uv run l2l3-live start trend-radar \
+  --sources-file ./trend-sources.json \
+  --channel x
 ```
 
-The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run with explicit demo source data, renders task progress, artifacts, evals, and the final draft, then asks for human approval.
+`trend-sources.json` must contain real source results. The live CLI does not ship embedded demo data and will not create a run without explicit inputs:
+
+```json
+{
+  "sources": [
+    {
+      "source": "github",
+      "items": [
+        {
+          "title": "openai/codex",
+          "url": "https://github.com/openai/codex",
+          "summary": "Source result collected from GitHub.",
+          "metrics": {
+            "stars": 0
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run from that file, renders task progress, artifacts, evals, and the final draft, then asks for human approval.
 
 Watch an existing run:
 

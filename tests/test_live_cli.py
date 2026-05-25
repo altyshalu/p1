@@ -1,5 +1,6 @@
 from rich.console import Console
 
+from l2l3_protocol.live.cli import load_sources_file
 from l2l3_protocol.live.render import render_run_snapshot
 
 
@@ -8,7 +9,7 @@ def test_live_renderer_shows_pipeline_artifacts_evals_and_approval() -> None:
         "id": "12345678-abcd",
         "status": "waiting_approval",
         "process_key": "build-in-public-trend-radar",
-        "goal": "demo",
+        "goal": "real trend radar run",
         "tasks": [
             {"worker_profile": "trend-source-collector", "task_type": "collect", "status": "completed", "goal": "collect"},
             {"worker_profile": "trend-draft-quality-judge", "task_type": "judge", "status": "completed", "goal": "judge"},
@@ -40,7 +41,7 @@ def test_live_renderer_toggles_full_event_payloads() -> None:
         "id": "12345678-abcd",
         "status": "running",
         "process_key": "build-in-public-trend-radar",
-        "goal": "demo",
+        "goal": "real trend radar run",
         "tasks": [],
         "artifacts": [],
         "evals": [],
@@ -66,3 +67,50 @@ def test_live_renderer_toggles_full_event_payloads() -> None:
     assert "full" in full_output
     assert "Long signal" in full_output
     assert "..." not in full_output
+
+
+def test_load_sources_file_requires_real_explicit_inputs(tmp_path) -> None:
+    path = tmp_path / "sources.json"
+    path.write_text(
+        """
+        {
+          "sources": [
+            {
+              "source": "github",
+              "items": [
+                {
+                  "title": "openai/codex",
+                  "url": "https://github.com/openai/codex",
+                  "summary": "Real repository source result"
+                }
+              ]
+            }
+          ]
+        }
+        """
+    )
+
+    assert load_sources_file(path) == [
+        {
+            "source": "github",
+            "items": [
+                {
+                    "title": "openai/codex",
+                    "url": "https://github.com/openai/codex",
+                    "summary": "Real repository source result",
+                }
+            ],
+        }
+    ]
+
+
+def test_load_sources_file_rejects_empty_sources(tmp_path) -> None:
+    path = tmp_path / "sources.json"
+    path.write_text('{"sources": []}')
+
+    try:
+        load_sources_file(path)
+    except ValueError as exc:
+        assert "non-empty sources list" in str(exc)
+    else:
+        raise AssertionError("empty sources must be rejected")

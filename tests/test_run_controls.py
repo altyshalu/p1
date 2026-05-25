@@ -8,7 +8,12 @@ from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 
 class FakeStore:
     def __init__(self) -> None:
-        self.run = ProcessRun(process_key="build-in-public-trend-radar", goal="demo", status=RunStatus.WAITING_APPROVAL, input={"require_human_approval": True})
+        self.run = ProcessRun(
+            process_key="build-in-public-trend-radar",
+            goal="real trend radar run",
+            status=RunStatus.WAITING_APPROVAL,
+            input={"require_human_approval": True},
+        )
         self.events: list[dict] = []
 
     async def set_run_status(self, run_id, status, output=None) -> None:

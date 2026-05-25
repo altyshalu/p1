@@ -7,43 +7,6 @@ import httpx
 API_TIMEOUT_SECONDS = 60
 
 
-TREND_RADAR_DEMO_SOURCES = [
-    {
-        "source": "github",
-        "items": [
-            {
-                "title": "agent-eval-runtime",
-                "url": "https://github.com/example/agent-eval-runtime",
-                "summary": "A runtime for typed agent evals and worker orchestration.",
-                "metrics": {"stars": 420},
-            }
-        ],
-    },
-    {
-        "source": "arxiv",
-        "items": [
-            {
-                "title": "Evaluating Multi-Agent Execution Systems",
-                "url": "https://arxiv.org/abs/2605.00001",
-                "summary": "Paper about evaluators, contracts, and failure repair in agent systems.",
-                "metrics": {"submitted": "2026-05-25"},
-            }
-        ],
-    },
-    {
-        "source": "huggingface",
-        "items": [
-            {
-                "title": "orchestration-bench",
-                "url": "https://huggingface.co/datasets/example/orchestration-bench",
-                "summary": "Dataset for testing L2/L3 orchestration and eval loops.",
-                "metrics": {"likes": 80},
-            }
-        ],
-    },
-]
-
-
 class LiveApiClient:
     def __init__(self, api_url: str) -> None:
         self.api_url = api_url.rstrip("/")
@@ -54,11 +17,11 @@ class LiveApiClient:
             response.raise_for_status()
             return response.json()
 
-    async def create_trend_radar_demo(self) -> dict[str, Any]:
+    async def create_trend_radar_run(self, *, goal: str, sources: list[dict[str, Any]], channels: list[str]) -> dict[str, Any]:
         payload = {
             "process_key": "build-in-public-trend-radar",
-            "goal": "Find AI/dev trends and produce reviewed build-in-public draft.",
-            "inputs": {"sources": TREND_RADAR_DEMO_SOURCES, "channels": ["x"]},
+            "goal": goal,
+            "inputs": {"sources": sources, "channels": channels},
             "require_human_approval": True,
         }
         async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
