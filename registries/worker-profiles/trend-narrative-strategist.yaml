@@ -17,5 +17,5 @@ stop_conditions:
   - content_atoms_created
 memory_policy:
   writes: artifact_only
-side_effect_policy:
-  external_side_effects: none
+external_action_policy:
+  external_actions: none

@@ -120,8 +120,8 @@ class ProceduralRegistry:
     def __init__(self, root: Path) -> None:
         self.root = root
 
-    def load_process_pack(self, key: str) -> dict[str, Any]:
-        path = self.root / "process-packs" / key / "process.yaml"
+    def load_playbook(self, key: str) -> dict[str, Any]:
+        path = self.root / "playbooks" / key / "playbook.yaml"
         return self._load_yaml(path)
 
     def load_worker_profile(self, key: str) -> dict[str, Any]:

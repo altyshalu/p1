@@ -19,5 +19,5 @@ retry_policy:
   retryable_failure_types: [input_validation, worker_exception, timeout]
 memory_policy:
   writes: artifact_only
-side_effect_policy:
-  external_side_effects: none
+external_action_policy:
+  external_actions: none

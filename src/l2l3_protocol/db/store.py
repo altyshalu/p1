@@ -15,8 +15,8 @@ from l2l3_protocol.core.schemas import (
     RegistryItem,
     RegistryKind,
     RunStatus,
-    TaskContract,
     TaskStatus,
+    WorkOrder,
 )
 from l2l3_protocol.db.models import (
     ArtifactRecord,
@@ -25,9 +25,9 @@ from l2l3_protocol.db.models import (
     ProcessRunRecord,
     RegistryChangeCandidateRecord,
     RegistryItemRecord,
-    TaskContractRecord,
+    WorkOrderRecord,
 )
-from l2l3_protocol.marketplace.registry import apply_registry_change, is_safe_registry_change
+from l2l3_protocol.hub.registry import apply_registry_change, is_safe_registry_change
 
 
 class WorkingMemoryStore:
@@ -44,7 +44,8 @@ class WorkingMemoryStore:
     async def create_run(self, run: ProcessRun) -> ProcessRun:
         record = ProcessRunRecord(
             id=run.id,
-            process_key=run.process_key,
+            playbook_key=run.playbook_key,
+            l2_mode=run.l2_mode.value,
             goal=run.goal,
             status=run.status.value,
             input=run.input,
@@ -60,7 +61,7 @@ class WorkingMemoryStore:
             return None
         tasks = (
             await self.session.execute(
-                select(TaskContractRecord).where(TaskContractRecord.run_id == run_id).order_by(TaskContractRecord.created_at)
+                select(WorkOrderRecord).where(WorkOrderRecord.run_id == run_id).order_by(WorkOrderRecord.created_at)
             )
         ).scalars().all()
         artifacts = (
@@ -74,14 +75,15 @@ class WorkingMemoryStore:
         ).scalars().all()
         return {
             "id": str(record.id),
-            "process_key": record.process_key,
+            "playbook_key": record.playbook_key,
+            "l2_mode": record.l2_mode,
             "goal": record.goal,
             "status": record.status,
             "input": record.input,
             "output": record.output,
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "updated_at": record.updated_at.isoformat() if record.updated_at else None,
-            "tasks": [task.contract for task in tasks],
+            "tasks": [task.work_order for task in tasks],
             "artifacts": [
                 {
                     "id": str(artifact.id),
@@ -118,21 +120,21 @@ class WorkingMemoryStore:
             record.output = output
         await self._persist()
 
-    async def add_task(self, contract: TaskContract) -> TaskContract:
+    async def add_task(self, work_order: WorkOrder) -> WorkOrder:
         self.session.add(
-            TaskContractRecord(
-                id=contract.id,
-                run_id=contract.run_id,
-                task_type=contract.task_type,
-                worker_profile=contract.worker_profile,
-                status=contract.status.value,
-                goal=contract.goal,
-                contract=contract.model_dump(mode="json"),
+            WorkOrderRecord(
+                id=work_order.id,
+                run_id=work_order.run_id,
+                task_type=work_order.task_type,
+                worker_profile=work_order.worker_profile,
+                status=work_order.status.value,
+                goal=work_order.goal,
+                work_order=work_order.model_dump(mode="json"),
                 created_at=datetime.now(UTC),
             )
         )
         await self._persist()
-        return contract
+        return work_order
 
     async def update_run_input(self, run_id: UUID, input_patch: dict[str, Any]) -> None:
         record = await self.session.get(ProcessRunRecord, run_id)
@@ -142,11 +144,11 @@ class WorkingMemoryStore:
         await self._persist()
 
     async def set_task_status(self, task_id: UUID, status: TaskStatus) -> None:
-        record = await self.session.get(TaskContractRecord, task_id)
+        record = await self.session.get(WorkOrderRecord, task_id)
         if record is None:
             raise KeyError(f"task not found: {task_id}")
         record.status = status.value
-        record.contract = {**record.contract, "status": status.value}
+        record.work_order = {**record.work_order, "status": status.value}
         await self._persist()
 
     async def add_artifact(self, artifact: Artifact) -> Artifact:

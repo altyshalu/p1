@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RunStatus(StrEnum):
@@ -15,6 +15,11 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class RunMode(StrEnum):
+    EXECUTION = "execution"
+    DESIGN = "design"
 
 
 class TaskStatus(StrEnum):
@@ -34,6 +39,8 @@ class ArtifactType(StrEnum):
     APPROVAL_DECISION = "approval_decision"
     MEMORY_CANDIDATES = "memory_candidates"
     REGISTRY_CHANGE_CANDIDATE = "registry_change_candidate"
+    PLAYBOOK_PROPOSAL = "playbook_proposal"
+    DESIGN_REPORT = "design_report"
     GENERIC = "generic"
 
 
@@ -48,7 +55,7 @@ class RegistryKind(StrEnum):
     TOOL = "tool"
     WORKER = "worker"
     EVAL = "eval"
-    PROCESS_PACK = "process_pack"
+    PLAYBOOK = "playbook"
     FAILURE_PATTERN = "failure_pattern"
 
 
@@ -61,8 +68,11 @@ class RegistryChangeStatus(StrEnum):
 
 
 class ProcessRunCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     goal: str
-    process_key: str = "build-in-public"
+    playbook_key: str = "build-in-public"
+    l2_mode: RunMode = RunMode.EXECUTION
     inputs: dict[str, Any] = Field(default_factory=dict)
     require_human_approval: bool = True
 
@@ -78,7 +88,8 @@ class RunControlCreate(BaseModel):
 
 class ProcessRun(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    process_key: str
+    playbook_key: str
+    l2_mode: RunMode = RunMode.EXECUTION
     goal: str
     status: RunStatus = RunStatus.CREATED
     input: dict[str, Any] = Field(default_factory=dict)
@@ -87,7 +98,7 @@ class ProcessRun(BaseModel):
     updated_at: datetime | None = None
 
 
-class TaskContract(BaseModel):
+class WorkOrder(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     run_id: UUID
     task_type: str
@@ -102,11 +113,11 @@ class TaskContract(BaseModel):
     grader_spec: dict[str, Any] = Field(default_factory=dict)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     memory_policy: dict[str, Any] = Field(default_factory=dict)
-    side_effect_policy: dict[str, Any] = Field(default_factory=dict)
+    external_action_policy: dict[str, Any] = Field(default_factory=dict)
     status: TaskStatus = TaskStatus.PENDING
 
 
-class L2SpawnTask(BaseModel):
+class L2SpawnWorkOrder(BaseModel):
     task_type: str
     worker_profile: str
     goal: str
@@ -118,10 +129,23 @@ class L2SpawnTask(BaseModel):
 class L2SupervisorAction(BaseModel):
     action: str
     message: str | None = None
-    tasks: list[L2SpawnTask] = Field(default_factory=list)
+    tasks: list[L2SpawnWorkOrder] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None
     registry_change_candidate: dict[str, Any] | None = None
+    playbook_proposal: dict[str, Any] | None = None
+
+
+class L2DesignProposal(BaseModel):
+    playbook_key: str
+    playbook_spec: dict[str, Any]
+    required_workers: list[dict[str, Any]] = Field(default_factory=list)
+    required_tools: list[dict[str, Any]] = Field(default_factory=list)
+    required_evals: list[dict[str, Any]] = Field(default_factory=list)
+    registry_change_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    test_plan: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    approval_required: bool = True
 
 
 class Artifact(BaseModel):

@@ -21,8 +21,8 @@ UNSAFE_SPEC_KEYS = {
     "output_schema",
     "process",
     "retry_policy",
-    "side_effect_class",
-    "side_effect_policy",
+    "external_action_class",
+    "external_action_policy",
     "toolset",
     "worker_type",
 }
@@ -48,9 +48,9 @@ def yaml_registry_items(root: Path) -> list[RegistryItem]:
     items: list[RegistryItem] = []
     items.extend(_load_dir(root / "worker-profiles", RegistryKind.WORKER))
     items.extend(_load_dir(root / "evals", RegistryKind.EVAL))
-    for path in sorted((root / "process-packs").glob("*/process.yaml")):
+    for path in sorted((root / "playbooks").glob("*/playbook.yaml")):
         spec = _load_yaml(path)
-        items.append(_item_from_spec(RegistryKind.PROCESS_PACK, spec))
+        items.append(_item_from_spec(RegistryKind.PLAYBOOK, spec))
     tools_dir = root / "tools"
     if tools_dir.exists():
         for path in sorted(tools_dir.glob("*.yaml")):

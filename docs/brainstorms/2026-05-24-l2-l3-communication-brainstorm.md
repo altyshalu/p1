@@ -17,7 +17,7 @@ In this model:
 - `L2` is the management and control layer
 - `L3` is the execution layer
 
-`L2` should decompose high-level goals, select the right workers, supervise quality, decide retries or replans, and convert experience into reusable machinery. `L3` should perform bounded, detailed, trackable work under explicit contracts.
+`L2` should decompose high-level goals, select the right workers, supervise quality, decide retries or replans, and convert experience into reusable machinery. `L3` should perform bounded, detailed, trackable work under explicit work_orders.
 
 The desired end state is that a human can hand the system a meaningful global task and get back a validated result without manually steering execution at the implementation level.
 
@@ -25,7 +25,7 @@ The desired end state is that a human can hand the system a meaningful global ta
 
 The central idea is:
 
-`L2-L3 Communication Protocol = manager agent + typed contracts + isolated workers + evaluator loop + curated memory + evolving registry`
+`L2-L3 Communication Protocol = manager agent + typed work_orders + isolated workers + evaluator loop + curated memory + evolving registry`
 
 Not:
 
@@ -68,13 +68,13 @@ Its job is to:
 5. monitor progress and artifacts
 6. evaluate outputs and decide whether they pass
 7. retry, rebrief, reassign, replan, or escalate if necessary
-8. consolidate useful outcomes into memory, contracts, and skills
+8. consolidate useful outcomes into memory, work_orders, and skills
 
 `L2` should not become a giant do-everything worker. Its intelligence matters, but its main virtue should be discipline.
 
 ## Role Of L3
 
-`L3` should not be treated as "some agents and some scripts." It should be treated as a unified execution layer with multiple worker types behind a common contract interface.
+`L3` should not be treated as "some agents and some scripts." It should be treated as a unified execution layer with multiple worker types behind a common work_order interface.
 
 Useful worker classes:
 
@@ -89,9 +89,9 @@ This allows the protocol to route work based on execution shape rather than ideo
 
 The core object of the system should be a `Task Contract`.
 
-`L2` should not delegate work as plain natural-language prompts whenever that can be avoided. It should delegate through structured contracts.
+`L2` should not delegate work as plain natural-language prompts whenever that can be avoided. It should delegate through structured work_orders.
 
-A contract should define at least:
+A work_order should define at least:
 
 - `task_type`
 - `goal`
@@ -103,7 +103,7 @@ A contract should define at least:
 - `grader_spec`
 - `retry_policy`
 - `memory_policy`
-- `side_effect_policy`
+- `external_action_policy`
 
 This is what turns delegation into a protocol instead of improvised management.
 
@@ -116,7 +116,7 @@ Memory should be layered. A useful model is:
 - `working memory` — live state for the current task
 - `episodic memory` — traces, failures, retries, outcomes
 - `semantic memory` — stable project knowledge, conventions, architecture facts
-- `procedural memory` — skills, runbooks, contracts, policies
+- `procedural memory` — skills, runbooks, work_orders, policies
 
 Important principle:
 
@@ -141,7 +141,7 @@ The protocol should likely grow around several explicit registries:
 
 This makes the system legible and improveable. Instead of "the agent got smarter somehow," we can point to the exact artifact that evolved:
 
-- a better contract
+- a better work_order
 - a new worker type
 - a stronger grader
 - a refined skill
@@ -153,7 +153,7 @@ The `L2 <-> L3` interaction should probably follow a loop like this:
 
 1. goal intake
 2. task typing
-3. contract generation
+3. work_order generation
 4. worker selection
 5. execution
 6. artifact collection
@@ -171,7 +171,7 @@ Self-improvement should not begin with "let the agent rewrite itself."
 It should begin with a safer ladder:
 
 1. improve task briefs
-2. improve contracts
+2. improve work_orders
 3. improve evals and graders
 4. improve skills and tool descriptions
 5. improve prompts
@@ -179,7 +179,7 @@ It should begin with a safer ladder:
 
 This is the safer and more operational path because:
 
-- contracts and evals are more stable than prompts
+- work_orders and evals are more stable than prompts
 - skills are easier to inspect than emergent runtime behavior
 - code changes without strong evals are too dangerous
 
@@ -219,7 +219,7 @@ The first useful version should likely be:
 
 - one `L2`
 - many `L3` leaf workers
-- explicit contracts
+- explicit work_orders
 - explicit evals
 - curated memory
 - minimal nesting

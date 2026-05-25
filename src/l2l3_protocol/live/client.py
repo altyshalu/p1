@@ -27,7 +27,8 @@ class LiveApiClient:
         max_results: int,
     ) -> dict[str, Any]:
         payload = {
-            "process_key": "build-in-public-trend-radar",
+            "playbook_key": "build-in-public-trend-radar",
+            "l2_mode": "execution",
             "goal": goal,
             "inputs": {"query": query, "providers": providers, "channels": channels, "max_results": max_results},
             "require_human_approval": True,

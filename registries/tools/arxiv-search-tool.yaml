@@ -3,6 +3,6 @@ version: 0.1.0
 description: Read-only arXiv search capability for recent AI and ML papers.
 runtime_type: http_api
 toolset: arxiv_search
-side_effect_class: read
+external_action_class: read
 auth_required: false
 tags: [arxiv, papers, research]

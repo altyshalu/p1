@@ -20,7 +20,7 @@ from l2l3_protocol.db.session import get_session, make_engine, make_session_fact
 from l2l3_protocol.db.store import WorkingMemoryStore
 from l2l3_protocol.logging import configure_logging, get_logger
 from l2l3_protocol.memory.adapters import ProceduralRegistry
-from l2l3_protocol.marketplace.registry import yaml_registry_items
+from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 
@@ -87,17 +87,11 @@ def make_runtime(store: WorkingMemoryStore) -> ProcessRuntime:
 @app.post("/runs")
 async def create_run(payload: ProcessRunCreate, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
-    run = ProcessRun(process_key=payload.process_key, goal=payload.goal, input=payload.model_dump(mode="json"))
+    run = ProcessRun(playbook_key=payload.playbook_key, l2_mode=payload.l2_mode, goal=payload.goal, input=payload.model_dump(mode="json"))
     await store.create_run(run)
     await session.commit()
     background_tasks.add_task(execute_run, run.id)
-    return {"id": str(run.id), "status": run.status.value, "process_key": run.process_key, "goal": run.goal}
-
-
-@app.post("/processes/build-in-public/runs/async")
-async def create_build_in_public_run_async(payload: ProcessRunCreate, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
-    normalized = payload.model_copy(update={"process_key": "build-in-public"})
-    return await create_run(normalized, background_tasks, session)
+    return {"id": str(run.id), "status": run.status.value, "playbook_key": run.playbook_key, "l2_mode": run.l2_mode.value, "goal": run.goal}
 
 
 async def execute_run(run_id: UUID) -> None:
@@ -107,8 +101,8 @@ async def execute_run(run_id: UUID) -> None:
             await make_runtime(store).run_until_blocked_or_done(run_id)
         except Exception as exc:
             await store.set_run_status(run_id, RunStatus.FAILED, output={"error_type": type(exc).__name__, "error": str(exc)})
-            await store.add_event(run_id, "process_failed", {"error_type": type(exc).__name__, "error": str(exc)})
-            get_logger("protocol.events").exception("background_process_failed", run_id=str(run_id), error_type=type(exc).__name__)
+            await store.add_event(run_id, "run_failed", {"error_type": type(exc).__name__, "error": str(exc)})
+            get_logger("protocol.events").exception("background_run_failed", run_id=str(run_id), error_type=type(exc).__name__)
 
 
 @app.get("/runs/{run_id}")
@@ -164,15 +158,13 @@ async def stream_run_events(run_id: UUID) -> StreamingResponse:
             await asyncio.sleep(1)
 
 
-@app.get("/registry/{kind}")
-async def list_registry(kind: RegistryKind, session: AsyncSession = Depends(get_session)) -> list[dict]:
+async def list_hub_items(kind: RegistryKind, session: AsyncSession) -> list[dict]:
     store = WorkingMemoryStore(session)
     items = await store.list_registry_items(kind)
     return [item.model_dump(mode="json") for item in items]
 
 
-@app.get("/registry/{kind}/{key}")
-async def get_registry_item(kind: RegistryKind, key: str, session: AsyncSession = Depends(get_session)) -> dict:
+async def get_hub_registry_item(kind: RegistryKind, key: str, session: AsyncSession) -> dict:
     store = WorkingMemoryStore(session)
     item = await store.get_registry_item(kind, key)
     if item is None:
@@ -180,16 +172,14 @@ async def get_registry_item(kind: RegistryKind, key: str, session: AsyncSession 
     return item.model_dump(mode="json")
 
 
-@app.post("/registry/change-candidates")
-async def create_registry_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_hub_registry_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession) -> dict:
     store = WorkingMemoryStore(session)
     candidate = await store.create_registry_change_candidate(payload)
     await session.commit()
     return candidate.model_dump(mode="json")
 
 
-@app.post("/registry/change-candidates/{candidate_id}/approve")
-async def approve_registry_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def approve_hub_registry_change_candidate(candidate_id: UUID, session: AsyncSession) -> dict:
     store = WorkingMemoryStore(session)
     try:
         candidate = await store.approve_registry_change_candidate(candidate_id)
@@ -199,8 +189,7 @@ async def approve_registry_change_candidate(candidate_id: UUID, session: AsyncSe
     return candidate.model_dump(mode="json")
 
 
-@app.post("/registry/change-candidates/{candidate_id}/reject")
-async def reject_registry_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def reject_hub_registry_change_candidate(candidate_id: UUID, session: AsyncSession) -> dict:
     store = WorkingMemoryStore(session)
     try:
         candidate = await store.reject_registry_change_candidate(candidate_id)
@@ -210,8 +199,7 @@ async def reject_registry_change_candidate(candidate_id: UUID, session: AsyncSes
     return candidate.model_dump(mode="json")
 
 
-@app.post("/registry/sync/yaml")
-async def sync_registry_from_yaml(session: AsyncSession = Depends(get_session)) -> dict:
+async def sync_hub_registry_from_yaml(session: AsyncSession) -> dict:
     store = WorkingMemoryStore(session)
     items = yaml_registry_items(app_state.settings.procedural_registry_path)
     for item in items:
@@ -222,32 +210,32 @@ async def sync_registry_from_yaml(session: AsyncSession = Depends(get_session)) 
 
 @app.post("/hub/change-candidates")
 async def create_hub_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession = Depends(get_session)) -> dict:
-    return await create_registry_change_candidate(payload, session)
+    return await create_hub_registry_change_candidate(payload, session)
 
 
 @app.post("/hub/change-candidates/{candidate_id}/approve")
 async def approve_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
-    return await approve_registry_change_candidate(candidate_id, session)
+    return await approve_hub_registry_change_candidate(candidate_id, session)
 
 
 @app.post("/hub/change-candidates/{candidate_id}/reject")
 async def reject_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
-    return await reject_registry_change_candidate(candidate_id, session)
+    return await reject_hub_registry_change_candidate(candidate_id, session)
 
 
 @app.post("/hub/sync/yaml")
 async def sync_hub_from_yaml(session: AsyncSession = Depends(get_session)) -> dict:
-    return await sync_registry_from_yaml(session)
+    return await sync_hub_registry_from_yaml(session)
 
 
 @app.get("/hub/{kind}")
 async def list_hub(kind: str, session: AsyncSession = Depends(get_session)) -> list[dict]:
-    return await list_registry(normalize_hub_kind(kind), session)
+    return await list_hub_items(normalize_hub_kind(kind), session)
 
 
 @app.get("/hub/{kind}/{key}")
 async def get_hub_item(kind: str, key: str, session: AsyncSession = Depends(get_session)) -> dict:
-    return await get_registry_item(normalize_hub_kind(kind), key, session)
+    return await get_hub_registry_item(normalize_hub_kind(kind), key, session)
 
 
 def main() -> None:

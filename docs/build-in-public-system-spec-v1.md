@@ -41,7 +41,7 @@ Candidate workers:
 - `L3-Weekly-Blog-Worker`
 - `L3-GitHub-Log-Worker`
 
-Each worker should be contract-bound and narrow. It should know only the content task it receives, not the full strategic orchestration context.
+Each worker should be work_order-bound and narrow. It should know only the content task it receives, not the full strategic orchestration context.
 
 ## Channel recommendation for v1
 

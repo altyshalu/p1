@@ -36,7 +36,7 @@ required_inputs:
   - query
   - providers
   - channels
-side_effects:
+external_actions:
   publish:
     default: disabled
     approval_required: true

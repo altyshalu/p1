@@ -16,6 +16,6 @@ stop_conditions:
   - approval_status_recorded
 memory_policy:
   writes: artifact_only
-side_effect_policy:
+external_action_policy:
   publish_allowed: false
   approval_required: true

@@ -3,6 +3,6 @@ version: 0.1.0
 description: Local anti-slop editing rules for removing predictable AI writing patterns.
 runtime_type: local_skill
 toolset: stop_slop
-side_effect_class: none
+external_action_class: none
 auth_required: false
 tags: [editing, writing, quality]

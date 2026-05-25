@@ -10,7 +10,7 @@ The current product is not a marketplace. It is an active inference protocol and
 | --- | --- | --- |
 | **Playbook** | Process pack | A versioned process definition that tells L2 what mission is being run, which workers are allowed, which tools may be used, what inputs are required, what evals must pass, and when the run is complete. |
 | **Work Order** | Task contract | A bounded instruction from L2 to one L3 worker. It includes the worker, goal, inputs, allowed tools, budget, schemas, eval spec, retry policy, memory policy, and external-action policy. |
-| **External Actions** | Side effects | Any effect outside the runtime's internal memory and artifacts: posting, sending messages, writing to external services, spending money, mutating third-party data, or calling tools that can change external state. |
+| **External Actions** | External actions | Any effect outside the runtime's internal memory and artifacts: posting, sending messages, writing to external services, spending money, mutating third-party data, or calling tools that can change external state. |
 | **Taskforce Hub** | Registry Marketplace | The internal registry of approved capabilities: workers, tools, evals, playbooks, and known failure patterns. It is a controlled capability hub, not a public marketplace. |
 | **Hub Lookup** | Resolve in marketplace | Runtime lookup of a worker, tool, eval, playbook, or failure pattern from Taskforce Hub before execution. Lookup does not install or invent capabilities. |
 | **Runtime** | Execution fabric | The execution layer that validates work orders, runs L3 workers, enforces schemas and external-action policy, records artifacts/evals/events, and returns control to L2. |
@@ -24,6 +24,8 @@ The current product is not a marketplace. It is an active inference protocol and
 | **Command Layer** | L2 | The supervisory layer. It chooses the next action, creates work orders, interprets Incident Briefs, and decides repair strategy within the playbook. |
 | **Execution Layer** | L3 | The worker layer. It performs bounded work orders and returns structured outputs. |
 | **Active Inference Runtime** | L2/L3 protocol runtime | The whole system loop: L2 observes state, selects a bounded action, L3 executes, runtime validates/evaluates, and L2 updates its next belief/action from the result. |
+| **Execution Mode** | Delivery/factory mode | L2 runs a known Playbook strictly: create Work Orders, validate, route, eval, repair inside rules, and gate external actions. |
+| **Design Mode** | Discovery/agent mode | L2 designs a new or changed Playbook proposal when the user explicitly starts a design run. It can propose Hub changes, but cannot apply executable changes without approval. |
 
 ## Positioning Rules
 
@@ -31,8 +33,7 @@ The current product is not a marketplace. It is an active inference protocol and
 - Do not call the current product a marketplace.
 - Say **Playbook** for user-facing process definitions.
 - Say **Work Order** for user-facing task contracts.
-- Say **External Actions** for user-facing side effects.
+- Say **External Actions** for user-facing external actions.
 - Say **Incident Brief** for user-facing failure context.
-- Keep legacy code/storage identifiers where changing them would require a database migration or break compatibility.
 - Approval is required for executable behavior changes, external actions, and user-owned product/editorial decisions.
 - L2 should not escalate low-level repair mechanics to the user when the repair is safe and inside the playbook.

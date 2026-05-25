@@ -6,9 +6,9 @@ Purpose: explain the current ABRT L2/L3 runtime architecture in simple language 
 
 ---
 
-## 1. What is a process pack?
+## 1. What is a Playbook?
 
-A `process pack` is the description of a pipeline or process.
+A `Playbook` is the description of a pipeline or process.
 
 It tells L2:
 
@@ -17,33 +17,33 @@ It tells L2:
 - which tools are allowed
 - which inputs are required
 - what counts as completion
-- which memory and side-effect rules apply
+- which memory and External Action rules apply
 
-Example: the `build-in-public` process pack describes how to turn progress signals into public draft posts.
+Example: the `build-in-public` Playbook describes how to turn progress signals into public draft posts.
 
 ---
 
-## 2. Why does L2 load the process pack and allowed workers from the marketplace registry?
+## 2. Why does L2 load the Playbook and allowed workers from Taskforce Hub?
 
 So L2 does not improvise.
 
-The process pack defines the rules of the process:
+The Playbook defines the rules of the process:
 
 - which workers can be used
 - which tools can be used
 - which inputs are required
 - which completion criteria apply
-- which side effects are allowed or forbidden
+- which External Actions are allowed or forbidden
 
 L2 loads this from the registry to know:
 
 > “For this process, I may only use these workers and follow these rules.”
 
-Without this, L2 could start inventing workers, tools, and steps. That would break the discipline of the protocol.
+Without this, L2 could start inventing workers, tools, and steps during Execution Mode. That would break the discipline of the protocol.
 
 ---
 
-## 3. Does L2 decide what it needs and load tool/worker implementations from the marketplace?
+## 3. Does L2 decide what it needs and load tool/worker implementations from Taskforce Hub?
 
 Almost, but with an important constraint.
 
@@ -51,28 +51,28 @@ L2 does **not** load arbitrary implementations by itself.
 
 How it works:
 
-1. A human starts a process, for example `build-in-public`.
-2. Runtime loads the process pack.
-3. The process pack already defines which workers and tools are allowed.
+1. A human starts a Playbook, for example `build-in-public`.
+2. Runtime loads the Playbook.
+3. The Playbook already defines which workers and tools are allowed.
 4. L2 chooses from that allowed set.
 5. Runtime validates L2's choice.
 6. Runtime runs the worker through its registered entrypoint.
 
 So L2 does not say:
 
-> “I will find anything I want in the marketplace.”
+> “I will find anything I want in Taskforce Hub.”
 
 It says:
 
 > “For this process, I am allowed to choose from these workers. I will pick the right one.”
 
-The marketplace is the source of registered capabilities. L2 operates inside the process boundaries.
+Taskforce Hub is the source of registered capabilities. L2 operates inside the Playbook boundaries.
 
 ---
 
-## 4. What are side effects?
+## 4. What are External Actions?
 
-`Side effects` are actions that change the outside world instead of only returning a result.
+`External Actions` are actions that change the outside world instead of only returning a result.
 
 Examples:
 
@@ -85,13 +85,13 @@ Examples:
 - write to memory
 - deploy something
 
-In this protocol, side effects must be explicitly allowed.
+In this protocol, External Actions must be explicitly allowed.
 
 Example: a worker may generate a draft, but it cannot publish the draft unless publishing is explicitly allowed.
 
 ---
 
-## 5. When L2 chooses the next action, does it create a TaskContract in working memory?
+## 5. When L2 chooses the next action, does it create a Work Order in working memory?
 
 Yes.
 
@@ -99,9 +99,9 @@ If L2 chooses an action like:
 
 > “Run `quality-judge`.”
 
-Then runtime creates a `TaskContract` and stores it in Postgres.
+Then runtime creates a `WorkOrder` and stores it in Postgres.
 
-The contract includes:
+The Work Order includes:
 
 - task id
 - run id
@@ -118,16 +118,16 @@ So yes: it is a state/log record in Postgres that makes the whole process tracka
 
 ---
 
-## 6. How does contract validation work?
+## 6. How does Work Order validation work?
 
-Before running a worker, runtime checks the contract.
+Before running a worker, runtime checks the Work Order.
 
 It validates:
 
 - required inputs exist
 - input types are correct
 - requested tools are allowed
-- the worker does not violate side-effect policy
+- the worker does not violate External Action policy
 - the expected output schema is defined
 
 Example:
@@ -136,34 +136,34 @@ If a worker requires `signals`, but L2 passes `{}`, the task does not run. It fa
 
 ---
 
-## 7. What does it mean to resolve workers/tools/policies in the marketplace?
+## 7. What does Hub Lookup mean?
 
-`Resolve` means taking keys from the contract and finding the real registered specs.
+`Hub Lookup` means taking keys from the Work Order and finding the real registered specs.
 
 Example:
 
-The contract says:
+The Work Order says:
 
 ```text
 worker_profile = quality-judge
 ```
 
-Runtime goes to the marketplace and loads the `quality-judge` worker spec:
+Runtime goes to Taskforce Hub and loads the `quality-judge` worker spec:
 
 - entrypoint
 - worker type
 - input schema
 - output schema
 - compatible tools
-- side-effect policy
+- External Action policy
 
-If the contract asks for a tool like `x-publisher`, runtime checks:
+If the Work Order asks for a tool like `x-publisher`, runtime checks:
 
-- does this tool exist in the marketplace?
+- does this tool exist in Taskforce Hub?
 - is it compatible with this worker?
-- is it allowed by this process pack?
+- is it allowed by this Playbook?
 - what toolset does it map to?
-- what side effects does it have?
+- what External Actions does it have?
 
 If everything is valid, runtime runs the worker.
 
@@ -171,18 +171,18 @@ If not, runtime fails explicitly.
 
 ---
 
-## 8. What happens if the contract is invalid?
+## 8. What happens if the Work Order is invalid?
 
 The worker does **not** run.
 
 Runtime does this:
 
 1. Marks the task as `failed`.
-2. Writes a `contract_validation_failed` event.
+2. Writes a `work_order_validation_failed` event.
 3. Writes a `task_failed` event.
-4. Creates `task_failure_context` for L2.
+4. Creates an `incident_brief` for L2.
 
-The failure context includes:
+The Incident Brief includes:
 
 - which worker failed
 - failure type
@@ -194,7 +194,7 @@ Then control returns to L2.
 
 L2 can decide to:
 
-- rebuild the contract
+- rebuild the Work Order
 - ask the user for missing data
 - choose another worker
 - fail the process
@@ -230,13 +230,13 @@ The eval loop works like this:
 2. Runtime validates the output schema.
 3. Runtime sees `grader_spec`.
 4. Runtime gets `eval_key` from `grader_spec`.
-5. Runtime loads the eval spec from the marketplace.
+5. Runtime loads the eval spec from Taskforce Hub.
 6. Runtime reads the threshold, for example `minimum_score: 0.75`.
 7. Runtime reads the score from the worker result.
 8. Runtime compares score against threshold.
 9. Runtime writes an `EvalResult` to Postgres.
 10. If score is below threshold, the task fails.
-11. Runtime creates `task_failure_context` and gives it back to L2.
+11. Runtime creates an `incident_brief` and gives it back to L2.
 
 The important point:
 
@@ -265,7 +265,7 @@ Runtime checks the `failure_pattern` registry for something like:
 }
 ```
 
-If it finds a match, runtime adds that information to `task_failure_context`.
+If it finds a match, runtime adds that information to the Incident Brief.
 
 Then L2 receives more than:
 
@@ -287,15 +287,15 @@ This makes retry smarter. It avoids repeating the same mistake.
 The system is built around disciplined orchestration:
 
 - Human defines the goal.
-- Process pack defines the allowed process boundaries.
+- Playbook defines the allowed process boundaries.
 - L2 chooses actions inside those boundaries.
-- Runtime creates typed task contracts.
-- Contract validator blocks invalid work before execution.
-- Marketplace resolves registered workers, tools, policies, and evals.
+- Runtime creates typed Work Orders.
+- Work Order validator blocks invalid work before execution.
+- Taskforce Hub resolves registered workers, tools, policies, and evals.
 - L3 workers execute bounded tasks.
 - Eval loop checks results against registry-defined standards.
-- Failure context gives L2 structured information for repair or retry.
+- Incident Brief gives L2 structured information for repair or retry.
 
 The goal is not one giant smart agent.
 
-The goal is a controlled execution fabric where every task is explicit, validated, trackable, and repairable.
+The goal is a controlled Runtime where every Work Order is explicit, validated, trackable, and repairable.

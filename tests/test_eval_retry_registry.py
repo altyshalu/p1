@@ -5,8 +5,8 @@ from uuid import UUID
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskContract, TaskStatus
-from l2l3_protocol.marketplace.registry import yaml_registry_items
+from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
@@ -15,7 +15,7 @@ from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 class FakeStore:
     def __init__(self, run: ProcessRun) -> None:
         self.run = run
-        self.tasks: list[TaskContract] = []
+        self.tasks: list[WorkOrder] = []
         self.artifacts: list[Artifact] = []
         self.evals: list[EvalResult] = []
         self.events: list[dict[str, Any]] = []
@@ -32,7 +32,8 @@ class FakeStore:
     async def get_run(self, run_id: UUID) -> dict[str, Any] | None:
         return {
             "id": str(self.run.id),
-            "process_key": self.run.process_key,
+            "playbook_key": self.run.playbook_key,
+            "l2_mode": self.run.l2_mode.value,
             "goal": self.run.goal,
             "status": self.run.status.value,
             "input": self.run.input,
@@ -51,9 +52,9 @@ class FakeStore:
             "events": self.events,
         }
 
-    async def add_task(self, contract: TaskContract) -> TaskContract:
-        self.tasks.append(contract)
-        return contract
+    async def add_task(self, work_order: WorkOrder) -> WorkOrder:
+        self.tasks.append(work_order)
+        return work_order
 
     async def set_task_status(self, task_id: UUID, status: TaskStatus) -> None:
         for task in self.tasks:
@@ -100,7 +101,7 @@ class FakeHermes(HermesRuntime):
 
 @pytest.mark.asyncio
 async def test_eval_threshold_overrides_worker_passed_flag_and_exposes_failure_context() -> None:
-    run = ProcessRun(process_key="build-in-public", goal="judge drafts", status=RunStatus.CREATED, input={"require_human_approval": False})
+    run = ProcessRun(playbook_key="build-in-public", goal="judge drafts", status=RunStatus.CREATED, input={"require_human_approval": False})
     hermes = FakeHermes(
         [
             """
@@ -122,12 +123,11 @@ async def test_eval_threshold_overrides_worker_passed_flag_and_exposes_failure_c
     assert any(event["event_type"] == "task_eval_failed" for event in store.events)
     incident_events = [event for event in store.events if event["event_type"] == "incident_brief"]
     assert incident_events[0]["payload"]["failure_type"] == "eval_failed"
-    assert any(event["event_type"] == "task_failure_context" for event in store.events)
 
 
 @pytest.mark.asyncio
 async def test_retry_policy_retries_retryable_worker_failure_until_success() -> None:
-    run = ProcessRun(process_key="build-in-public", goal="collect", status=RunStatus.CREATED, input={"require_human_approval": False})
+    run = ProcessRun(playbook_key="build-in-public", goal="collect", status=RunStatus.CREATED, input={"require_human_approval": False})
     hermes = FakeHermes(
         [
             """
@@ -150,5 +150,4 @@ async def test_retry_policy_retries_retryable_worker_failure_until_success() -> 
     assert output["status"] == "completed"
     assert len(store.tasks) == 2
     assert any(event["event_type"] == "incident_brief" for event in store.events)
-    assert any(event["event_type"] == "task_failure_context" for event in store.events)
     assert store.artifacts[0].payload["signals"][0]["text"] == "ok"

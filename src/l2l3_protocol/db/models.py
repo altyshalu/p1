@@ -15,7 +15,8 @@ class ProcessRunRecord(Base):
     __tablename__ = "process_runs"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    process_key: Mapped[str] = mapped_column(String(100), index=True)
+    playbook_key: Mapped[str] = mapped_column(String(100), index=True)
+    l2_mode: Mapped[str] = mapped_column(String(40), index=True)
     goal: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String(40), index=True)
     input: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
@@ -23,14 +24,14 @@ class ProcessRunRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    tasks: Mapped[list["TaskContractRecord"]] = relationship(back_populates="run", cascade="all, delete-orphan")
+    work_orders: Mapped[list["WorkOrderRecord"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     artifacts: Mapped[list["ArtifactRecord"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     evals: Mapped[list["EvalResultRecord"]] = relationship(back_populates="run", cascade="all, delete-orphan")
     events: Mapped[list["EventRecord"]] = relationship(back_populates="run", cascade="all, delete-orphan")
 
 
-class TaskContractRecord(Base):
-    __tablename__ = "task_contracts"
+class WorkOrderRecord(Base):
+    __tablename__ = "work_orders"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
@@ -38,11 +39,11 @@ class TaskContractRecord(Base):
     worker_profile: Mapped[str] = mapped_column(String(100), index=True)
     status: Mapped[str] = mapped_column(String(40), index=True)
     goal: Mapped[str] = mapped_column(String)
-    contract: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    work_order: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    run: Mapped[ProcessRunRecord] = relationship(back_populates="tasks")
+    run: Mapped[ProcessRunRecord] = relationship(back_populates="work_orders")
 
 
 class ArtifactRecord(Base):
@@ -50,7 +51,7 @@ class ArtifactRecord(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
-    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("task_contracts.id"), nullable=True, index=True)
+    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("work_orders.id"), nullable=True, index=True)
     artifact_type: Mapped[str] = mapped_column(String(80), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -63,7 +64,7 @@ class EvalResultRecord(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
-    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("task_contracts.id"), nullable=True, index=True)
+    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("work_orders.id"), nullable=True, index=True)
     passed: Mapped[bool]
     score: Mapped[float]
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
@@ -77,7 +78,7 @@ class EventRecord(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
-    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("task_contracts.id"), nullable=True, index=True)
+    task_id: Mapped[UUID | None] = mapped_column(ForeignKey("work_orders.id"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(100), index=True)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

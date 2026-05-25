@@ -9,7 +9,7 @@ from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 class FakeStore:
     def __init__(self) -> None:
         self.run = ProcessRun(
-            process_key="build-in-public-trend-radar",
+            playbook_key="build-in-public-trend-radar",
             goal="real trend radar run",
             status=RunStatus.WAITING_APPROVAL,
             input={"require_human_approval": True},
@@ -27,7 +27,8 @@ class FakeStore:
     async def get_run(self, run_id):
         return {
             "id": str(run_id),
-            "process_key": self.run.process_key,
+            "playbook_key": self.run.playbook_key,
+            "l2_mode": self.run.l2_mode.value,
             "goal": self.run.goal,
             "status": self.run.status.value,
             "input": self.run.input,

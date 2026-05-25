@@ -6,8 +6,8 @@ from uuid import UUID
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskContract, TaskStatus
-from l2l3_protocol.marketplace.registry import yaml_registry_items
+from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
@@ -17,7 +17,7 @@ from l2l3_protocol.workers.build_in_public_worker import claim_grounding, normal
 class FakeStore:
     def __init__(self, run: ProcessRun) -> None:
         self.run = run
-        self.tasks: list[TaskContract] = []
+        self.tasks: list[WorkOrder] = []
         self.artifacts: list[Artifact] = []
         self.evals: list[EvalResult] = []
         self.events: list[dict[str, Any]] = []
@@ -34,7 +34,8 @@ class FakeStore:
     async def get_run(self, run_id: UUID) -> dict[str, Any] | None:
         return {
             "id": str(self.run.id),
-            "process_key": self.run.process_key,
+            "playbook_key": self.run.playbook_key,
+            "l2_mode": self.run.l2_mode.value,
             "goal": self.run.goal,
             "status": self.run.status.value,
             "input": self.run.input,
@@ -53,9 +54,9 @@ class FakeStore:
             "events": self.events,
         }
 
-    async def add_task(self, contract: TaskContract) -> TaskContract:
-        self.tasks.append(contract)
-        return contract
+    async def add_task(self, work_order: WorkOrder) -> WorkOrder:
+        self.tasks.append(work_order)
+        return work_order
 
     async def set_task_status(self, task_id: UUID, status: TaskStatus) -> None:
         for task in self.tasks:
@@ -241,7 +242,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
                     "content_atoms": [
                         {
                             "angle": "trend_radar",
-                            "claim": "Agent runtimes need typed contracts and eval gates.",
+                            "claim": "Agent runtimes need typed work_orders and eval gates.",
                             "why_it_matters": "This is the exact operating model ABRT is building.",
                             "evidence": ["https://github.com/openai/codex"],
                         }
@@ -260,7 +261,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
                                 "content_atoms": [
                                     {
                                         "angle": "trend_radar",
-                                        "claim": "Agent runtimes need typed contracts and eval gates.",
+                                        "claim": "Agent runtimes need typed work_orders and eval gates.",
                                         "why_it_matters": "This is the exact operating model ABRT is building.",
                                         "evidence": ["https://github.com/openai/codex"],
                                     }
@@ -334,7 +335,7 @@ async def test_trend_radar_process_exercises_tools_agentic_workers_evals_and_app
         ]
     )
     run = ProcessRun(
-        process_key="build-in-public-trend-radar",
+        playbook_key="build-in-public-trend-radar",
         goal="Find AI/dev trends and produce reviewed build-in-public draft",
         status=RunStatus.CREATED,
         input={"require_human_approval": True},

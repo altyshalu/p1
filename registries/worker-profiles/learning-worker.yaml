@@ -16,5 +16,5 @@ stop_conditions:
   - memory_candidates_created
 memory_policy:
   writes: l2_curated
-side_effect_policy:
+external_action_policy:
   procedural_changes: candidate_only

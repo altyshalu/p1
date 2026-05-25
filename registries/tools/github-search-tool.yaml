@@ -3,6 +3,6 @@ version: 0.1.0
 description: Read-only GitHub repository search capability for trend discovery.
 runtime_type: http_api
 toolset: github_search
-side_effect_class: read
+external_action_class: read
 auth_required: false
 tags: [github, trends, repositories]

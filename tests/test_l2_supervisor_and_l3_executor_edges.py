@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import TaskContract
+from l2l3_protocol.core.schemas import WorkOrder
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.l2_supervisor import L2Supervisor
 from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor, L3WorkerExecutionError
 
 
-def process_pack() -> dict:
+def playbook() -> dict:
     return {
         "key": "build-in-public",
         "allowed_workers": ["signal-collector", "narrative-synthesizer", "approval-adapter"],
@@ -53,7 +53,7 @@ async def test_l2_supervisor_rejects_unknown_worker() -> None:
     )
 
     with pytest.raises(ValueError, match="not allowed"):
-        await supervisor.next_action(process_pack(), worker_profiles(), {"goal": "x"}, 0)
+        await supervisor.next_action(playbook(), worker_profiles(), {"goal": "x"}, 0)
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ async def test_l2_supervisor_enforces_task_limit() -> None:
     )
 
     with pytest.raises(ValueError, match="too many"):
-        await supervisor.next_action(process_pack(), worker_profiles(), {"goal": "x"}, 0)
+        await supervisor.next_action(playbook(), worker_profiles(), {"goal": "x"}, 0)
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,7 @@ async def test_l2_supervisor_repairs_malformed_output() -> None:
     )
     supervisor = L2Supervisor(hermes)
 
-    action = await supervisor.next_action(process_pack(), worker_profiles(), {"goal": "x"}, 0)
+    action = await supervisor.next_action(playbook(), worker_profiles(), {"goal": "x"}, 0)
 
     assert action.action == "message_user"
     assert len(hermes.prompts) == 2
@@ -120,7 +120,7 @@ async def test_l2_supervisor_blocks_internal_repair_escalation_to_user() -> None
         "goal": "x",
         "events": [
             {
-                "event_type": "task_failure_context",
+                "event_type": "incident_brief",
                 "payload": {
                     "failure_type": "eval_failed",
                     "worker_profile": "claim-grounding-judge",
@@ -131,7 +131,7 @@ async def test_l2_supervisor_blocks_internal_repair_escalation_to_user() -> None
         ],
     }
 
-    action = await supervisor.next_action(process_pack(), worker_profiles(), state, 0)
+    action = await supervisor.next_action(playbook(), worker_profiles(), state, 0)
 
     assert action.action == "spawn_tasks"
     assert "message_user is not allowed for internal L2 repair mechanics" in hermes.prompts[1]
@@ -160,7 +160,7 @@ async def test_l2_supervisor_blocks_finish_before_required_evals_pass() -> None:
     )
     state = {"goal": "x", "evals": [{"eval_key": "quality", "passed": False}], "events": []}
 
-    action = await L2Supervisor(hermes).next_action(process_pack(), worker_profiles(), state, 0)
+    action = await L2Supervisor(hermes).next_action(playbook(), worker_profiles(), state, 0)
 
     assert action.action == "spawn_tasks"
     assert "finish is not allowed until required evals pass" in hermes.prompts[1]
@@ -202,7 +202,7 @@ async def test_l2_supervisor_blocks_approval_before_required_evals_pass() -> Non
     )
     state = {"goal": "x", "evals": [{"eval_key": "quality", "passed": False}], "events": []}
 
-    action = await L2Supervisor(hermes).next_action(process_pack(), worker_profiles(), state, 0)
+    action = await L2Supervisor(hermes).next_action(playbook(), worker_profiles(), state, 0)
 
     assert action.action == "spawn_tasks"
     assert "approval-adapter is not allowed until required evals pass" in hermes.prompts[1]
@@ -213,7 +213,7 @@ async def test_l3_executor_rejects_missing_required_output(tmp_path: Path, monke
     module_path = tmp_path / "bad_worker.py"
     module_path.write_text("import json, sys; json.loads(sys.stdin.read()); print('{}')", encoding="utf-8")
     monkeypatch.setenv("PYTHONPATH", str(tmp_path))
-    contract = TaskContract(
+    work_order = WorkOrder(
         run_id="00000000-0000-0000-0000-000000000000",
         task_type="collect",
         goal="collect",
@@ -223,13 +223,13 @@ async def test_l3_executor_rejects_missing_required_output(tmp_path: Path, monke
     )
 
     with pytest.raises(L3WorkerExecutionError, match="missing required"):
-        await L3SandboxExecutor().run(contract, {"goal": "goal"}, {"worker_type": "sandboxed_subprocess", "entrypoint": "bad_worker"})
+        await L3SandboxExecutor().run(work_order, {"goal": "goal"}, {"worker_type": "sandboxed_subprocess", "entrypoint": "bad_worker"})
 
 
 @pytest.mark.asyncio
 async def test_l3_executor_runs_hermes_agent_worker() -> None:
     hermes = FakeHermes('{"content_atoms":[{"claim":"done"}]}')
-    contract = TaskContract(
+    work_order = WorkOrder(
         run_id="00000000-0000-0000-0000-000000000000",
         task_type="synthesize",
         goal="synthesize",
@@ -239,7 +239,7 @@ async def test_l3_executor_runs_hermes_agent_worker() -> None:
         output_schema={"type": "object", "required": ["content_atoms"]},
     )
 
-    payload = await L3SandboxExecutor(hermes).run(contract, {}, {"worker_type": "hermes_agent"})
+    payload = await L3SandboxExecutor(hermes).run(work_order, {}, {"worker_type": "hermes_agent"})
 
     assert payload["content_atoms"][0]["claim"] == "done"
     assert payload["_worker_execution"]["mode"] == "hermes_agent"
@@ -247,7 +247,7 @@ async def test_l3_executor_runs_hermes_agent_worker() -> None:
 
 @pytest.mark.asyncio
 async def test_l3_executor_runs_adapter_workers_via_sandbox() -> None:
-    contract = TaskContract(
+    work_order = WorkOrder(
         run_id="00000000-0000-0000-0000-000000000000",
         task_type="normalize",
         goal="normalize draft",
@@ -259,7 +259,7 @@ async def test_l3_executor_runs_adapter_workers_via_sandbox() -> None:
     )
 
     payload = await L3SandboxExecutor().run(
-        contract,
+        work_order,
         {},
         {"worker_type": "adapter", "entrypoint": "l2l3_protocol.workers.build_in_public_worker"},
     )

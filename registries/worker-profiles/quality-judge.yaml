@@ -1,5 +1,5 @@
 key: quality-judge
-description: Evaluate draft completeness and side-effect safety against the build-in-public quality rubric.
+description: Evaluate draft completeness and external-action safety against the build-in-public quality rubric.
 worker_type: evaluator
 entrypoint: l2l3_protocol.workers.build_in_public_worker
 allowed_tools: []
@@ -21,5 +21,5 @@ stop_conditions:
   - eval_report_created
 memory_policy:
   writes: artifact_only
-side_effect_policy:
-  external_side_effects: none
+external_action_policy:
+  external_actions: none

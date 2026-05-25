@@ -54,5 +54,5 @@ provider_repair_policy:
       query_fields: [search]
 memory_policy:
   writes: artifact_only
-side_effect_policy:
-  external_side_effects: none
+external_action_policy:
+  external_actions: none

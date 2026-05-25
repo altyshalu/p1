@@ -22,7 +22,8 @@ docker compose up --build
 curl -X POST http://localhost:8080/runs \
   -H 'content-type: application/json' \
   -d '{
-    "process_key": "build-in-public",
+    "playbook_key": "build-in-public",
+    "l2_mode": "execution",
     "goal": "Turn today protocol implementation progress into build-in-public drafts.",
     "inputs": {
       "signals": [
@@ -104,8 +105,6 @@ Supported Hub kinds are:
 - `playbook`
 - `failure_pattern`
 
-Legacy `/registry/...` endpoints and the internal `process_pack` kind remain available for compatibility. Public docs and operator workflows should use `/hub/...` and `playbook`.
-
 Hub changes that alter executable behavior stay approval-gated. Safe metadata/stat updates can auto-apply; worker/tool installs, entrypoints, external-action policies, Playbook behavior, and eval threshold loosening require explicit approval through the change-candidate API.
 
-There is no runtime fallback from Taskforce Hub to YAML. If Hub data is missing, the Runtime fails explicitly; run the sync command or fix the Hub state.
+The Runtime never reads YAML as an alternate source after startup. If Hub data is missing, the Runtime fails explicitly; run the sync command or fix the Hub state.

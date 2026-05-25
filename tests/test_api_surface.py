@@ -1,4 +1,6 @@
 from l2l3_protocol.api.main import app
+from l2l3_protocol.core.schemas import ProcessRunCreate
+from pydantic import ValidationError
 
 
 def test_generic_runtime_api_routes_are_registered() -> None:
@@ -9,3 +11,12 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ("/runs/{run_id}/messages", "POST") in routes
     assert ("/runs/{run_id}/control", "POST") in routes
     assert ("/runs/{run_id}/events/stream", "GET") in routes
+
+
+def test_run_create_rejects_old_process_key_field() -> None:
+    try:
+        ProcessRunCreate(goal="x", process_key="old")
+    except ValidationError as exc:
+        assert "Extra inputs are not permitted" in str(exc)
+    else:
+        raise AssertionError("process_key must not be accepted")

@@ -11,7 +11,6 @@ INCIDENT_BRIEF = "Incident Brief"
 RUNTIME = "Runtime"
 
 INCIDENT_BRIEF_EVENT = "incident_brief"
-LEGACY_FAILURE_CONTEXT_EVENT = "task_failure_context"
 
 HUB_KIND_ALIASES = {
     "tool": RegistryKind.TOOL,
@@ -20,10 +19,8 @@ HUB_KIND_ALIASES = {
     "workers": RegistryKind.WORKER,
     "eval": RegistryKind.EVAL,
     "evals": RegistryKind.EVAL,
-    "playbook": RegistryKind.PROCESS_PACK,
-    "playbooks": RegistryKind.PROCESS_PACK,
-    "process_pack": RegistryKind.PROCESS_PACK,
-    "process_packs": RegistryKind.PROCESS_PACK,
+    "playbook": RegistryKind.PLAYBOOK,
+    "playbooks": RegistryKind.PLAYBOOK,
     "failure_pattern": RegistryKind.FAILURE_PATTERN,
     "failure_patterns": RegistryKind.FAILURE_PATTERN,
 }
@@ -37,6 +34,4 @@ def normalize_hub_kind(value: str) -> RegistryKind:
 
 
 def display_event_type(event_type: str) -> str:
-    if event_type == LEGACY_FAILURE_CONTEXT_EVENT:
-        return INCIDENT_BRIEF_EVENT
     return event_type

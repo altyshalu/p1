@@ -5,5 +5,5 @@ checks:
   - has_drafts
   - all_have_channels
   - all_have_text
-  - no_publish_side_effect
+  - no_publish_external_action
 minimum_score: 0.75

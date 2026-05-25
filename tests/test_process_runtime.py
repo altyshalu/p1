@@ -5,8 +5,8 @@ from uuid import UUID
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskContract, TaskStatus
-from l2l3_protocol.marketplace.registry import yaml_registry_items
+from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunMode, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
@@ -15,7 +15,7 @@ from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 class FakeStore:
     def __init__(self, run: ProcessRun) -> None:
         self.run = run
-        self.tasks: list[TaskContract] = []
+        self.tasks: list[WorkOrder] = []
         self.artifacts: list[Artifact] = []
         self.evals: list[EvalResult] = []
         self.events: list[dict[str, Any]] = []
@@ -38,7 +38,8 @@ class FakeStore:
             return None
         return {
             "id": str(self.run.id),
-            "process_key": self.run.process_key,
+            "playbook_key": self.run.playbook_key,
+            "l2_mode": self.run.l2_mode.value,
             "goal": self.run.goal,
             "status": self.run.status.value,
             "input": self.run.input,
@@ -57,9 +58,9 @@ class FakeStore:
             "events": self.events,
         }
 
-    async def add_task(self, contract: TaskContract) -> TaskContract:
-        self.tasks.append(contract)
-        return contract
+    async def add_task(self, work_order: WorkOrder) -> WorkOrder:
+        self.tasks.append(work_order)
+        return work_order
 
     async def set_task_status(self, task_id: UUID, status: TaskStatus) -> None:
         for task in self.tasks:
@@ -110,11 +111,12 @@ class FakeHermes(HermesRuntime):
 @pytest.mark.asyncio
 async def test_runtime_executes_dynamic_l2_actions_without_fixed_stage_order() -> None:
     run = ProcessRun(
-        process_key="build-in-public",
+        playbook_key="build-in-public",
         goal="Share protocol progress",
         status=RunStatus.CREATED,
         input={
-            "process_key": "build-in-public",
+            "playbook_key": "build-in-public",
+            "l2_mode": "execution",
             "goal": "Share protocol progress",
             "inputs": {"signals": ["Implemented generic runtime"], "channels": ["x"]},
             "require_human_approval": False,
@@ -150,7 +152,7 @@ async def test_runtime_executes_dynamic_l2_actions_without_fixed_stage_order() -
 
 @pytest.mark.asyncio
 async def test_runtime_records_worker_failure_without_synthetic_data() -> None:
-    run = ProcessRun(process_key="build-in-public", goal="Share progress", status=RunStatus.CREATED, input={"require_human_approval": False})
+    run = ProcessRun(playbook_key="build-in-public", goal="Share progress", status=RunStatus.CREATED, input={"require_human_approval": False})
     hermes = FakeHermes(
         [
             """
@@ -181,7 +183,7 @@ async def test_runtime_records_worker_failure_without_synthetic_data() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_can_resume_from_user_message() -> None:
-    run = ProcessRun(process_key="build-in-public", goal="Share progress", status=RunStatus.WAITING_USER, input={"require_human_approval": False})
+    run = ProcessRun(playbook_key="build-in-public", goal="Share progress", status=RunStatus.WAITING_USER, input={"require_human_approval": False})
     hermes = FakeHermes(['{"action":"finish","output":{"result":"resumed","memory_writes":[]}}'])
     store = FakeStore(run)
 
@@ -189,3 +191,75 @@ async def test_runtime_can_resume_from_user_message() -> None:
 
     assert output["status"] == "completed"
     assert any(event["event_type"] == "user_message" for event in store.events)
+
+
+@pytest.mark.asyncio
+async def test_design_mode_creates_playbook_proposal_without_work_orders() -> None:
+    run = ProcessRun(
+        playbook_key="weekly-research-synthesis",
+        l2_mode=RunMode.DESIGN,
+        goal="Design a weekly research synthesis Playbook",
+        status=RunStatus.CREATED,
+        input={"require_human_approval": True},
+    )
+    hermes = FakeHermes(
+        [
+            """
+            {
+              "playbook_key": "weekly-research-synthesis",
+              "playbook_spec": {
+                "key": "weekly-research-synthesis",
+                "name": "Weekly Research Synthesis",
+                "version": "0.1.0",
+                "purpose": "Synthesize weekly research into reviewed internal notes.",
+                "allowed_workers": ["signal-collector"],
+                "allowed_tools": [],
+                "required_inputs": ["sources"],
+                "completion_criteria": ["summary is drafted"],
+                "external_actions": {},
+                "memory_policy": {"l3_direct_writes": false}
+              },
+              "required_workers": [],
+              "required_tools": [],
+              "required_evals": [],
+              "registry_change_candidates": [
+                {
+                  "kind": "playbook",
+                  "key": "weekly-research-synthesis",
+                  "change_type": "create_spec",
+                  "payload": {"key": "weekly-research-synthesis"},
+                  "reason": "New requested workflow."
+                }
+              ],
+              "test_plan": ["Run with a small real source list and verify summary output."],
+              "risks": ["Needs a quality judge before publishing externally."],
+              "approval_required": true
+            }
+            """
+        ]
+    )
+    store = FakeStore(run)
+
+    output = await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), hermes).run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "waiting_approval"
+    assert not store.tasks
+    assert any(artifact.artifact_type.value == "playbook_proposal" for artifact in store.artifacts)
+    assert any(event["event_type"] == "design_started" for event in store.events)
+    assert any(event["event_type"] == "playbook_proposal_created" for event in store.events)
+    assert any(event["event_type"] == "design_candidate_created" for event in store.events)
+
+
+@pytest.mark.asyncio
+async def test_execution_mode_fails_when_playbook_is_missing() -> None:
+    run = ProcessRun(
+        playbook_key="missing-playbook",
+        l2_mode=RunMode.EXECUTION,
+        goal="Run a missing Playbook",
+        status=RunStatus.CREATED,
+        input={"require_human_approval": False},
+    )
+    store = FakeStore(run)
+
+    with pytest.raises(KeyError, match="Taskforce Hub playbook is not seeded"):
+        await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([])).run_until_blocked_or_done(run.id)

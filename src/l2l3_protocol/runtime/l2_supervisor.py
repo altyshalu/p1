@@ -7,11 +7,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from l2l3_protocol.core.schemas import L2SupervisorAction
-from l2l3_protocol.core.terminology import INCIDENT_BRIEF_EVENT, LEGACY_FAILURE_CONTEXT_EVENT
+from l2l3_protocol.core.terminology import INCIDENT_BRIEF_EVENT
 from l2l3_protocol.runtime.hermes import HermesRuntime
 
 
-ALLOWED_ACTIONS = {"spawn_tasks", "message_user", "finish", "fail", "propose_registry_change"}
+ALLOWED_ACTIONS = {"spawn_tasks", "message_user", "finish", "fail", "propose_registry_change", "propose_playbook"}
 INTERNAL_REPAIR_FAILURE_TYPES = {
     "eval_failed",
     "output_schema",
@@ -19,8 +19,8 @@ INTERNAL_REPAIR_FAILURE_TYPES = {
     "worker_exception",
     "timeout",
     "tool_denied",
-    "side_effect_violation",
-    "contract_validation",
+    "external_action_violation",
+    "work_order_validation",
 }
 
 
@@ -75,7 +75,7 @@ class L2Supervisor:
                 "turn": turn,
                 "hard_constraints": [
                     "Return one JSON object and nothing else.",
-                    "Allowed action values: spawn_tasks, message_user, finish, fail, propose_registry_change.",
+                    "Allowed action values: spawn_tasks, message_user, finish, fail, propose_registry_change, propose_playbook.",
                     "Use only allowed_workers from the Playbook.",
                     "Spawn at most max_tasks_per_turn tasks.",
                     "Humans own WHAT outcome matters; L2 owns HOW execution is repaired.",
@@ -92,7 +92,7 @@ class L2Supervisor:
                     "If the run cannot continue, use fail with a reason.",
                 ],
                 "required_output_schema": {
-                    "action": "spawn_tasks | message_user | finish | fail | propose_registry_change",
+                    "action": "spawn_tasks | message_user | finish | fail | propose_registry_change | propose_playbook",
                     "message": "optional user-facing message",
                     "tasks": [
                         {
@@ -107,9 +107,9 @@ class L2Supervisor:
                     "output": {"final": "object when action=finish"},
                     "reason": "required when action=fail",
                     "registry_change_candidate": {"optional": "candidate only"},
+                    "playbook_proposal": {"optional": "required when action=propose_playbook"},
                 },
                 "playbook": playbook,
-                "legacy_storage_note": "Internal persisted kind may still be process_pack and task contracts; public terms are Playbook and Work Order.",
                 "worker_capabilities": {
                     key: {
                         "description": profile.get("description"),
@@ -118,8 +118,7 @@ class L2Supervisor:
                         "output_schema": profile.get("output_schema", {}),
                         "retry_policy": profile.get("retry_policy", {}),
                         "repair_strategy": profile.get("repair_strategy", {}),
-                        "external_action_policy": profile.get("side_effect_policy", {}),
-                        "side_effect_policy": profile.get("side_effect_policy", {}),
+                        "external_action_policy": profile.get("external_action_policy", {}),
                     }
                     for key, profile in worker_profiles.items()
                 },
@@ -193,6 +192,8 @@ class L2Supervisor:
             raise ValueError("spawn_tasks action requires at least one task")
         if action.action != "spawn_tasks" and action.tasks:
             raise ValueError(f"{action.action} action must not include tasks")
+        if action.action == "propose_playbook" and action.playbook_proposal is None:
+            raise ValueError("propose_playbook action requires playbook_proposal")
         if action.action == "finish" and not _required_evals_passed(playbook, state):
             raise ValueError("finish is not allowed until required evals pass")
         if action.action == "message_user" and not action.message:
@@ -213,7 +214,7 @@ class L2Supervisor:
 
 
 def _message_user_allowed(state: dict[str, Any]) -> bool:
-    latest_failure = _latest_task_failure_context(state)
+    latest_failure = _latest_incident_brief(state)
     if latest_failure is None:
         return True
     failure_type = str(latest_failure.get("failure_type", ""))
@@ -222,17 +223,17 @@ def _message_user_allowed(state: dict[str, Any]) -> bool:
     return True
 
 
-def _latest_task_failure_context(state: dict[str, Any]) -> dict[str, Any] | None:
+def _latest_incident_brief(state: dict[str, Any]) -> dict[str, Any] | None:
     for event in reversed(state.get("events", [])):
-        if event.get("event_type") not in {INCIDENT_BRIEF_EVENT, LEGACY_FAILURE_CONTEXT_EVENT}:
+        if event.get("event_type") != INCIDENT_BRIEF_EVENT:
             continue
         payload = event.get("payload", {})
         return payload if isinstance(payload, dict) else None
     return None
 
 
-def _required_evals_passed(process_pack: dict[str, Any], state: dict[str, Any]) -> bool:
-    required_eval_keys = process_pack.get("required_eval_keys", [])
+def _required_evals_passed(playbook: dict[str, Any], state: dict[str, Any]) -> bool:
+    required_eval_keys = playbook.get("required_eval_keys", [])
     if not required_eval_keys:
         return True
     latest_by_key: dict[str, dict[str, Any]] = {}

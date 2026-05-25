@@ -26,16 +26,16 @@ def require_text(value: Any, key: str) -> str:
     return value.strip()
 
 
-def collect(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    signals = require_list(contract["inputs"], "signals")
+def collect(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    signals = require_list(work_order["inputs"], "signals")
     normalized = [{"source": "manual", "text": signal.strip(), "confidence": 1.0} for signal in signals if signal.strip()]
     if not normalized:
         raise WorkerInputError("signals contained no non-empty text")
     return {"signals": normalized}
 
 
-def synthesize(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    signals = require_list(contract["inputs"], "signals")
+def synthesize(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    signals = require_list(work_order["inputs"], "signals")
     atoms = [
         {
             "angle": "build_update",
@@ -48,9 +48,9 @@ def synthesize(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, A
     return {"content_atoms": atoms}
 
 
-def adapt(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    atoms = require_list(contract["inputs"], "atoms")
-    channels = require_list(contract["inputs"], "channels")
+def adapt(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    atoms = require_list(work_order["inputs"], "atoms")
+    channels = require_list(work_order["inputs"], "channels")
     drafts = []
     for channel in channels:
         for atom in atoms:
@@ -65,38 +65,38 @@ def adapt(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     return {"drafts": drafts}
 
 
-def evaluate(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    drafts = require_list(contract["inputs"], "drafts")
+def evaluate(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(work_order["inputs"], "drafts")
     reasons: list[str] = []
     checks = {
         "has_drafts": bool(drafts),
         "all_have_channels": all(bool(draft.get("channel")) for draft in drafts),
         "all_have_text": all(bool(draft.get("text")) for draft in drafts),
-        "no_publish_side_effect": all(draft.get("status") == "draft" for draft in drafts),
+        "no_publish_external_action": all(draft.get("status") == "draft" for draft in drafts),
     }
     if not checks["has_drafts"]:
         reasons.append("No drafts were produced.")
     if not checks["all_have_text"]:
         reasons.append("One or more drafts are missing text.")
-    if not checks["no_publish_side_effect"]:
+    if not checks["no_publish_external_action"]:
         reasons.append("A draft attempted a publish External Action before approval.")
     score = sum(1 for passed in checks.values() if passed) / len(checks)
     return {"passed": all(checks.values()), "score": score, "reasons": reasons, "checks": checks}
 
 
-def approve(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    require_human_approval = contract["inputs"].get("require_human_approval", True)
+def approve(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    require_human_approval = work_order["inputs"].get("require_human_approval", True)
     return {"approval": {"status": "waiting_human" if require_human_approval else "approved_for_draft_only", "publish_allowed": False}}
 
 
-def learn(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    summary = contract["inputs"].get("summary")
+def learn(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    summary = work_order["inputs"].get("summary")
     if not isinstance(summary, str) or not summary.strip():
         raise WorkerInputError("missing required string input: summary")
     procedural_candidate = {
         "status": "candidate_only",
         "reason": "Procedural memory remains Git-backed and requires human review.",
-        "target_registry_path": "registries/process-packs/build-in-public/process.yaml",
+        "target_registry_path": "registries/playbooks/build-in-public/playbook.yaml",
     }
     return {
         "memory_writes": [
@@ -115,15 +115,15 @@ def learn(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def collect_trend_sources(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    query = require_text(contract["inputs"].get("query"), "query")
-    providers = [require_text(provider, "provider").lower() for provider in require_list(contract["inputs"], "providers")]
-    max_results = int(contract["inputs"].get("max_results", 5))
+def collect_trend_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    query = require_text(work_order["inputs"].get("query"), "query")
+    providers = [require_text(provider, "provider").lower() for provider in require_list(work_order["inputs"], "providers")]
+    max_results = int(work_order["inputs"].get("max_results", 5))
     if max_results < 1:
         raise WorkerInputError("max_results must be >= 1")
 
-    provider_repairs = _provider_repairs(contract["inputs"].get("provider_repairs", {}))
-    allowed_toolsets = set(contract.get("allowed_tools", []))
+    provider_repairs = _provider_repairs(work_order["inputs"].get("provider_repairs", {}))
+    allowed_toolsets = set(work_order.get("allowed_tools", []))
     source_results: list[dict[str, Any]] = []
     provider_attempts: dict[str, list[dict[str, Any]]] = {}
     provider_failures: dict[str, str] = {}
@@ -356,8 +356,8 @@ def _search_huggingface(query: str, max_results: int, resource_type: str = "mode
     return results
 
 
-def deduplicate_trends(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    trend_signals = require_list(contract["inputs"], "trend_signals")
+def deduplicate_trends(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    trend_signals = require_list(work_order["inputs"], "trend_signals")
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for signal in trend_signals:
@@ -373,9 +373,9 @@ def deduplicate_trends(contract: dict[str, Any], context: dict[str, Any]) -> dic
     return {"deduped_signals": deduped}
 
 
-def score_relevance(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    deduped_signals = require_list(contract["inputs"], "deduped_signals")
-    themes = [require_text(theme, "theme").lower() for theme in require_list(contract["inputs"], "themes")]
+def score_relevance(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    deduped_signals = require_list(work_order["inputs"], "deduped_signals")
+    themes = [require_text(theme, "theme").lower() for theme in require_list(work_order["inputs"], "themes")]
     ranked = []
     for signal in deduped_signals:
         text = f"{signal.get('title', '')} {signal.get('summary', '')}".lower()
@@ -398,8 +398,8 @@ SLOP_PHRASES = [
 ]
 
 
-def stop_slop_edit(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    drafts = require_list(contract["inputs"], "drafts")
+def stop_slop_edit(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(work_order["inputs"], "drafts")
     edited = []
     for draft in drafts:
         normalized_draft = _normalize_draft_shape(draft)
@@ -412,9 +412,9 @@ def stop_slop_edit(contract: dict[str, Any], context: dict[str, Any]) -> dict[st
     return {"edited_drafts": edited}
 
 
-def normalize_draft_schema(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    drafts = require_list(contract["inputs"], "drafts")
-    source_format = contract["inputs"].get("source_format", "separate_section")
+def normalize_draft_schema(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(work_order["inputs"], "drafts")
+    source_format = work_order["inputs"].get("source_format", "separate_section")
     normalized = []
     for draft in drafts:
         item = _normalize_draft_shape(draft)
@@ -468,8 +468,8 @@ def _format_sources_separately(text: str, sources: list[Any]) -> str:
     return f"{clean_text}\n\nSources:\n{source_block}"
 
 
-def claim_grounding(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    drafts = require_list(contract["inputs"], "drafts")
+def claim_grounding(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(work_order["inputs"], "drafts")
     checks = {"has_claims": True, "every_claim_has_source_url": True, "no_empty_claim_text": True}
     reasons: list[str] = []
     for draft in drafts:
@@ -492,13 +492,13 @@ def claim_grounding(contract: dict[str, Any], context: dict[str, Any]) -> dict[s
     return {"passed": all(checks.values()), "score": score, "reasons": reasons, "checks": checks}
 
 
-def trend_quality(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    drafts = require_list(contract["inputs"], "drafts")
+def trend_quality(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    drafts = require_list(work_order["inputs"], "drafts")
     checks = {
         "has_drafts": bool(drafts),
         "all_have_channels": all(bool(draft.get("channel")) for draft in drafts),
         "all_have_text": all(bool(draft.get("text")) for draft in drafts),
-        "no_publish_side_effect": all(draft.get("publish") is not True and draft.get("status", "draft") == "draft" for draft in drafts),
+        "no_publish_external_action": all(draft.get("publish") is not True and draft.get("status", "draft") == "draft" for draft in drafts),
         "no_slop_phrases": all(not any(phrase in draft.get("text", "").lower() for phrase in SLOP_PHRASES) for draft in drafts),
     }
     reasons = [check for check, passed in checks.items() if not passed]
@@ -538,14 +538,14 @@ HANDLERS = {
 
 def main() -> None:
     request = json.loads(sys.stdin.read())
-    contract = request["contract"]
-    handler_key = contract["worker_profile"]
+    work_order = request["work_order"]
+    handler_key = work_order["worker_profile"]
     if handler_key not in HANDLERS:
-        handler_key = contract["task_type"]
+        handler_key = work_order["task_type"]
     if handler_key not in HANDLERS:
-        raise SystemExit(f"unknown worker_profile/task_type: {contract['worker_profile']} / {contract['task_type']}")
+        raise SystemExit(f"unknown worker_profile/task_type: {work_order['worker_profile']} / {work_order['task_type']}")
     try:
-        result = HANDLERS[handler_key](contract, request["context"])
+        result = HANDLERS[handler_key](work_order, request["context"])
     except WorkerInputError as exc:
         error_payload = {
             "error_type": "WorkerInputError",

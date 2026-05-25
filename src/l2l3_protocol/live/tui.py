@@ -344,7 +344,9 @@ class LiveRunApp(App[None]):
         body = Text.assemble(
             ("ABRT Live Run\n", "bold #dff8eb"),
             ("Playbook: ", "bold"),
-            (str(run.get("process_key", "unknown")), "#8ce7ba"),
+            (str(run.get("playbook_key", "unknown")), "#8ce7ba"),
+            ("   Mode: ", "bold"),
+            (str(run.get("l2_mode", "unknown")), "#fbbf24"),
             "\n",
             ("Run: ", "bold"),
             (str(run.get("id", self.run_id)), "dim"),

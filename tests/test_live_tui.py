@@ -22,7 +22,8 @@ class FakeLiveClient:
         return {
             "id": run_id,
             "status": "waiting_user",
-            "process_key": "build-in-public-trend-radar",
+            "playbook_key": "build-in-public-trend-radar",
+            "l2_mode": "execution",
             "goal": "inspect live tui",
             "tasks": [{"status": "completed", "worker_profile": "collector", "task_type": "collect", "goal": "collect real data"}],
             "evals": [],
