@@ -32,3 +32,37 @@ def test_live_renderer_shows_pipeline_artifacts_evals_and_approval() -> None:
     assert "trend-draft-quality" in output
     assert "Draft text" in output
     assert "waiting_approval" in output
+
+
+def test_live_renderer_toggles_full_event_payloads() -> None:
+    long_url = f"https://example.com/{'x' * 220}"
+    run = {
+        "id": "12345678-abcd",
+        "status": "running",
+        "process_key": "build-in-public-trend-radar",
+        "goal": "demo",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "l2_action_selected",
+                "payload": {"trend_signals": [{"title": "Long signal", "url": long_url}]},
+            }
+        ],
+    }
+
+    compact_console = Console(record=True, width=120)
+    compact_console.print(render_run_snapshot(run, show_full_events=False))
+    compact_output = compact_console.export_text()
+
+    full_console = Console(record=True, width=160)
+    full_console.print(render_run_snapshot(run, show_full_events=True))
+    full_output = full_console.export_text()
+
+    assert "compact" in compact_output
+    assert "..." in compact_output
+    assert long_url not in compact_output
+    assert "full" in full_output
+    assert "Long signal" in full_output
+    assert "..." not in full_output

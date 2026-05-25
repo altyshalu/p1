@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 
+API_TIMEOUT_SECONDS = 60
+
 
 TREND_RADAR_DEMO_SOURCES = [
     {
@@ -47,7 +49,7 @@ class LiveApiClient:
         self.api_url = api_url.rstrip("/")
 
     async def sync_registry(self) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{self.api_url}/registry/sync/yaml")
             response.raise_for_status()
             return response.json()
@@ -59,19 +61,19 @@ class LiveApiClient:
             "inputs": {"sources": TREND_RADAR_DEMO_SOURCES, "channels": ["x"]},
             "require_human_approval": True,
         }
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{self.api_url}/runs", json=payload)
             response.raise_for_status()
             return response.json()
 
     async def get_run(self, run_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
             response = await client.get(f"{self.api_url}/runs/{run_id}")
             response.raise_for_status()
             return response.json()
 
     async def control(self, run_id: str, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
             response = await client.post(f"{self.api_url}/runs/{run_id}/control", json={"action": action, "payload": payload})
             response.raise_for_status()
             return response.json()
