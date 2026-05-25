@@ -1,6 +1,7 @@
 .venv/
 .env
 .playwright-mcp/
+.antigravitycli/
 logs/*.jsonl
 logs/*.log
 __pycache__/
