@@ -243,3 +243,25 @@ async def test_l3_executor_runs_hermes_agent_worker() -> None:
 
     assert payload["content_atoms"][0]["claim"] == "done"
     assert payload["_worker_execution"]["mode"] == "hermes_agent"
+
+
+@pytest.mark.asyncio
+async def test_l3_executor_runs_adapter_workers_via_sandbox() -> None:
+    contract = TaskContract(
+        run_id="00000000-0000-0000-0000-000000000000",
+        task_type="normalize",
+        goal="normalize draft",
+        worker_profile="draft-schema-normalizer",
+        worker_type="adapter",
+        inputs={"drafts": [{"channel": "x", "thread": ["hello"], "claims": [{"text": "hello", "evidence_urls": ["https://e.test"]}]}]},
+        output_schema={"type": "object", "required": ["drafts"]},
+        budget={"max_seconds": 10},
+    )
+
+    payload = await L3SandboxExecutor().run(
+        contract,
+        {},
+        {"worker_type": "adapter", "entrypoint": "l2l3_protocol.workers.build_in_public_worker"},
+    )
+
+    assert payload["drafts"][0]["claims"][0]["source_url"] == "https://e.test"

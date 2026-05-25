@@ -21,7 +21,7 @@ class L3SandboxExecutor:
         worker_type = profile.get("worker_type") or contract.worker_type
         if worker_type == "hermes_agent":
             return await self._run_hermes_agent(contract, context, profile)
-        if worker_type in {"sandboxed_subprocess", "evaluator", "human_gate"}:
+        if worker_type in {"sandboxed_subprocess", "evaluator", "human_gate", "adapter"}:
             return await self._run_subprocess(contract, context, profile)
         raise L3WorkerExecutionError(f"unsupported worker_type: {worker_type}")
 
