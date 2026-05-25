@@ -82,7 +82,7 @@ class L3SandboxExecutor:
                 "output_schema": contract.output_schema,
                 "hard_constraints": [
                     "Return one JSON object and nothing else.",
-                    "Do not perform side effects outside the contract side_effect_policy.",
+                    "Do not perform External Actions outside the Work Order external_action_policy/side_effect_policy.",
                     "If required inputs are missing, return a JSON object with error and missing_inputs.",
                 ],
             },

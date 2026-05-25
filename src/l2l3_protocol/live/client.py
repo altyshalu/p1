@@ -13,7 +13,7 @@ class LiveApiClient:
 
     async def sync_registry(self) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
-            response = await client.post(f"{self.api_url}/registry/sync/yaml")
+            response = await client.post(f"{self.api_url}/hub/sync/yaml")
             response.raise_for_status()
             return response.json()
 

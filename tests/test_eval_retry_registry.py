@@ -120,8 +120,9 @@ async def test_eval_threshold_overrides_worker_passed_flag_and_exposes_failure_c
     assert store.evals[0].passed is False
     assert store.evals[0].checks["threshold"] == 0.75
     assert any(event["event_type"] == "task_eval_failed" for event in store.events)
-    failure_events = [event for event in store.events if event["event_type"] == "task_failure_context"]
-    assert failure_events[0]["payload"]["failure_type"] == "eval_failed"
+    incident_events = [event for event in store.events if event["event_type"] == "incident_brief"]
+    assert incident_events[0]["payload"]["failure_type"] == "eval_failed"
+    assert any(event["event_type"] == "task_failure_context" for event in store.events)
 
 
 @pytest.mark.asyncio
@@ -148,5 +149,6 @@ async def test_retry_policy_retries_retryable_worker_failure_until_success() -> 
 
     assert output["status"] == "completed"
     assert len(store.tasks) == 2
+    assert any(event["event_type"] == "incident_brief" for event in store.events)
     assert any(event["event_type"] == "task_failure_context" for event in store.events)
     assert store.artifacts[0].payload["signals"][0]["text"] == "ok"

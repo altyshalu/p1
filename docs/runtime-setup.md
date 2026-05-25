@@ -78,31 +78,34 @@ Controls:
 - When `waiting_user`: type the L2 answer in the input bar and press Enter.
 - When `waiting_approval`: type `approve`, `reject <reason>`, or `edit <message>`.
 
-## Registry marketplace
+## Taskforce Hub
 
-The runtime uses the database-backed marketplace as the source of truth. `registries/` is only explicit seed data for setup.
+The Runtime uses the database-backed Taskforce Hub as the source of truth. `registries/` is only explicit seed data for setup.
 
-Seed the database-backed registry from YAML:
-
-```sh
-curl -X POST http://localhost:8080/registry/sync/yaml
-```
-
-Inspect marketplace entries:
+Seed the database-backed Hub from YAML:
 
 ```sh
-curl http://localhost:8080/registry/worker
-curl http://localhost:8080/registry/eval/build-in-public-draft-quality
+curl -X POST http://localhost:8080/hub/sync/yaml
 ```
 
-Supported registry kinds are:
+Inspect Hub entries:
+
+```sh
+curl http://localhost:8080/hub/worker
+curl http://localhost:8080/hub/eval/build-in-public-draft-quality
+curl http://localhost:8080/hub/playbook/build-in-public-trend-radar
+```
+
+Supported Hub kinds are:
 
 - `tool`
 - `worker`
 - `eval`
-- `process_pack`
+- `playbook`
 - `failure_pattern`
 
-Registry changes that alter executable behavior stay approval-gated. Safe metadata/stat updates can auto-apply; worker/tool installs, entrypoints, side-effect policies, process behavior, and eval threshold loosening require explicit approval through the change-candidate API.
+Legacy `/registry/...` endpoints and the internal `process_pack` kind remain available for compatibility. Public docs and operator workflows should use `/hub/...` and `playbook`.
 
-There is no runtime fallback from the marketplace to YAML. If registry data is missing, the runtime fails explicitly; run the sync command or fix the registry state.
+Hub changes that alter executable behavior stay approval-gated. Safe metadata/stat updates can auto-apply; worker/tool installs, entrypoints, external-action policies, Playbook behavior, and eval threshold loosening require explicit approval through the change-candidate API.
+
+There is no runtime fallback from Taskforce Hub to YAML. If Hub data is missing, the Runtime fails explicitly; run the sync command or fix the Hub state.

@@ -14,6 +14,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, S
 from textual import work
 from textual.worker import Worker, WorkerState
 
+from l2l3_protocol.core.terminology import display_event_type
 from l2l3_protocol.live.client import LiveApiClient
 
 
@@ -249,7 +250,7 @@ class LiveRunApp(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "ABRT L2/L3 Runtime"
+        self.title = "ABRT Active Inference Runtime"
         self.sub_title = self.run_id
         self._setup_tables()
         self.fetch_run()
@@ -342,7 +343,7 @@ class LiveRunApp(App[None]):
         counts = f"{len(run.get('tasks', []))} tasks · {len(run.get('evals', []))} evals · {len(run.get('events', []))} events"
         body = Text.assemble(
             ("ABRT Live Run\n", "bold #dff8eb"),
-            ("Process: ", "bold"),
+            ("Playbook: ", "bold"),
             (str(run.get("process_key", "unknown")), "#8ce7ba"),
             "\n",
             ("Run: ", "bold"),
@@ -438,8 +439,8 @@ def _shortcut_markdown() -> str:
     return (
         "# Detail windows\n\n"
         "- `F2` opens the current L2 prompt / approval gate.\n"
-        "- `F3` opens Draft Preview.\n"
-        "- `F4` opens Recent Events.\n"
+        "- `F3` opens Drafts.\n"
+        "- `F4` opens Events.\n"
         "- `f` toggles compact/full event payload mode before opening events.\n\n"
         "> Heavy content lives in separate scrollable windows so the main dashboard stays readable."
     )
@@ -515,7 +516,7 @@ def _events_markdown(run: dict[str, Any], *, show_full: bool) -> str:
     if not show_full and len(events) > len(visible_events):
         sections.append(f"_Showing last {len(visible_events)} of {len(events)} events. Press `f` or `e` for full payload visibility._")
     for event in visible_events:
-        event_type = str(event.get("event_type", "unknown"))
+        event_type = display_event_type(str(event.get("event_type", "unknown")))
         created = _format_timestamp(event.get("created_at"))
         payload = event.get("payload", {})
         payload_json = json.dumps(payload, indent=2 if show_full else None, ensure_ascii=False, sort_keys=True)

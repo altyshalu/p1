@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from l2l3_protocol.api.state import app_state, build_memory_router
 from l2l3_protocol.config import get_settings
 from l2l3_protocol.core.schemas import ProcessRun, ProcessRunCreate, RegistryChangeCandidateCreate, RegistryKind, RunControlCreate, RunMessageCreate, RunStatus
+from l2l3_protocol.core.terminology import normalize_hub_kind
 from l2l3_protocol.db.migrations import run_upgrade_head
 from l2l3_protocol.db.session import get_session, make_engine, make_session_factory
 from l2l3_protocol.db.store import WorkingMemoryStore
@@ -42,7 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await engine.dispose()
 
 
-app = FastAPI(title="L2-L3 Communication Protocol", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="L2-L3 Active Inference Runtime", version="0.1.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -217,6 +218,36 @@ async def sync_registry_from_yaml(session: AsyncSession = Depends(get_session)) 
         await store.upsert_registry_item(item)
     await session.commit()
     return {"synced": len(items)}
+
+
+@app.post("/hub/change-candidates")
+async def create_hub_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession = Depends(get_session)) -> dict:
+    return await create_registry_change_candidate(payload, session)
+
+
+@app.post("/hub/change-candidates/{candidate_id}/approve")
+async def approve_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    return await approve_registry_change_candidate(candidate_id, session)
+
+
+@app.post("/hub/change-candidates/{candidate_id}/reject")
+async def reject_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    return await reject_registry_change_candidate(candidate_id, session)
+
+
+@app.post("/hub/sync/yaml")
+async def sync_hub_from_yaml(session: AsyncSession = Depends(get_session)) -> dict:
+    return await sync_registry_from_yaml(session)
+
+
+@app.get("/hub/{kind}")
+async def list_hub(kind: str, session: AsyncSession = Depends(get_session)) -> list[dict]:
+    return await list_registry(normalize_hub_kind(kind), session)
+
+
+@app.get("/hub/{kind}/{key}")
+async def get_hub_item(kind: str, key: str, session: AsyncSession = Depends(get_session)) -> dict:
+    return await get_registry_item(normalize_hub_kind(kind), key, session)
 
 
 def main() -> None:

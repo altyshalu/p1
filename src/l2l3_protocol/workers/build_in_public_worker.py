@@ -79,7 +79,7 @@ def evaluate(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any
     if not checks["all_have_text"]:
         reasons.append("One or more drafts are missing text.")
     if not checks["no_publish_side_effect"]:
-        reasons.append("A draft attempted a publish side effect before approval.")
+        reasons.append("A draft attempted a publish External Action before approval.")
     score = sum(1 for passed in checks.values() if passed) / len(checks)
     return {"passed": all(checks.values()), "score": score, "reasons": reasons, "checks": checks}
 
@@ -108,7 +108,7 @@ def learn(contract: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
             {
                 "layer": "semantic",
                 "content": "Build-in-public drafts must stay gated until explicit human approval.",
-                "metadata": {"type": "policy_learning", "concepts": ["approval", "publishing", "side-effects"]},
+                "metadata": {"type": "policy_learning", "concepts": ["approval", "publishing", "external-actions"]},
             },
         ],
         "procedural_change_candidate": procedural_candidate,

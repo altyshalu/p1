@@ -34,7 +34,7 @@ def test_contract_output_schema_rejects_wrong_type() -> None:
 
 
 def test_tool_policy_rejects_tool_side_effect_not_allowed_by_contract() -> None:
-    with pytest.raises(ContractValidationError, match="side effect"):
+    with pytest.raises(ContractValidationError, match="External Action"):
         validate_tool_policy(
             contract(allowed_tools=["publisher"]),
             {"compatible_tools": ["publisher"]},

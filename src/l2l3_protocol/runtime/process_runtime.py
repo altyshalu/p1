@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from l2l3_protocol.core.schemas import Artifact, ArtifactType, EvalResult, MemoryLayer, MemoryWrite, RegistryKind, RunStatus, TaskContract, TaskStatus
+from l2l3_protocol.core.terminology import INCIDENT_BRIEF_EVENT, LEGACY_FAILURE_CONTEXT_EVENT
 from l2l3_protocol.db.store import WorkingMemoryStore
 from l2l3_protocol.logging import get_logger
 from l2l3_protocol.memory.adapters import MemoryRouter, ProceduralRegistry
@@ -35,9 +36,9 @@ class ProcessRuntime:
         state = await self.store.get_run(run_id)
         if state is None:
             raise KeyError(f"run not found: {run_id}")
-        process_pack = await self._load_process_pack(state["process_key"])
-        worker_profiles = await self._allowed_worker_profiles(process_pack)
-        max_turns = int(process_pack.get("max_supervisor_turns", 8))
+        playbook = await self._load_process_pack(state["process_key"])
+        worker_profiles = await self._allowed_worker_profiles(playbook)
+        max_turns = int(playbook.get("max_supervisor_turns", 8))
         await self.store.set_run_status(run_id, RunStatus.RUNNING)
         if not any(event.get("event_type") == "process_started" for event in state.get("events", [])):
             await self.store.add_event(run_id, "process_started", {"process_key": state["process_key"], "goal": state["goal"]})
@@ -49,7 +50,7 @@ class ProcessRuntime:
             state = await self.store.get_run(run_id)
             if state is None:
                 raise KeyError(f"run not found: {run_id}")
-            action = await self.supervisor.next_action(process_pack, worker_profiles, state, turn)
+            action = await self.supervisor.next_action(playbook, worker_profiles, state, turn)
             await self.store.add_event(run_id, "l2_action_selected", action.model_dump(mode="json"))
 
             if action.action == "spawn_tasks":
@@ -215,7 +216,7 @@ class ProcessRuntime:
     async def _load_process_pack(self, key: str) -> dict[str, Any]:
         item = await self.store.get_registry_item(RegistryKind.PROCESS_PACK, key)
         if item is None:
-            raise KeyError(f"registry process_pack is not seeded: {key}")
+            raise KeyError(f"Taskforce Hub playbook is not seeded: {key}")
         return item.spec
 
     async def _load_eval_spec(self, key: str) -> dict[str, Any]:
@@ -228,10 +229,10 @@ class ProcessRuntime:
         profiles = await self._worker_profiles()
         allowed = process_pack.get("allowed_workers", [])
         if not allowed:
-            raise ValueError("process pack must define allowed_workers")
+            raise ValueError("playbook must define allowed_workers")
         missing = [key for key in allowed if key not in profiles]
         if missing:
-            raise ValueError(f"process pack references missing worker profiles: {missing}")
+            raise ValueError(f"playbook references missing worker profiles: {missing}")
         return {key: profiles[key] for key in allowed}
 
     async def _worker_profiles(self) -> dict[str, dict[str, Any]]:
@@ -275,7 +276,8 @@ class ProcessRuntime:
         }
         if retry_count_remaining > 0:
             await self.store.set_task_status(task_id, TaskStatus.NEEDS_REPAIR)
-        await self.store.add_event(run_id, "task_failure_context", payload, task_id)
+        await self.store.add_event(run_id, INCIDENT_BRIEF_EVENT, payload, task_id)
+        await self.store.add_event(run_id, LEGACY_FAILURE_CONTEXT_EVENT, payload, task_id)
 
     @staticmethod
     def _structured_worker_error(error: str) -> dict[str, Any] | None:
@@ -298,7 +300,7 @@ class ProcessRuntime:
                 ],
                 "escalate_to_user_only_for": [
                     "product/editorial tradeoff",
-                    "external side effect",
+                    "external action",
                     "approval-required registry or executable behavior change",
                 ],
                 "failure_type": failure_type,
@@ -330,10 +332,15 @@ class ProcessRuntime:
     async def _previous_failure_count(self, run_id: UUID, worker_profile: str, failure_type: str) -> int:
         state = await self._require_run(run_id)
         count = 0
+        seen: set[tuple[str | None, str]] = set()
         for event in state.get("events", []):
-            if event.get("event_type") != "task_failure_context":
+            if event.get("event_type") not in {INCIDENT_BRIEF_EVENT, LEGACY_FAILURE_CONTEXT_EVENT}:
                 continue
             payload = event.get("payload", {})
+            dedupe_key = (event.get("task_id"), str(payload.get("failure_type", "")))
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
             if payload.get("worker_profile") == worker_profile and payload.get("failure_type") == failure_type:
                 count += 1
         return count

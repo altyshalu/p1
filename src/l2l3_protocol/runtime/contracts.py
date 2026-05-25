@@ -23,21 +23,21 @@ def validate_contract_output(contract: TaskContract, payload: dict[str, Any]) ->
 def validate_tool_policy(
     contract: TaskContract,
     profile: dict[str, Any],
-    process_pack: dict[str, Any],
+    playbook: dict[str, Any],
     tools: dict[str, dict[str, Any]],
 ) -> list[str]:
     if "compatible_tools" not in profile:
         raise ContractValidationError("worker profile missing compatible_tools", "tool_denied")
-    if "allowed_tools" not in process_pack:
-        raise ContractValidationError("process pack missing allowed_tools", "tool_denied")
+    if "allowed_tools" not in playbook:
+        raise ContractValidationError("Playbook missing allowed_tools", "tool_denied")
     compatible_tools = set(profile["compatible_tools"])
-    process_tools = set(process_pack["allowed_tools"])
+    process_tools = set(playbook["allowed_tools"])
     resolved_toolsets: list[str] = []
     for tool_id in contract.allowed_tools:
         if compatible_tools and tool_id not in compatible_tools:
             raise ContractValidationError(f"tool is not compatible with worker: {tool_id}", "tool_denied")
         if process_tools and tool_id not in process_tools:
-            raise ContractValidationError(f"tool is not allowed by process pack: {tool_id}", "tool_denied")
+            raise ContractValidationError(f"tool is not allowed by Playbook: {tool_id}", "tool_denied")
         tool = tools.get(tool_id)
         if tool is None:
             raise ContractValidationError(f"unknown tool requested: {tool_id}", "tool_denied")
@@ -85,7 +85,7 @@ def _validate_tool_side_effect(contract: TaskContract, tool: dict[str, Any]) -> 
         return
     policy = contract.side_effect_policy
     if policy.get("external_side_effects") == "none" or policy.get("publish_allowed") is False:
-        raise ContractValidationError(f"tool side effect is not allowed: {side_effect_class}", "side_effect_violation")
+        raise ContractValidationError(f"tool External Action is not allowed: {side_effect_class}", "side_effect_violation")
 
 
 def _validate_side_effect_report(contract: TaskContract, payload: dict[str, Any]) -> None:
@@ -94,4 +94,4 @@ def _validate_side_effect_report(contract: TaskContract, payload: dict[str, Any]
         return
     policy = contract.side_effect_policy
     if policy.get("external_side_effects") == "none" or policy.get("publish_allowed") is False:
-        raise ContractValidationError("output reported unauthorized side effect", "side_effect_violation")
+        raise ContractValidationError("output reported unauthorized External Action", "side_effect_violation")
