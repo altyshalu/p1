@@ -1,0 +1,80 @@
+services:
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://l2l3:l2l3@postgres:5432/l2l3_protocol
+      AGENTMEMORY_BASE_URL: http://agentmemory:3111
+      MEM0_QDRANT_HOST: qdrant
+      MEM0_QDRANT_PORT: "6333"
+      PROCEDURAL_REGISTRY_PATH: registries
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./logs:/app/logs
+      - ./registries:/app/registries:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      agentmemory:
+        condition: service_started
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: l2l3
+      POSTGRES_PASSWORD: l2l3
+      POSTGRES_DB: l2l3_protocol
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U l2l3 -d l2l3_protocol"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.18.0
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  agentmemory:
+    build:
+      context: .
+      dockerfile: Dockerfile.agentmemory
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AGENTMEMORY_HOST: 0.0.0.0
+      AGENTMEMORY_PORT: "3111"
+    ports:
+      - "3111:3111"
+      - "3113:3113"
+      - "3114:3114"
+    volumes:
+      - agentmemory_data:/root/.agentmemory
+
+  redis:
+    image: redis:8-alpine
+    profiles:
+      - redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  agentmemory_data:
+  redis_data:

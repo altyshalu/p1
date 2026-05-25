@@ -1,0 +1,7 @@
+key: memory-writes
+version: 0.1.0
+rules:
+  - l3_workers_return_artifacts_only
+  - l2_curates_episodic_memory
+  - l2_curates_semantic_memory
+  - procedural_registry_changes_are_candidates_until_reviewed
