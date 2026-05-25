@@ -1,0 +1,8 @@
+key: trend-claim-grounding
+version: 0.1.0
+eval_type: unit
+checks:
+  - has_claims
+  - every_claim_has_source_url
+  - no_empty_claim_text
+minimum_score: 1.0

@@ -1,0 +1,21 @@
+key: trend-narrative-strategist
+description: Convert ranked trend signals into grounded narrative atoms for ABRT build-in-public content.
+worker_type: hermes_agent
+agent_prompt: Create grounded content_atoms from ranked trend signals only. Every claim must include evidence URLs. Do not invent facts.
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 120
+  max_iterations: 8
+input_schema:
+  type: object
+  required: [ranked_signals]
+output_schema:
+  type: object
+  required: [content_atoms]
+stop_conditions:
+  - content_atoms_created
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

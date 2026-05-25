@@ -1,0 +1,23 @@
+key: stop-slop-editor
+description: Remove predictable AI writing patterns from drafts while preserving claims and evidence.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: [stop-slop-editor-tool]
+compatible_tools: [stop-slop-editor-tool]
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [drafts]
+output_schema:
+  type: object
+  required: [edited_drafts]
+stop_conditions:
+  - slop_removed
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: [input_validation, worker_exception]
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

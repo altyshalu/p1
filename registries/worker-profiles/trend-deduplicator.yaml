@@ -1,0 +1,23 @@
+key: trend-deduplicator
+description: Deduplicate normalized trend signals by URL and title.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [trend_signals]
+output_schema:
+  type: object
+  required: [deduped_signals]
+stop_conditions:
+  - duplicates_removed
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: [input_validation, worker_exception]
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

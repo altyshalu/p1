@@ -1,0 +1,8 @@
+key: hf-hub-search-tool
+version: 0.1.0
+description: Read-only Hugging Face Hub search capability for model and dataset trend discovery.
+runtime_type: http_api
+toolset: hf_hub_search
+side_effect_class: read
+auth_required: false
+tags: [huggingface, models, datasets]

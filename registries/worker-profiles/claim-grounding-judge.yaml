@@ -1,0 +1,25 @@
+key: claim-grounding-judge
+description: Evaluate whether every draft claim has explicit source evidence.
+worker_type: evaluator
+entrypoint: l2l3_protocol.workers.build_in_public_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [drafts]
+output_schema:
+  type: object
+  required: [passed, score, checks]
+grader_spec:
+  eval_key: trend-claim-grounding
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: [eval_failed, worker_exception]
+stop_conditions:
+  - claim_grounding_report_created
+memory_policy:
+  writes: artifact_only
+side_effect_policy:
+  external_side_effects: none

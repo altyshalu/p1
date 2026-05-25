@@ -1,0 +1,42 @@
+key: build-in-public-trend-radar
+name: Build in Public Trend Radar
+version: 0.1.0
+purpose: Find AI/dev trend signals, rank them for ABRT relevance, draft build-in-public posts, edit out AI slop, evaluate quality, and stop at human approval.
+max_supervisor_turns: 14
+max_tasks_per_turn: 2
+allowed_workers:
+  - trend-source-collector
+  - trend-deduplicator
+  - relevance-scorer
+  - trend-narrative-strategist
+  - trend-draft-writer
+  - stop-slop-editor
+  - claim-grounding-judge
+  - trend-draft-quality-judge
+  - approval-adapter
+  - learning-worker
+allowed_tools:
+  - github-search-tool
+  - arxiv-search-tool
+  - hf-hub-search-tool
+  - stop-slop-editor-tool
+completion_criteria:
+  - trend signals are normalized
+  - relevant signals are ranked
+  - channel drafts exist
+  - stop-slop edit is applied
+  - claim grounding evaluation passes
+  - draft quality evaluation passes
+  - publishing remains gated until explicit human approval
+required_inputs:
+  - sources
+  - channels
+side_effects:
+  publish:
+    default: disabled
+    approval_required: true
+memory_policy:
+  l3_direct_writes: false
+  l2_curates_episodic: true
+  l2_curates_semantic: true
+  procedural_changes: candidate_only

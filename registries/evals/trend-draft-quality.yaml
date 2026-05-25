@@ -1,0 +1,10 @@
+key: trend-draft-quality
+version: 0.1.0
+eval_type: unit
+checks:
+  - has_drafts
+  - all_have_channels
+  - all_have_text
+  - no_publish_side_effect
+  - no_slop_phrases
+minimum_score: 0.8
