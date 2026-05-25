@@ -1,0 +1,292 @@
+from typing import Any
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from l2l3_protocol.core.schemas import (
+    Artifact,
+    EvalResult,
+    ProcessRun,
+    RegistryChangeCandidate,
+    RegistryChangeCandidateCreate,
+    RegistryChangeStatus,
+    RegistryItem,
+    RegistryKind,
+    RunStatus,
+    TaskContract,
+    TaskStatus,
+)
+from l2l3_protocol.db.models import (
+    ArtifactRecord,
+    EvalResultRecord,
+    EventRecord,
+    ProcessRunRecord,
+    RegistryChangeCandidateRecord,
+    RegistryItemRecord,
+    TaskContractRecord,
+)
+from l2l3_protocol.marketplace.registry import apply_registry_change, is_safe_registry_change
+
+
+class WorkingMemoryStore:
+    def __init__(self, session: AsyncSession, auto_commit: bool = False) -> None:
+        self.session = session
+        self.auto_commit = auto_commit
+
+    async def _persist(self) -> None:
+        if self.auto_commit:
+            await self.session.commit()
+        else:
+            await self.session.flush()
+
+    async def create_run(self, run: ProcessRun) -> ProcessRun:
+        record = ProcessRunRecord(
+            id=run.id,
+            process_key=run.process_key,
+            goal=run.goal,
+            status=run.status.value,
+            input=run.input,
+            output=run.output,
+        )
+        self.session.add(record)
+        await self._persist()
+        return run
+
+    async def get_run(self, run_id: UUID) -> dict[str, Any] | None:
+        record = await self.session.get(ProcessRunRecord, run_id)
+        if record is None:
+            return None
+        tasks = (
+            await self.session.execute(
+                select(TaskContractRecord).where(TaskContractRecord.run_id == run_id).order_by(TaskContractRecord.created_at)
+            )
+        ).scalars().all()
+        artifacts = (
+            await self.session.execute(select(ArtifactRecord).where(ArtifactRecord.run_id == run_id).order_by(ArtifactRecord.created_at))
+        ).scalars().all()
+        evals = (
+            await self.session.execute(select(EvalResultRecord).where(EvalResultRecord.run_id == run_id).order_by(EvalResultRecord.created_at))
+        ).scalars().all()
+        events = (
+            await self.session.execute(select(EventRecord).where(EventRecord.run_id == run_id).order_by(EventRecord.created_at))
+        ).scalars().all()
+        return {
+            "id": str(record.id),
+            "process_key": record.process_key,
+            "goal": record.goal,
+            "status": record.status,
+            "input": record.input,
+            "output": record.output,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+            "updated_at": record.updated_at.isoformat() if record.updated_at else None,
+            "tasks": [task.contract for task in tasks],
+            "artifacts": [
+                {
+                    "id": str(artifact.id),
+                    "task_id": str(artifact.task_id) if artifact.task_id else None,
+                    "artifact_type": artifact.artifact_type,
+                    "payload": artifact.payload,
+                }
+                for artifact in artifacts
+            ],
+            "evals": [eval_record.payload for eval_record in evals],
+            "events": [
+                {
+                    "event_type": event.event_type,
+                    "task_id": str(event.task_id) if event.task_id else None,
+                    "payload": event.payload,
+                    "created_at": event.created_at.isoformat() if event.created_at else None,
+                }
+                for event in events
+            ],
+        }
+
+    async def get_run_status(self, run_id: UUID) -> RunStatus:
+        record = await self.session.get(ProcessRunRecord, run_id)
+        if record is None:
+            raise KeyError(f"run not found: {run_id}")
+        return RunStatus(record.status)
+
+    async def set_run_status(self, run_id: UUID, status: RunStatus, output: dict[str, Any] | None = None) -> None:
+        record = await self.session.get(ProcessRunRecord, run_id)
+        if record is None:
+            raise KeyError(f"run not found: {run_id}")
+        record.status = status.value
+        if output is not None:
+            record.output = output
+        await self._persist()
+
+    async def add_task(self, contract: TaskContract) -> TaskContract:
+        self.session.add(
+            TaskContractRecord(
+                id=contract.id,
+                run_id=contract.run_id,
+                task_type=contract.task_type,
+                worker_profile=contract.worker_profile,
+                status=contract.status.value,
+                goal=contract.goal,
+                contract=contract.model_dump(mode="json"),
+                created_at=datetime.now(UTC),
+            )
+        )
+        await self._persist()
+        return contract
+
+    async def update_run_input(self, run_id: UUID, input_patch: dict[str, Any]) -> None:
+        record = await self.session.get(ProcessRunRecord, run_id)
+        if record is None:
+            raise KeyError(f"run not found: {run_id}")
+        record.input = {**record.input, **input_patch}
+        await self._persist()
+
+    async def set_task_status(self, task_id: UUID, status: TaskStatus) -> None:
+        record = await self.session.get(TaskContractRecord, task_id)
+        if record is None:
+            raise KeyError(f"task not found: {task_id}")
+        record.status = status.value
+        record.contract = {**record.contract, "status": status.value}
+        await self._persist()
+
+    async def add_artifact(self, artifact: Artifact) -> Artifact:
+        self.session.add(
+            ArtifactRecord(
+                id=artifact.id,
+                run_id=artifact.run_id,
+                task_id=artifact.task_id,
+                artifact_type=artifact.artifact_type.value,
+                payload=artifact.payload,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await self._persist()
+        return artifact
+
+    async def add_eval(self, eval_result: EvalResult) -> EvalResult:
+        self.session.add(
+            EvalResultRecord(
+                id=eval_result.id,
+                run_id=eval_result.run_id,
+                task_id=eval_result.task_id,
+                passed=eval_result.passed,
+                score=eval_result.score,
+                payload=eval_result.model_dump(mode="json"),
+                created_at=datetime.now(UTC),
+            )
+        )
+        await self._persist()
+        return eval_result
+
+    async def add_event(self, run_id: UUID, event_type: str, payload: dict[str, Any], task_id: UUID | None = None) -> None:
+        self.session.add(EventRecord(run_id=run_id, task_id=task_id, event_type=event_type, payload=payload, created_at=datetime.now(UTC)))
+        await self._persist()
+
+    async def upsert_registry_item(self, item: RegistryItem) -> RegistryItem:
+        record = await self._get_registry_item_record(item.kind, item.key)
+        if record is None:
+            record = RegistryItemRecord(
+                id=item.id,
+                kind=item.kind.value,
+                key=item.key,
+                version=item.version,
+                status=item.status,
+                spec=item.spec,
+                metadata_=item.metadata,
+            )
+            self.session.add(record)
+        else:
+            record.version = item.version
+            record.status = item.status
+            record.spec = item.spec
+            record.metadata_ = item.metadata
+        await self._persist()
+        return self._registry_item_from_record(record)
+
+    async def list_registry_items(self, kind: RegistryKind) -> list[RegistryItem]:
+        records = (
+            await self.session.execute(select(RegistryItemRecord).where(RegistryItemRecord.kind == kind.value).order_by(RegistryItemRecord.key))
+        ).scalars().all()
+        return [self._registry_item_from_record(record) for record in records]
+
+    async def get_registry_item(self, kind: RegistryKind, key: str) -> RegistryItem | None:
+        record = await self._get_registry_item_record(kind, key)
+        return self._registry_item_from_record(record) if record else None
+
+    async def create_registry_change_candidate(self, candidate: RegistryChangeCandidateCreate) -> RegistryChangeCandidate:
+        status = RegistryChangeStatus.AUTO_APPLIED_SAFE if is_safe_registry_change(candidate) else RegistryChangeStatus.PROPOSED
+        record = RegistryChangeCandidateRecord(
+            kind=candidate.kind.value,
+            key=candidate.key,
+            change_type=candidate.change_type,
+            status=status.value,
+            payload=candidate.payload,
+            reason=candidate.reason,
+        )
+        self.session.add(record)
+        await self._persist()
+        if status == RegistryChangeStatus.AUTO_APPLIED_SAFE:
+            await self._apply_candidate(candidate)
+        return self._registry_candidate_from_record(record)
+
+    async def approve_registry_change_candidate(self, candidate_id: UUID) -> RegistryChangeCandidate:
+        record = await self.session.get(RegistryChangeCandidateRecord, candidate_id)
+        if record is None:
+            raise KeyError(f"registry change candidate not found: {candidate_id}")
+        candidate = RegistryChangeCandidateCreate(
+            kind=RegistryKind(record.kind),
+            key=record.key,
+            change_type=record.change_type,
+            payload=record.payload,
+            reason=record.reason,
+        )
+        await self._apply_candidate(candidate)
+        record.status = RegistryChangeStatus.APPROVED.value
+        await self._persist()
+        return self._registry_candidate_from_record(record)
+
+    async def reject_registry_change_candidate(self, candidate_id: UUID) -> RegistryChangeCandidate:
+        record = await self.session.get(RegistryChangeCandidateRecord, candidate_id)
+        if record is None:
+            raise KeyError(f"registry change candidate not found: {candidate_id}")
+        record.status = RegistryChangeStatus.REJECTED.value
+        await self._persist()
+        return self._registry_candidate_from_record(record)
+
+    async def _apply_candidate(self, candidate: RegistryChangeCandidateCreate) -> RegistryItem:
+        item = await self.get_registry_item(candidate.kind, candidate.key)
+        updated = apply_registry_change(item, candidate)
+        return await self.upsert_registry_item(updated)
+
+    async def _get_registry_item_record(self, kind: RegistryKind, key: str) -> RegistryItemRecord | None:
+        return (
+            await self.session.execute(select(RegistryItemRecord).where(RegistryItemRecord.kind == kind.value, RegistryItemRecord.key == key))
+        ).scalar_one_or_none()
+
+    @staticmethod
+    def _registry_item_from_record(record: RegistryItemRecord) -> RegistryItem:
+        return RegistryItem(
+            id=record.id,
+            kind=RegistryKind(record.kind),
+            key=record.key,
+            version=record.version,
+            status=record.status,
+            spec=record.spec,
+            metadata=record.metadata_,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
+    def _registry_candidate_from_record(record: RegistryChangeCandidateRecord) -> RegistryChangeCandidate:
+        return RegistryChangeCandidate(
+            id=record.id,
+            kind=RegistryKind(record.kind),
+            key=record.key,
+            change_type=record.change_type,
+            payload=record.payload,
+            reason=record.reason,
+            status=RegistryChangeStatus(record.status),
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )

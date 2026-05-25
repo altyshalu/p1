@@ -1,0 +1,229 @@
+from collections.abc import AsyncIterator
+import asyncio
+from contextlib import asynccontextmanager
+import json
+from pathlib import Path
+from time import perf_counter
+from uuid import UUID
+
+import structlog
+import uvicorn
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from l2l3_protocol.api.state import app_state, build_memory_router
+from l2l3_protocol.config import get_settings
+from l2l3_protocol.core.schemas import ProcessRun, ProcessRunCreate, RegistryChangeCandidateCreate, RegistryKind, RunControlCreate, RunMessageCreate, RunStatus
+from l2l3_protocol.db.migrations import run_upgrade_head
+from l2l3_protocol.db.session import get_session, make_engine, make_session_factory
+from l2l3_protocol.db.store import WorkingMemoryStore
+from l2l3_protocol.logging import configure_logging, get_logger
+from l2l3_protocol.memory.adapters import ProceduralRegistry
+from l2l3_protocol.marketplace.registry import yaml_registry_items
+from l2l3_protocol.runtime.hermes import HermesRuntime
+from l2l3_protocol.runtime.process_runtime import ProcessRuntime
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_settings()
+    configure_logging(settings.log_dir, settings.log_level)
+    await asyncio.to_thread(run_upgrade_head, settings)
+    engine = make_engine(settings)
+    session_factory = make_session_factory(engine)
+    app_state.settings = settings
+    app_state.engine = engine
+    app_state.session_factory = session_factory
+    app_state.memory_router = build_memory_router(settings)
+    app_state.registry = ProceduralRegistry(settings.procedural_registry_path)
+    app_state.hermes = HermesRuntime(settings)
+    get_logger().info("app_started", environment=settings.environment)
+    yield
+    await engine.dispose()
+
+
+app = FastAPI(title="L2-L3 Communication Protocol", version="0.1.0", lifespan=lifespan)
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
+
+
+@app.middleware("http")
+async def request_logging(request: Request, call_next) -> Response:
+    request_id = request.headers.get("x-request-id") or str(id(request))
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(request_id=request_id, path=request.url.path, method=request.method)
+    start = perf_counter()
+    try:
+        response = await call_next(request)
+        get_logger("protocol.events").info(
+            "api_request_completed",
+            status=response.status_code,
+            duration_ms=round((perf_counter() - start) * 1000, 2),
+        )
+        response.headers["x-request-id"] = request_id
+        return response
+    except Exception as exc:
+        get_logger("protocol.events").exception(
+            "api_request_failed",
+            error_type=type(exc).__name__,
+            duration_ms=round((perf_counter() - start) * 1000, 2),
+        )
+        raise
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok", "service": "l2l3-protocol"}
+
+
+def make_runtime(store: WorkingMemoryStore) -> ProcessRuntime:
+    return ProcessRuntime(
+        store=store,
+        registry=app_state.registry,
+        memory=app_state.memory_router,
+        hermes=app_state.hermes,
+    )
+
+
+@app.get("/cockpit")
+async def cockpit() -> FileResponse:
+    return FileResponse(WEB_DIR / "cockpit.html")
+
+
+@app.post("/runs")
+async def create_run(payload: ProcessRunCreate, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    run = ProcessRun(process_key=payload.process_key, goal=payload.goal, input=payload.model_dump(mode="json"))
+    await store.create_run(run)
+    await session.commit()
+    background_tasks.add_task(execute_run, run.id)
+    return {"id": str(run.id), "status": run.status.value, "process_key": run.process_key, "goal": run.goal}
+
+
+@app.post("/processes/build-in-public/runs/async")
+async def create_build_in_public_run_async(payload: ProcessRunCreate, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
+    normalized = payload.model_copy(update={"process_key": "build-in-public"})
+    return await create_run(normalized, background_tasks, session)
+
+
+async def execute_run(run_id: UUID) -> None:
+    async with app_state.session_factory() as session:
+        store = WorkingMemoryStore(session, auto_commit=True)
+        try:
+            await make_runtime(store).run_until_blocked_or_done(run_id)
+        except Exception as exc:
+            await store.set_run_status(run_id, RunStatus.FAILED, output={"error_type": type(exc).__name__, "error": str(exc)})
+            await store.add_event(run_id, "process_failed", {"error_type": type(exc).__name__, "error": str(exc)})
+            get_logger("protocol.events").exception("background_process_failed", run_id=str(run_id), error_type=type(exc).__name__)
+
+
+@app.get("/runs/{run_id}")
+async def get_run(run_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    run = await WorkingMemoryStore(session).get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return run
+
+
+@app.post("/runs/{run_id}/messages")
+async def send_run_message(run_id: UUID, payload: RunMessageCreate) -> dict:
+    async with app_state.session_factory() as session:
+        store = WorkingMemoryStore(session, auto_commit=True)
+        try:
+            return await make_runtime(store).resume_with_message(run_id, payload.message)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+
+
+@app.post("/runs/{run_id}/control")
+async def control_run(run_id: UUID, payload: RunControlCreate) -> dict:
+    async with app_state.session_factory() as session:
+        store = WorkingMemoryStore(session, auto_commit=True)
+        try:
+            return await make_runtime(store).apply_control(run_id, payload.action, payload.payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="run not found") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/runs/{run_id}/events/stream")
+async def stream_run_events(run_id: UUID) -> StreamingResponse:
+    async def event_generator():
+        seen = 0
+        while True:
+            async with app_state.session_factory() as session:
+                run = await WorkingMemoryStore(session).get_run(run_id)
+            if run is None:
+                yield "event: error\ndata: {\"detail\":\"run not found\"}\n\n"
+                return
+            events = run.get("events", [])
+            for event in events[seen:]:
+                yield f"event: run_event\ndata: {json.dumps(event, ensure_ascii=True)}\n\n"
+            seen = len(events)
+            if run.get("status") in {RunStatus.COMPLETED.value, RunStatus.FAILED.value, RunStatus.CANCELLED.value}:
+                yield f"event: run_status\ndata: {json.dumps({'status': run.get('status')}, ensure_ascii=True)}\n\n"
+                return
+            await asyncio.sleep(1)
+
+
+@app.get("/registry/{kind}")
+async def list_registry(kind: RegistryKind, session: AsyncSession = Depends(get_session)) -> list[dict]:
+    store = WorkingMemoryStore(session)
+    items = await store.list_registry_items(kind)
+    return [item.model_dump(mode="json") for item in items]
+
+
+@app.get("/registry/{kind}/{key}")
+async def get_registry_item(kind: RegistryKind, key: str, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    item = await store.get_registry_item(kind, key)
+    if item is None:
+        raise HTTPException(status_code=404, detail="registry item not found")
+    return item.model_dump(mode="json")
+
+
+@app.post("/registry/change-candidates")
+async def create_registry_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    candidate = await store.create_registry_change_candidate(payload)
+    await session.commit()
+    return candidate.model_dump(mode="json")
+
+
+@app.post("/registry/change-candidates/{candidate_id}/approve")
+async def approve_registry_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    try:
+        candidate = await store.approve_registry_change_candidate(candidate_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="registry change candidate not found") from None
+    await session.commit()
+    return candidate.model_dump(mode="json")
+
+
+@app.post("/registry/change-candidates/{candidate_id}/reject")
+async def reject_registry_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    try:
+        candidate = await store.reject_registry_change_candidate(candidate_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="registry change candidate not found") from None
+    await session.commit()
+    return candidate.model_dump(mode="json")
+
+
+@app.post("/registry/sync/yaml")
+async def sync_registry_from_yaml(session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    items = yaml_registry_items(app_state.settings.procedural_registry_path)
+    for item in items:
+        await store.upsert_registry_item(item)
+    await session.commit()
+    return {"synced": len(items)}
+
+
+def main() -> None:
+    uvicorn.run("l2l3_protocol.api.main:app", host="0.0.0.0", port=8080, log_config=None, access_log=False)
