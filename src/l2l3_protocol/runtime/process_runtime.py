@@ -95,6 +95,12 @@ class ProcessRuntime:
             await self.store.set_run_status(run_id, RunStatus.CANCELLED)
         elif action == "approve":
             await self.store.set_run_status(run_id, RunStatus.COMPLETED)
+        elif action == "reject":
+            reason = payload["reason"]
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
+        elif action == "request_edit":
+            message = payload["message"]
+            await self.store.set_run_status(run_id, RunStatus.WAITING_USER, {"requested_edit": message})
         else:
             raise ValueError(f"unknown control action: {action}")
         await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
