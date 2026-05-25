@@ -119,13 +119,16 @@ async def get_run(run_id: UUID, session: AsyncSession = Depends(get_session)) ->
 
 
 @app.post("/runs/{run_id}/messages")
-async def send_run_message(run_id: UUID, payload: RunMessageCreate) -> dict:
+async def send_run_message(run_id: UUID, payload: RunMessageCreate, background_tasks: BackgroundTasks) -> dict:
     async with app_state.session_factory() as session:
         store = WorkingMemoryStore(session, auto_commit=True)
-        try:
-            return await make_runtime(store).resume_with_message(run_id, payload.message)
-        except KeyError:
+        run = await store.get_run(run_id)
+        if run is None:
             raise HTTPException(status_code=404, detail="run not found") from None
+        await store.add_event(run_id, "user_message", {"message": payload.message})
+        await store.set_run_status(run_id, RunStatus.RUNNING)
+        background_tasks.add_task(execute_run, run_id)
+        return await store.get_run(run_id)
 
 
 @app.post("/runs/{run_id}/control")
