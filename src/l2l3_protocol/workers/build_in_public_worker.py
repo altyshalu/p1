@@ -122,24 +122,112 @@ def collect_trend_sources(contract: dict[str, Any], context: dict[str, Any]) -> 
     if max_results < 1:
         raise WorkerInputError("max_results must be >= 1")
 
+    provider_repairs = _provider_repairs(contract["inputs"].get("provider_repairs", {}))
     allowed_toolsets = set(contract.get("allowed_tools", []))
     source_results: list[dict[str, Any]] = []
+    provider_attempts: dict[str, list[dict[str, Any]]] = {}
+    provider_failures: dict[str, str] = {}
     for provider in providers:
-        if provider == "github":
-            _require_toolset(allowed_toolsets, "github_search", provider)
-            source_results.append({"source": "github", "items": _search_github(query, max_results)})
-        elif provider == "arxiv":
-            _require_toolset(allowed_toolsets, "arxiv_search", provider)
-            source_results.append({"source": "arxiv", "items": _search_arxiv(query, max_results)})
-        elif provider in {"huggingface", "hf"}:
-            _require_toolset(allowed_toolsets, "hf_hub_search", provider)
-            source_results.append({"source": "huggingface", "items": _search_huggingface(query, max_results)})
-        else:
-            raise WorkerInputError(f"unsupported trend provider: {provider}")
+        normalized_provider = "huggingface" if provider == "hf" else provider
+        try:
+            items, attempts = _search_provider_with_l2_repairs(normalized_provider, query, max_results, allowed_toolsets, provider_repairs)
+            source_results.append({"source": normalized_provider, "items": items})
+            provider_attempts[normalized_provider] = attempts
+        except WorkerInputError as exc:
+            provider_attempts[normalized_provider] = getattr(exc, "attempts", [])
+            provider_failures[normalized_provider] = str(exc)
 
     if not source_results:
-        raise WorkerInputError("no trend providers were requested")
-    return {"trend_signals": _normalize_trend_source_results(source_results), "source_results": source_results}
+        raise WorkerInputError(f"all trend providers failed: {provider_failures}")
+    if provider_failures:
+        failure = WorkerInputError(f"trend providers failed: {provider_failures}")
+        failure.provider_failures = provider_failures
+        failure.provider_attempts = provider_attempts
+        raise failure
+    return {
+        "trend_signals": _normalize_trend_source_results(source_results),
+        "source_results": source_results,
+        "provider_attempts": provider_attempts,
+    }
+
+
+def _provider_repairs(value: Any) -> dict[str, list[dict[str, Any]]]:
+    if value is None or value == {}:
+        return {}
+    if not isinstance(value, dict):
+        raise WorkerInputError("provider_repairs must be an object")
+    repairs: dict[str, list[dict[str, Any]]] = {}
+    for provider, attempts in value.items():
+        normalized_provider = require_text(provider, "provider_repairs.provider").lower()
+        if normalized_provider == "hf":
+            normalized_provider = "huggingface"
+        if not isinstance(attempts, list) or not attempts:
+            raise WorkerInputError(f"provider_repairs.{provider} must be a non-empty list")
+        repairs[normalized_provider] = []
+        for index, attempt in enumerate(attempts):
+            if not isinstance(attempt, dict):
+                raise WorkerInputError(f"provider_repairs.{provider}[{index}] must be an object")
+            repair_query = require_text(attempt.get("query"), f"provider_repairs.{provider}[{index}].query")
+            strategy = require_text(attempt.get("strategy", "l2_selected_query"), f"provider_repairs.{provider}[{index}].strategy")
+            resource_type = attempt.get("resource_type")
+            repairs[normalized_provider].append(
+                {
+                    "query": repair_query,
+                    "strategy": strategy,
+                    "resource_type": require_text(resource_type, f"provider_repairs.{provider}[{index}].resource_type")
+                    if resource_type is not None
+                    else None,
+                }
+            )
+    return repairs
+
+
+def _search_provider_with_l2_repairs(
+    provider: str,
+    query: str,
+    max_results: int,
+    allowed_toolsets: set[str],
+    provider_repairs: dict[str, list[dict[str, Any]]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    attempts = [{"query": query, "strategy": "initial", "resource_type": _default_resource_type(provider)}]
+    attempts.extend(provider_repairs.get(provider, []))
+    attempted: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for attempt in attempts:
+        attempt = dict(attempt)
+        attempted.append(attempt)
+        attempt_query = require_text(attempt.get("query"), "repair.query")
+        resource_type = attempt.get("resource_type") or _default_resource_type(provider)
+        try:
+            items = _search_provider(provider, attempt_query, max_results, allowed_toolsets, str(resource_type))
+        except WorkerInputError as exc:
+            attempt["status"] = "failed"
+            attempt["error"] = str(exc)
+            errors.append(str(exc))
+            continue
+        attempt["status"] = "ok"
+        attempt["result_count"] = len(items)
+        return items, attempted
+    error = WorkerInputError(f"{provider} search failed after {len(attempts)} real attempts: {errors}")
+    error.attempts = attempted
+    raise error
+
+
+def _default_resource_type(provider: str) -> str:
+    return {"github": "repositories", "arxiv": "papers", "huggingface": "models"}.get(provider, "unknown")
+
+
+def _search_provider(provider: str, query: str, max_results: int, allowed_toolsets: set[str], resource_type: str) -> list[dict[str, Any]]:
+    if provider == "github":
+        _require_toolset(allowed_toolsets, "github_search", provider)
+        return _search_github(query, max_results)
+    if provider == "arxiv":
+        _require_toolset(allowed_toolsets, "arxiv_search", provider)
+        return _search_arxiv(query, max_results)
+    if provider == "huggingface":
+        _require_toolset(allowed_toolsets, "hf_hub_search", provider)
+        return _search_huggingface(query, max_results, resource_type)
+    raise WorkerInputError(f"unsupported trend provider: {provider}")
 
 
 def _normalize_trend_source_results(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -238,25 +326,33 @@ def _search_arxiv(query: str, max_results: int) -> list[dict[str, Any]]:
     return results
 
 
-def _search_huggingface(query: str, max_results: int) -> list[dict[str, Any]]:
-    url = "https://huggingface.co/api/models?" + urlencode({"search": query, "limit": max_results, "sort": "likes", "direction": "-1"})
+def _search_huggingface(query: str, max_results: int, resource_type: str = "models") -> list[dict[str, Any]]:
+    if resource_type == "models":
+        path = "models"
+    elif resource_type == "datasets":
+        path = "datasets"
+    elif resource_type == "spaces":
+        path = "spaces"
+    else:
+        raise WorkerInputError(f"unsupported Hugging Face resource_type: {resource_type}")
+    url = f"https://huggingface.co/api/{path}?" + urlencode({"search": query, "limit": max_results, "sort": "likes", "direction": "-1"})
     payload = _request_json(url)
     if not isinstance(payload, list):
         raise WorkerInputError("Hugging Face search response was not a list")
     results = []
     for item in payload[:max_results]:
-        model_id = require_text(item.get("modelId") or item.get("id"), "huggingface.modelId")
+        item_id = require_text(item.get("modelId") or item.get("id"), "huggingface.id")
         tags = item.get("tags") if isinstance(item.get("tags"), list) else []
         results.append(
             {
-                "title": model_id,
-                "url": f"https://huggingface.co/{model_id}",
-                "summary": f"Hugging Face model matching '{query}'. Tags: {', '.join(str(tag) for tag in tags[:8])}",
+                "title": item_id,
+                "url": f"https://huggingface.co/{'datasets/' if resource_type == 'datasets' else 'spaces/' if resource_type == 'spaces' else ''}{item_id}",
+                "summary": f"Hugging Face {resource_type.rstrip('s')} matching '{query}'. Tags: {', '.join(str(tag) for tag in tags[:8])}",
                 "metrics": {"likes": item.get("likes", 0), "downloads": item.get("downloads", 0)},
             }
         )
     if not results:
-        raise WorkerInputError(f"Hugging Face search returned no results for query: {query}")
+        raise WorkerInputError(f"Hugging Face {resource_type} search returned no results for query: {query}")
     return results
 
 
@@ -386,7 +482,17 @@ def main() -> None:
         handler_key = contract["task_type"]
     if handler_key not in HANDLERS:
         raise SystemExit(f"unknown worker_profile/task_type: {contract['worker_profile']} / {contract['task_type']}")
-    result = HANDLERS[handler_key](contract, request["context"])
+    try:
+        result = HANDLERS[handler_key](contract, request["context"])
+    except WorkerInputError as exc:
+        error_payload = {
+            "error_type": "WorkerInputError",
+            "message": str(exc),
+            "provider_failures": getattr(exc, "provider_failures", {}),
+            "provider_attempts": getattr(exc, "provider_attempts", getattr(exc, "attempts", [])),
+        }
+        sys.stderr.write(json.dumps(error_payload, ensure_ascii=True))
+        raise SystemExit(2) from None
     sys.stdout.write(json.dumps(result, ensure_ascii=True))
 
 

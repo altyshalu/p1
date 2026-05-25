@@ -16,6 +16,8 @@ input_schema:
       type: array
     max_results:
       type: integer
+    provider_repairs:
+      type: object
 output_schema:
   type: object
   required: [trend_signals]
@@ -27,8 +29,29 @@ output_schema:
 stop_conditions:
   - trend_signals_normalized
 retry_policy:
-  max_attempts: 1
-  retryable_failure_types: [input_validation, worker_exception, timeout]
+  max_attempts: 3
+  retryable_failure_types: [input_validation, worker_exception, timeout, provider_no_results]
+provider_repair_policy:
+  required_providers: [github, arxiv, huggingface]
+  max_repair_attempts_per_provider: 3
+  continue_partial_requires_user_approval: true
+  l2_allowed_repair_actions:
+    - retry_same_provider_with_new_query
+    - retry_same_provider_with_shorter_query
+    - retry_provider_with_resource_type
+    - retry_after_worker_code_or_registry_change_candidate
+    - ask_user_for_repair_direction
+    - fail_if_provider_is_required
+  provider_capabilities:
+    github:
+      resource_types: [repositories]
+      query_fields: [q]
+    arxiv:
+      resource_types: [papers]
+      query_fields: [all]
+    huggingface:
+      resource_types: [models, datasets, spaces]
+      query_fields: [search]
 memory_policy:
   writes: artifact_only
 side_effect_policy:

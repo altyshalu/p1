@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -137,7 +138,7 @@ class ProcessRuntime:
             await self.store.set_task_status(contract.id, TaskStatus.FAILED)
             await self.store.add_event(run_id, "contract_validation_failed", {"error": str(exc), "failure_type": exc.failure_type}, contract.id)
             await self.store.add_event(run_id, "task_failed", {"error": str(exc), "worker_profile": contract.worker_profile}, contract.id)
-            await self._record_failure_context(run_id, contract.id, contract, exc.failure_type, str(exc))
+            await self._record_failure_context(run_id, contract.id, contract, profile, exc.failure_type, str(exc))
             return
         await self.store.set_task_status(contract.id, TaskStatus.RUNNING)
         state = await self._require_run(run_id)
@@ -146,14 +147,14 @@ class ProcessRuntime:
         except L3WorkerExecutionError as exc:
             await self.store.set_task_status(contract.id, TaskStatus.FAILED)
             await self.store.add_event(run_id, "task_failed", {"error": str(exc), "worker_profile": contract.worker_profile}, contract.id)
-            await self._record_failure_context(run_id, contract.id, contract, self._classify_worker_error(exc), str(exc))
+            await self._record_failure_context(run_id, contract.id, contract, profile, self._classify_worker_error(exc), str(exc))
             return
         try:
             validate_contract_output(contract, payload)
         except ContractValidationError as exc:
             await self.store.set_task_status(contract.id, TaskStatus.FAILED)
             await self.store.add_event(run_id, "contract_output_validation_failed", {"error": str(exc), "failure_type": exc.failure_type}, contract.id)
-            await self._record_failure_context(run_id, contract.id, contract, exc.failure_type, str(exc))
+            await self._record_failure_context(run_id, contract.id, contract, profile, exc.failure_type, str(exc))
             return
         await self.store.set_task_status(contract.id, TaskStatus.COMPLETED)
         artifact_type = ArtifactType(task.get("artifact_type") or ArtifactType.GENERIC.value)
@@ -165,7 +166,7 @@ class ProcessRuntime:
             if not eval_result.passed:
                 await self.store.set_task_status(contract.id, TaskStatus.FAILED)
                 await self.store.add_event(run_id, "task_eval_failed", eval_result.model_dump(mode="json"), contract.id)
-                await self._record_failure_context(run_id, contract.id, contract, "eval_failed", "eval did not meet threshold", eval_result)
+                await self._record_failure_context(run_id, contract.id, contract, profile, "eval_failed", "eval did not meet threshold", eval_result)
 
     async def _record_eval(self, run_id: UUID, task_id: UUID, contract: TaskContract, payload: dict[str, Any]) -> EvalResult:
         eval_key = contract.grader_spec.get("eval_key")
@@ -245,6 +246,7 @@ class ProcessRuntime:
         run_id: UUID,
         task_id: UUID,
         contract: TaskContract,
+        profile: dict[str, Any],
         failure_type: str,
         error: str,
         eval_result: EvalResult | None = None,
@@ -259,12 +261,51 @@ class ProcessRuntime:
             "worker_profile": contract.worker_profile,
             "failure_type": failure_type,
             "error": error,
+            "structured_error": self._structured_worker_error(error),
+            "repair_policy": profile.get("provider_repair_policy") or profile.get("repair_policy") or {},
+            "repair_guidance": self._repair_guidance(contract, profile, failure_type, error),
             "matched_failure_pattern": pattern,
             "mitigation_applied": pattern.get("mitigation") if pattern else None,
             "retry_count_remaining": max(0, max_attempts - previous - 1) if failure_type in retryable else 0,
             "eval_result": eval_result.model_dump(mode="json") if eval_result else None,
         }
         await self.store.add_event(run_id, "task_failure_context", payload, task_id)
+
+    @staticmethod
+    def _structured_worker_error(error: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(error)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _repair_guidance(contract: TaskContract, profile: dict[str, Any], failure_type: str, error: str) -> dict[str, Any]:
+        provider_policy = profile.get("provider_repair_policy")
+        if contract.worker_profile != "trend-source-collector" or not provider_policy:
+            return {}
+        return {
+            "l2_can": [
+                "retry the same provider with provider_repairs using alternative real queries",
+                "retry a provider with a different supported resource_type if the provider supports it",
+                "ask the user for repair direction if the needed choice is product/editorial",
+                "propose a registry or worker code change candidate if the worker implementation appears wrong",
+                "fail explicitly if a required provider cannot be repaired within policy budget",
+            ],
+            "example_repair_inputs": {
+                "query": contract.inputs.get("query"),
+                "providers": contract.inputs.get("providers"),
+                "provider_repairs": {
+                    "huggingface": [
+                        {"strategy": "shorter_query", "query": "agent eval", "resource_type": "models"},
+                        {"strategy": "broader_query", "query": "agent runtime", "resource_type": "datasets"},
+                    ]
+                },
+            },
+            "policy": provider_policy,
+            "last_error": error,
+            "failure_type": failure_type,
+        }
 
     async def _previous_failure_count(self, run_id: UUID, worker_profile: str, failure_type: str) -> int:
         state = await self._require_run(run_id)
@@ -298,6 +339,8 @@ class ProcessRuntime:
             return "timeout"
         if "invalid json" in message:
             return "invalid_json"
+        if "no results" in message:
+            return "provider_no_results"
         if "missing required" in message:
             return "output_schema"
         return "worker_exception"

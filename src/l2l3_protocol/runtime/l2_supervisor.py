@@ -69,6 +69,9 @@ class L2Supervisor:
                     "Spawn at most max_tasks_per_turn tasks.",
                     "If required inputs are missing, use message_user instead of inventing data.",
                     "For source collection tasks, pass real search parameters from state.input.inputs; do not ask the user for pre-collected source files.",
+                    "When a task_failure_context includes repair_guidance, choose a protocol-safe repair: spawn a repaired task with changed inputs, ask the user, propose a registry/code change candidate, or fail explicitly.",
+                    "Do not silently drop a requested provider unless the repair policy explicitly allows partial continuation or the user approves it.",
+                    "For provider_no_results, prefer multiple real provider-specific repair attempts before asking the user or failing.",
                     "If work is complete, use finish with final output.",
                     "If the run cannot continue, use fail with a reason.",
                 ],
@@ -81,9 +84,10 @@ class L2Supervisor:
                             "worker_profile": "registered worker key",
                             "goal": "bounded worker goal",
                             "inputs": {"key": "value"},
-                            "artifact_type": "generic",
-                        }
-                    ],
+                        "artifact_type": "generic",
+                        "allowed_tools": ["optional registered tool ids"],
+                    }
+                ],
                     "output": {"final": "object when action=finish"},
                     "reason": "required when action=fail",
                     "registry_change_candidate": {"optional": "candidate only"},
