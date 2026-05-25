@@ -201,6 +201,7 @@ class WorkingMemoryStore:
             record.spec = item.spec
             record.metadata_ = item.metadata
         await self._persist()
+        await self.session.refresh(record)
         return self._registry_item_from_record(record)
 
     async def list_registry_items(self, kind: RegistryKind) -> list[RegistryItem]:
