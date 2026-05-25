@@ -38,6 +38,28 @@ curl -X POST http://localhost:8080/runs \
 
 Logs are written as JSONL under `logs/`.
 
+## Live run dashboard
+
+Run the API server first:
+
+```sh
+uv run l2l3-protocol
+```
+
+In another terminal, start the trend-radar demo:
+
+```sh
+uv run l2l3-live demo trend-radar
+```
+
+The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run with explicit demo source data, renders task progress, artifacts, evals, and the final draft, then asks for human approval.
+
+Watch an existing run:
+
+```sh
+uv run l2l3-live watch <run_id>
+```
+
 ## Registry marketplace
 
 The runtime uses the database-backed marketplace as the source of truth. `registries/` is only explicit seed data for setup.
