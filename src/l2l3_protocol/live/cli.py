@@ -83,7 +83,7 @@ async def watch_run(api_url: str, run_id: str, interactive: bool = False) -> Non
                 continue
             break
         break
-    console.print(render_run_snapshot(latest, show_full_events))
+    console.print(render_run_snapshot(latest, show_full_events, height=console.size.height))
 
 
 async def _watch_until_terminal(
@@ -96,13 +96,21 @@ async def _watch_until_terminal(
     user_quit = False
     controls_enabled = sys.stdin.isatty()
     with _terminal_key_mode(controls_enabled):
-        with Live(render_run_snapshot(latest, show_full_events), console=console, refresh_per_second=6) as live:
+        with Live(
+            render_run_snapshot(latest, show_full_events, height=console.size.height),
+            console=console,
+            refresh_per_second=6,
+            screen=True,
+            transient=False,
+            redirect_stdout=False,
+            redirect_stderr=False,
+        ) as live:
             next_poll_at = asyncio.get_running_loop().time()
             while latest["status"] not in TERMINAL_STATUSES:
                 key = _read_key_nonblocking() if controls_enabled else None
                 if key == "f":
                     show_full_events = not show_full_events
-                    live.update(render_run_snapshot(latest, show_full_events))
+                    live.update(render_run_snapshot(latest, show_full_events, height=console.size.height))
                 elif key == "q":
                     user_quit = True
                     break
@@ -110,10 +118,10 @@ async def _watch_until_terminal(
                 now = asyncio.get_running_loop().time()
                 if now >= next_poll_at:
                     latest = await client.get_run(run_id)
-                    live.update(render_run_snapshot(latest, show_full_events))
+                    live.update(render_run_snapshot(latest, show_full_events, height=console.size.height))
                     next_poll_at = now + 1
                 await asyncio.sleep(0.1)
-            live.update(render_run_snapshot(latest, show_full_events))
+            live.update(render_run_snapshot(latest, show_full_events, height=console.size.height))
     return latest, user_quit, show_full_events
 
 
