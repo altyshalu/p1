@@ -103,12 +103,85 @@ curl -X POST http://localhost:8080/hub/sync/yaml
 
 ## Review Expectations
 
-PR descriptions should include:
+PR descriptions are part of the work. A reviewer should be able to understand the change without asking for a private walkthrough.
+
+Every PR must include:
 
 - What changed
 - Why it changed
+- Why this approach was chosen
+- What alternatives were considered or rejected
+- How the implementation works
 - How it was tested
+- Proof for bug fixes, such as logs, stack traces, failing test output, screenshots, or reproduction steps
+- Evidence for improvements, such as before/after behavior, benchmark output, UX screenshots, run traces, or architectural reasoning
 - Any migration or operational impact
 - Any explicit risks or follow-up work
 
 Keep PRs focused. If a change starts growing across unrelated areas, split it.
+
+## PR Description Template
+
+Use this structure unless the change is truly tiny.
+
+````md
+## Summary
+
+What changed in one or two paragraphs.
+
+## Problem
+
+What was broken, missing, confusing, slow, unsafe, or incomplete.
+
+## Why Now
+
+Why this matters now and what happens if we do not change it.
+
+## Approach
+
+How the solution works. Include the main design decisions, tradeoffs, and rejected alternatives.
+
+## Implementation Notes
+
+Important files, data model changes, API changes, migrations, worker/tool/eval changes, or runtime behavior changes.
+
+## Proof
+
+For bugs:
+- reproduction steps
+- failing logs, stack traces, screenshots, or test output before the fix
+- passing logs or test output after the fix
+
+For improvements:
+- before/after behavior
+- run traces, screenshots, benchmark output, or concrete reasoning
+- why this is better than the previous behavior
+
+## Tests
+
+Commands run and their output summary.
+
+Example:
+
+```sh
+uv run pytest
+uv run alembic upgrade head --sql
+```
+
+## Risk
+
+Known risks, edge cases, migration impact, operational impact, or rollback concerns.
+
+## Follow-ups
+
+Anything intentionally left out.
+````
+
+Bad PR descriptions:
+
+- "fix bug"
+- "updates"
+- "refactor"
+- "works now"
+
+Good PR descriptions explain the reasoning path. The reviewer should see what the author believed, what evidence changed that belief, and why the final implementation is the right move.
