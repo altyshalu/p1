@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: Path = Path("logs")
 
-    database_url: str = "postgresql+asyncpg://l2l3:l2l3@localhost:5432/l2l3_protocol"
+    database_url: str = "postgresql+asyncpg://l2l3:l2l3@localhost:5434/l2l3_protocol"
 
     agentmemory_base_url: str = "http://localhost:3111"
     agentmemory_secret: str | None = None
