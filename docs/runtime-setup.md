@@ -59,7 +59,7 @@ uv run l2l3-live start trend-radar \
 
 The live CLI does not ship embedded source data. It passes the real query/providers into the run; L2 must create a `trend-source-collector` task, and that worker calls the allowed read-only tools for GitHub, arXiv, and Hugging Face. If a provider request fails or returns no usable results, the task fails explicitly.
 
-The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run, and opens a full-screen terminal UI with scrollable pipeline, draft, eval, event, and user-input panes. It does not mutate runtime logic; it only watches and sends explicit user replies or approval commands.
+The live dashboard syncs the YAML registry into the database, creates a `build-in-public-trend-radar` run, and opens a full-screen terminal UI with a compact main dashboard. Heavy content such as drafts and event payloads opens in separate scrollable Markdown windows. It does not mutate runtime logic; it only watches and sends explicit user replies or approval commands.
 
 Watch an existing run:
 

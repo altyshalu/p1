@@ -1,5 +1,6 @@
 import pytest
 from rich.text import Text
+from textual.containers import VerticalScroll
 
 from l2l3_protocol.live.tui import (
     LiveRunApp,
@@ -9,6 +10,7 @@ from l2l3_protocol.live.tui import (
     _drafts_markdown,
     _events_markdown,
     _prompt_markdown,
+    _shortcut_markdown,
     _state_text,
     parse_approval_command,
 )
@@ -41,6 +43,9 @@ async def test_live_app_mounts_and_focuses_waiting_user_input() -> None:
 
         assert app.query_one("#command").disabled is False
         assert app.query_one("#command").placeholder == "Answer L2 here and press Enter"
+        assert len(app.query("#drafts")) == 0
+        assert len(app.query("#events")) == 0
+        assert "F3" in _shortcut_markdown()
 
 
 @pytest.mark.asyncio
@@ -54,6 +59,7 @@ async def test_live_app_opens_detail_windows() -> None:
         await pilot.pause(0.1)
 
         assert app.screen.__class__.__name__ == "DetailScreen"
+        assert app.screen.query_one("#detail-scroll", VerticalScroll).has_focus
 
 
 def test_parse_approval_command_accepts_approve_aliases() -> None:
@@ -120,6 +126,14 @@ def test_detail_markdown_builders_include_full_content() -> None:
     assert "full draft body" in _drafts_markdown(run)
     assert "l2_action_selected" in _events_markdown(run, show_full=True)
     assert "long reason" in _events_markdown(run, show_full=True)
+
+
+def test_shortcut_markdown_explains_detail_windows() -> None:
+    markdown = _shortcut_markdown()
+
+    assert "`F2`" in markdown
+    assert "`F3`" in markdown
+    assert "`F4`" in markdown
 
 
 def test_compact_payload_preserves_toggle_signal() -> None:

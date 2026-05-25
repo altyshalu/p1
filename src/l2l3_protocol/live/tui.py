@@ -5,14 +5,12 @@ from datetime import datetime
 import json
 from typing import Any
 
-from rich.panel import Panel
-from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, RichLog, Static
+from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, Static
 from textual import work
 from textual.worker import Worker, WorkerState
 
@@ -68,8 +66,13 @@ class DetailScreen(ModalScreen[None]):
         text-style: bold;
     }
 
-    #detail-markdown {
+    #detail-scroll {
         height: 1fr;
+        background: #000000;
+        overflow-y: auto;
+    }
+
+    #detail-markdown {
         background: #000000;
     }
     """
@@ -87,8 +90,12 @@ class DetailScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Container(id="detail"):
             yield Label(self.detail_title, id="detail-title")
-            yield Markdown(self.markdown, id="detail-markdown")
+            with VerticalScroll(id="detail-scroll"):
+                yield Markdown(self.markdown, id="detail-markdown")
             yield Label("Esc/q close · scroll with mouse, arrows, PageUp/PageDown", classes="section-title")
+
+    def on_mount(self) -> None:
+        self.query_one("#detail-scroll", VerticalScroll).focus()
 
     def action_close(self) -> None:
         self.dismiss()
@@ -158,23 +165,17 @@ class LiveRunApp(App[None]):
     }
 
     #prompt {
-        height: 10;
+        height: 1fr;
         border: round #c084fc;
         padding: 0 1;
         background: #000000;
+        overflow-y: auto;
     }
 
-    #drafts {
-        height: 2fr;
+    #shortcuts {
+        height: 8;
         min-height: 8;
-        border: round #a78bfa;
-        padding: 0 1;
-        background: #000000;
-    }
-
-    #events {
-        height: 2fr;
-        min-height: 8;
+        margin-top: 1;
         border: round #38bdf8;
         padding: 0 1;
         background: #000000;
@@ -243,10 +244,7 @@ class LiveRunApp(App[None]):
                 yield DataTable(id="evals", zebra_stripes=True, cursor_type="row")
             with Vertical(id="right"):
                 yield Markdown(id="prompt")
-                yield Label("Draft Preview", classes="section-title")
-                yield RichLog(id="drafts", wrap=True, markup=True, highlight=True)
-                yield Label("Recent Events", classes="section-title")
-                yield RichLog(id="events", wrap=True, markup=True, highlight=True)
+                yield Markdown(_shortcut_markdown(), id="shortcuts")
         yield Input(id="command")
         yield Footer()
 
@@ -285,7 +283,7 @@ class LiveRunApp(App[None]):
 
     def action_open_events(self) -> None:
         if self.run is not None:
-            self.push_screen(DetailScreen("Event log", _events_markdown(self.run, show_full=True)))
+            self.push_screen(DetailScreen("Event log", _events_markdown(self.run, show_full=self.show_full_events)))
 
     @work(exclusive=True)
     async def fetch_run(self) -> dict[str, Any]:
@@ -334,8 +332,6 @@ class LiveRunApp(App[None]):
         self._render_tasks(run)
         self._render_evals(run)
         self._render_prompt(run)
-        self._render_drafts(run)
-        self._render_events(run)
         self._render_command(run)
 
     def _render_status(self, run: dict[str, Any]) -> None:
@@ -390,38 +386,6 @@ class LiveRunApp(App[None]):
     def _render_prompt(self, run: dict[str, Any]) -> None:
         self.query_one("#prompt", Markdown).update(_prompt_markdown(run))
 
-    def _render_drafts(self, run: dict[str, Any]) -> None:
-        log = self.query_one("#drafts", RichLog)
-        log.clear()
-        drafts = _collect_drafts(run)
-        if not drafts:
-            log.write(Text("No drafts yet.", style="dim"))
-            return
-        for index, draft in enumerate(drafts[-4:], start=max(1, len(drafts) - 3)):
-            text = _draft_text(draft)
-            title = f"{draft.get('channel', 'unknown')} · {draft.get('status', 'draft')} · draft {index}"
-            log.write(Panel(text or "[dim]No draft text yet.[/dim]", title=title, border_style="green"))
-
-    def _render_events(self, run: dict[str, Any]) -> None:
-        log = self.query_one("#events", RichLog)
-        log.clear()
-        events = run.get("events", [])
-        if not events:
-            log.write(Text("No events yet.", style="dim"))
-            return
-        visible_events = events if self.show_full_events else events[-12:]
-        if not self.show_full_events and len(events) > len(visible_events):
-            log.write(Text(f"{len(events) - len(visible_events)} earlier events hidden. Press f for full event history.", style="dim"))
-        for event in visible_events:
-            event_type = str(event.get("event_type", "unknown"))
-            created = _format_timestamp(event.get("created_at"))
-            payload = event.get("payload", {})
-            log.write(Text.assemble((event_type, "bold magenta"), ("  "), (created, "dim")))
-            if self.show_full_events:
-                log.write(Syntax(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), "json", word_wrap=True))
-            else:
-                log.write(Text(_compact_payload(payload), style="dim"))
-
     def _render_command(self, run: dict[str, Any]) -> None:
         command = self.query_one("#command", Input)
         status = run.get("status")
@@ -463,6 +427,17 @@ def _prompt_markdown(run: dict[str, Any]) -> str:
         "# Runtime is running\n\n"
         "No user input required right now.\n\n"
         "_Keys: `F4` events window · `F3` drafts window · `f` compact/full events · `r` refresh · `q` quit watcher._"
+    )
+
+
+def _shortcut_markdown() -> str:
+    return (
+        "# Detail windows\n\n"
+        "- `F2` opens the current L2 prompt / approval gate.\n"
+        "- `F3` opens Draft Preview.\n"
+        "- `F4` opens Recent Events.\n"
+        "- `f` toggles compact/full event payload mode before opening events.\n\n"
+        "> Heavy content lives in separate scrollable windows so the main dashboard stays readable."
     )
 
 
