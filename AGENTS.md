@@ -24,3 +24,9 @@ Not allowed:
 - Synthetic worker outputs when inputs are missing.
 - Default alternate tools when requested tools are unavailable.
 - Silent empty objects/lists when required configuration files are missing or invalid.
+
+## Commit Discipline
+
+After every logical change or small coherent block of work, create a separate git commit using Conventional Commits.
+
+Do this unless the user explicitly says not to commit.
