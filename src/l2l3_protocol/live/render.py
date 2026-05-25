@@ -34,7 +34,12 @@ def render_run_snapshot(run: dict[str, Any], show_full_events: bool = False) -> 
         ),
         border_style="dim",
     )
-    return Group(header, _tasks_table(run), _evals_table(run), _draft_panel(run), _events_table(run, show_full_events), footer)
+    blocks = [header, _tasks_table(run), _evals_table(run), _draft_panel(run)]
+    waiting_panel = _waiting_user_panel(run)
+    if waiting_panel is not None:
+        blocks.append(waiting_panel)
+    blocks.extend([_events_table(run, show_full_events), footer])
+    return Group(*blocks)
 
 
 def _tasks_table(run: dict[str, Any]) -> Table:
@@ -79,6 +84,20 @@ def _draft_panel(run: dict[str, Any]) -> Panel:
     return Panel("\n\n".join(lines), title="Draft Preview", border_style="green")
 
 
+def _waiting_user_panel(run: dict[str, Any]) -> Panel | None:
+    if run.get("status") != "waiting_user":
+        return None
+    message = _latest_event_payload(run, "l2_message_user").get("message") or run.get("output", {}).get("requested_edit")
+    if not message:
+        return None
+    body = Text.from_markup(
+        "[bold magenta]L2 is asking for your input[/bold magenta]\n\n"
+        f"{message}\n\n"
+        "[dim]Type your answer in the prompt below. The watcher will resume this same run automatically.[/dim]"
+    )
+    return Panel(body, title="User Input Required", border_style="magenta")
+
+
 def _events_table(run: dict[str, Any], show_full_events: bool = False) -> Table:
     table = Table(title="Recent Events", title_style="bold", box=box.ROUNDED, show_lines=show_full_events)
     table.add_column("Event", style="bold magenta", no_wrap=True)
@@ -95,6 +114,14 @@ def _format_payload(payload: Any, show_full: bool) -> str:
     if len(compact) <= COMPACT_PAYLOAD_LIMIT:
         return compact
     return f"{compact[: COMPACT_PAYLOAD_LIMIT - 3]}..."
+
+
+def _latest_event_payload(run: dict[str, Any], event_type: str) -> dict[str, Any]:
+    for event in reversed(run.get("events", [])):
+        if event.get("event_type") == event_type:
+            payload = event.get("payload", {})
+            return payload if isinstance(payload, dict) else {}
+    return {}
 
 
 def _state_icon(status: str) -> str:

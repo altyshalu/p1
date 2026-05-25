@@ -48,3 +48,9 @@ class LiveApiClient:
             response = await client.post(f"{self.api_url}/runs/{run_id}/control", json={"action": action, "payload": payload})
             response.raise_for_status()
             return response.json()
+
+    async def send_message(self, run_id: str, message: str) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+            response = await client.post(f"{self.api_url}/runs/{run_id}/messages", json={"message": message})
+            response.raise_for_status()
+            return response.json()

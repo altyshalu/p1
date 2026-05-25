@@ -66,3 +66,24 @@ def test_live_renderer_toggles_full_event_payloads() -> None:
     assert "full" in full_output
     assert "Long signal" in full_output
     assert "..." not in full_output
+
+
+def test_live_renderer_shows_waiting_user_prompt() -> None:
+    run = {
+        "id": "12345678-abcd",
+        "status": "waiting_user",
+        "process_key": "build-in-public-trend-radar",
+        "goal": "real trend radar run",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [],
+        "events": [{"event_type": "l2_message_user", "payload": {"message": "Please provide themes."}}],
+    }
+    console = Console(record=True, width=120)
+
+    console.print(render_run_snapshot(run))
+    output = console.export_text()
+
+    assert "User Input Required" in output
+    assert "Please provide themes." in output
+    assert "Reply" not in output

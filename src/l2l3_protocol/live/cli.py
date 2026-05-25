@@ -60,6 +60,39 @@ async def watch_run(api_url: str, run_id: str, interactive: bool = False) -> Non
     console = Console()
     latest = await client.get_run(run_id)
     show_full_events = False
+    while True:
+        latest, user_quit, show_full_events = await _watch_until_terminal(client, console, run_id, latest, show_full_events)
+        if user_quit or not interactive:
+            break
+        if latest["status"] == "waiting_user":
+            message = Prompt.ask("[bold magenta]Reply to L2[/bold magenta]")
+            latest = await client.send_message(run_id, message)
+            continue
+        if latest["status"] == "waiting_approval":
+            choice = Prompt.ask("Approve draft?", choices=["approve", "reject", "edit", "quit"], default="approve")
+            if choice == "approve":
+                latest = await client.control(run_id, "approve", {})
+                continue
+            if choice == "reject":
+                reason = Prompt.ask("Reason")
+                latest = await client.control(run_id, "reject", {"reason": reason})
+                continue
+            if choice == "edit":
+                message = Prompt.ask("Edit request")
+                latest = await client.control(run_id, "request_edit", {"message": message})
+                continue
+            break
+        break
+    console.print(render_run_snapshot(latest, show_full_events))
+
+
+async def _watch_until_terminal(
+    client: LiveApiClient,
+    console: Console,
+    run_id: str,
+    latest: dict,
+    show_full_events: bool,
+) -> tuple[dict, bool, bool]:
     user_quit = False
     controls_enabled = sys.stdin.isatty()
     with _terminal_key_mode(controls_enabled):
@@ -81,18 +114,7 @@ async def watch_run(api_url: str, run_id: str, interactive: bool = False) -> Non
                     next_poll_at = now + 1
                 await asyncio.sleep(0.1)
             live.update(render_run_snapshot(latest, show_full_events))
-
-    if interactive and not user_quit and latest["status"] == "waiting_approval":
-        choice = Prompt.ask("Approve draft?", choices=["approve", "reject", "edit", "quit"], default="approve")
-        if choice == "approve":
-            latest = await client.control(run_id, "approve", {})
-        elif choice == "reject":
-            reason = Prompt.ask("Reason")
-            latest = await client.control(run_id, "reject", {"reason": reason})
-        elif choice == "edit":
-            message = Prompt.ask("Edit request")
-            latest = await client.control(run_id, "request_edit", {"message": message})
-        console.print(render_run_snapshot(latest, show_full_events))
+    return latest, user_quit, show_full_events
 
 
 @contextmanager
