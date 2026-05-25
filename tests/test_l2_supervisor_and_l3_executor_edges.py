@@ -93,6 +93,49 @@ async def test_l2_supervisor_repairs_malformed_output() -> None:
 
 
 @pytest.mark.asyncio
+async def test_l2_supervisor_blocks_internal_repair_escalation_to_user() -> None:
+    hermes = FakeHermes(
+        [
+            '{"action":"message_user","message":"Should I respawn the judge and map evidence_urls to source_url?"}',
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "repair_claim_grounding_inputs",
+                  "worker_profile": "narrative-synthesizer",
+                  "goal": "Repair claim grounding inputs from existing draft artifacts.",
+                  "inputs": {"drafts": []},
+                  "artifact_type": "content_atoms"
+                }
+              ]
+            }
+            """,
+        ]
+    )
+    supervisor = L2Supervisor(hermes)
+    state = {
+        "goal": "x",
+        "events": [
+            {
+                "event_type": "task_failure_context",
+                "payload": {
+                    "failure_type": "eval_failed",
+                    "worker_profile": "claim-grounding-judge",
+                    "retry_count_remaining": 0,
+                    "repair_guidance": {"l2_can": ["map evidence_urls to source_url and retry judge"]},
+                },
+            }
+        ],
+    }
+
+    action = await supervisor.next_action(process_pack(), worker_profiles(), state, 0)
+
+    assert action.action == "spawn_tasks"
+    assert "message_user is not allowed for internal L2 repair mechanics" in hermes.prompts[1]
+
+
+@pytest.mark.asyncio
 async def test_l3_executor_rejects_missing_required_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module_path = tmp_path / "bad_worker.py"
     module_path.write_text("import json, sys; json.loads(sys.stdin.read()); print('{}')", encoding="utf-8")

@@ -11,6 +11,16 @@ from l2l3_protocol.runtime.hermes import HermesRuntime
 
 
 ALLOWED_ACTIONS = {"spawn_tasks", "message_user", "finish", "fail", "propose_registry_change"}
+INTERNAL_REPAIR_FAILURE_TYPES = {
+    "eval_failed",
+    "output_schema",
+    "invalid_json",
+    "worker_exception",
+    "timeout",
+    "tool_denied",
+    "side_effect_violation",
+    "contract_validation",
+}
 
 
 class L2Supervisor:
@@ -43,7 +53,7 @@ class L2Supervisor:
                 enabled_toolsets=[],
             )
             try:
-                return self._parse_action(raw, process_pack, worker_profiles)
+                return self._parse_action(raw, process_pack, worker_profiles, state)
             except ValueError as exc:
                 last_error = exc
                 if attempt >= self.max_repair_attempts:
@@ -67,9 +77,13 @@ class L2Supervisor:
                     "Allowed action values: spawn_tasks, message_user, finish, fail, propose_registry_change.",
                     "Use only allowed_workers from the process pack.",
                     "Spawn at most max_tasks_per_turn tasks.",
-                    "If required inputs are missing, use message_user instead of inventing data.",
+                    "Humans own WHAT outcome matters; L2 owns HOW execution is repaired.",
+                    "Use message_user only for missing user-owned outcome constraints, explicit approval, unsafe/external side effects, spending/posting, or approval-required registry/executable behavior changes.",
+                    "Never ask the user to approve internal repair mechanics: retries, worker respawn, rebriefs, schema field mapping, eval retry, provider query variants, threshold/debug analysis, or tool routing.",
+                    "For internal failures such as eval_failed, output_schema, invalid_json, worker_exception, timeout, or tool_denied, autonomously choose spawn_tasks, propose_registry_change, or fail.",
+                    "If required inputs are missing and they are factual/user-owned inputs, use message_user. If they can be inferred from artifacts, run input, or prior task outputs, repair autonomously.",
                     "For source collection tasks, pass real search parameters from state.input.inputs; do not ask the user for pre-collected source files.",
-                    "When a task_failure_context includes repair_guidance, choose a protocol-safe repair: spawn a repaired task with changed inputs, ask the user, propose a registry/code change candidate, or fail explicitly.",
+                    "When a task_failure_context includes repair_guidance, choose a protocol-safe repair: spawn a repaired task with changed inputs, propose a registry/code change candidate, or fail explicitly. Ask the user only when the decision is truly product/editorial/safety-owned.",
                     "Do not silently drop a requested provider unless the repair policy explicitly allows partial continuation or the user approves it.",
                     "For provider_no_results, prefer multiple real provider-specific repair attempts before asking the user or failing.",
                     "If work is complete, use finish with final output.",
@@ -138,6 +152,7 @@ class L2Supervisor:
         raw: str,
         process_pack: dict[str, Any],
         worker_profiles: dict[str, dict[str, Any]],
+        state: dict[str, Any],
     ) -> L2SupervisorAction:
         try:
             data = json.loads(raw)
@@ -150,7 +165,7 @@ class L2Supervisor:
             action = L2SupervisorAction.model_validate(data)
         except ValidationError as exc:
             raise ValueError("Hermes L2 action does not match the required schema") from exc
-        cls._validate_action(action, process_pack, worker_profiles)
+        cls._validate_action(action, process_pack, worker_profiles, state)
         return action
 
     @staticmethod
@@ -158,6 +173,7 @@ class L2Supervisor:
         action: L2SupervisorAction,
         process_pack: dict[str, Any],
         worker_profiles: dict[str, dict[str, Any]],
+        state: dict[str, Any],
     ) -> None:
         if action.action not in ALLOWED_ACTIONS:
             raise ValueError(f"unknown L2 action: {action.action}")
@@ -173,6 +189,10 @@ class L2Supervisor:
             raise ValueError(f"{action.action} action must not include tasks")
         if action.action == "message_user" and not action.message:
             raise ValueError("message_user action requires message")
+        if action.action == "message_user" and not _message_user_allowed(state):
+            raise ValueError(
+                "message_user is not allowed for internal L2 repair mechanics; choose spawn_tasks, propose_registry_change, or fail"
+            )
         if action.action == "fail" and not action.reason:
             raise ValueError("fail action requires reason")
         for task in action.tasks:
@@ -180,3 +200,22 @@ class L2Supervisor:
                 raise ValueError(f"worker is not allowed by process pack: {task.worker_profile}")
             if task.worker_profile not in worker_profiles:
                 raise ValueError(f"worker profile is not registered: {task.worker_profile}")
+
+
+def _message_user_allowed(state: dict[str, Any]) -> bool:
+    latest_failure = _latest_task_failure_context(state)
+    if latest_failure is None:
+        return True
+    failure_type = str(latest_failure.get("failure_type", ""))
+    if failure_type in INTERNAL_REPAIR_FAILURE_TYPES:
+        return False
+    return True
+
+
+def _latest_task_failure_context(state: dict[str, Any]) -> dict[str, Any] | None:
+    for event in reversed(state.get("events", [])):
+        if event.get("event_type") != "task_failure_context":
+            continue
+        payload = event.get("payload", {})
+        return payload if isinstance(payload, dict) else None
+    return None
