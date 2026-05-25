@@ -70,6 +70,9 @@ uv run l2l3-live watch <run_id>
 Controls:
 
 - `f`: toggle compact/full event payloads.
+- `F2`: open the current L2 prompt or approval gate in a large scrollable Markdown window.
+- `F3`: open drafts in a large scrollable Markdown window.
+- `F4`: open events in a large scrollable Markdown window.
 - `r`: force refresh.
 - `q`: quit the watcher only; the run keeps its current backend state.
 - When `waiting_user`: type the L2 answer in the input bar and press Enter.

@@ -10,8 +10,9 @@ from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Input, Label, RichLog, Static
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import DataTable, Footer, Header, Input, Label, Markdown, RichLog, Static
 from textual import work
 from textual.worker import Worker, WorkerState
 
@@ -46,31 +47,78 @@ def parse_approval_command(value: str) -> ApprovalCommand:
     raise ValueError("Waiting for approval command: approve | reject <reason> | edit <message>")
 
 
+class DetailScreen(ModalScreen[None]):
+    CSS = """
+    DetailScreen {
+        background: rgba(0, 0, 0, 0.72);
+        align: center middle;
+    }
+
+    #detail {
+        width: 92%;
+        height: 88%;
+        border: round #c084fc;
+        background: #000000;
+        padding: 1 2;
+    }
+
+    #detail-title {
+        height: 1;
+        color: #f4c2ff;
+        text-style: bold;
+    }
+
+    #detail-markdown {
+        height: 1fr;
+        background: #000000;
+    }
+    """
+
+    BINDINGS = [
+        Binding("escape", "close", "Close"),
+        Binding("q", "close", "Close"),
+    ]
+
+    def __init__(self, title: str, markdown: str) -> None:
+        super().__init__()
+        self.detail_title = title
+        self.markdown = markdown
+
+    def compose(self) -> ComposeResult:
+        with Container(id="detail"):
+            yield Label(self.detail_title, id="detail-title")
+            yield Markdown(self.markdown, id="detail-markdown")
+            yield Label("Esc/q close · scroll with mouse, arrows, PageUp/PageDown", classes="section-title")
+
+    def action_close(self) -> None:
+        self.dismiss()
+
+
 class LiveRunApp(App[None]):
     CSS = """
     Screen {
-        background: #071111;
-        color: #dce8df;
+        background: #000000;
+        color: #e8e2f4;
         layout: vertical;
     }
 
     Header {
-        background: #102421;
-        color: #dff8eb;
+        background: #000000;
+        color: #f4c2ff;
         text-style: bold;
     }
 
     Footer {
-        background: #102421;
-        color: #b9d5c8;
+        background: #000000;
+        color: #c7b8ff;
     }
 
     #status {
         height: 7;
         margin: 1 1 0 1;
         padding: 0 1;
-        border: round #48d597;
-        background: #0d1a18;
+        border: round #c084fc;
+        background: #000000;
     }
 
     #main {
@@ -92,56 +140,77 @@ class LiveRunApp(App[None]):
 
     .section-title {
         height: 1;
-        color: #8ce7ba;
+        color: #f4c2ff;
         text-style: bold;
     }
 
     #tasks {
         height: 3fr;
-        border: round #2a7560;
-        background: #091615;
+        border: round #8b5cf6;
+        background: #000000;
     }
 
     #evals {
         height: 1fr;
         min-height: 6;
-        border: round #2a7560;
-        background: #091615;
+        border: round #f59e0b;
+        background: #000000;
     }
 
     #prompt {
-        height: 8;
-        border: round #d48cff;
+        height: 10;
+        border: round #c084fc;
         padding: 0 1;
-        background: #160f1d;
+        background: #000000;
     }
 
     #drafts {
         height: 2fr;
         min-height: 8;
-        border: round #3aa675;
+        border: round #a78bfa;
         padding: 0 1;
-        background: #081513;
+        background: #000000;
     }
 
     #events {
         height: 2fr;
         min-height: 8;
-        border: round #355a71;
+        border: round #38bdf8;
         padding: 0 1;
-        background: #081219;
+        background: #000000;
     }
 
     #command {
         height: 3;
         margin: 0 1 1 1;
-        border: tall #48d597;
-        background: #081513;
+        border: tall #c084fc;
+        background: #000000;
+        color: #f5e8ff;
     }
 
     #command:disabled {
-        border: tall #314643;
-        color: #6b8178;
+        border: tall #333333;
+        color: #777777;
+    }
+
+    Markdown {
+        background: #000000;
+        color: #eee7ff;
+    }
+
+    MarkdownBlockQuote {
+        border-left: thick #f59e0b;
+        background: #000000;
+    }
+
+    MarkdownH1, MarkdownH2, MarkdownH3 {
+        color: #f4c2ff;
+        text-style: bold;
+    }
+
+    MarkdownCode {
+        background: #111111;
+        color: #fde68a;
     }
     """
 
@@ -149,6 +218,9 @@ class LiveRunApp(App[None]):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("f", "toggle_events", "Full events"),
+        Binding("f2", "open_prompt", "Prompt"),
+        Binding("f3", "open_drafts", "Drafts"),
+        Binding("f4", "open_events", "Events"),
     ]
 
     def __init__(self, *, api_url: str, run_id: str) -> None:
@@ -170,7 +242,7 @@ class LiveRunApp(App[None]):
                 yield Label("Evals", classes="section-title")
                 yield DataTable(id="evals", zebra_stripes=True, cursor_type="row")
             with Vertical(id="right"):
-                yield Static(id="prompt")
+                yield Markdown(id="prompt")
                 yield Label("Draft Preview", classes="section-title")
                 yield RichLog(id="drafts", wrap=True, markup=True, highlight=True)
                 yield Label("Recent Events", classes="section-title")
@@ -202,6 +274,18 @@ class LiveRunApp(App[None]):
         self.show_full_events = not self.show_full_events
         if self.run is not None:
             self._render(self.run)
+
+    def action_open_prompt(self) -> None:
+        if self.run is not None:
+            self.push_screen(DetailScreen("L2 prompt / approval", _prompt_markdown(self.run)))
+
+    def action_open_drafts(self) -> None:
+        if self.run is not None:
+            self.push_screen(DetailScreen("Draft preview", _drafts_markdown(self.run)))
+
+    def action_open_events(self) -> None:
+        if self.run is not None:
+            self.push_screen(DetailScreen("Event log", _events_markdown(self.run, show_full=True)))
 
     @work(exclusive=True)
     async def fetch_run(self) -> dict[str, Any]:
@@ -304,31 +388,7 @@ class LiveRunApp(App[None]):
             )
 
     def _render_prompt(self, run: dict[str, Any]) -> None:
-        status = run.get("status")
-        prompt = self.query_one("#prompt", Static)
-        if status == "waiting_user":
-            message = _latest_event_payload(run, "l2_message_user").get("message") or run.get("output", {}).get("requested_edit")
-            body = Text.assemble(
-                ("L2 needs your answer\n", "bold #ffb3ff"),
-                (str(message or "No message payload found."), "#f3dcff"),
-                ("\n\nType below and press Enter. The same run resumes immediately.", "dim"),
-            )
-            prompt.update(body)
-            return
-        if status == "waiting_approval":
-            body = Text.assemble(
-                ("Human approval gate\n", "bold #ffdc8c"),
-                ("Commands: ", "bold"),
-                ("approve", "green"),
-                (" · ", "dim"),
-                ("reject <reason>", "red"),
-                (" · ", "dim"),
-                ("edit <message>", "cyan"),
-                ("\nThe run stays paused until you choose.", "dim"),
-            )
-            prompt.update(body)
-            return
-        prompt.update(Text.assemble(("Runtime is running.\n", "bold #8ce7ba"), ("No user input required right now.", "dim")))
+        self.query_one("#prompt", Markdown).update(_prompt_markdown(run))
 
     def _render_drafts(self, run: dict[str, Any]) -> None:
         log = self.query_one("#drafts", RichLog)
@@ -376,11 +436,34 @@ class LiveRunApp(App[None]):
         elif status in TERMINAL_STATUSES:
             command.placeholder = f"Run is {status}. Press q to quit."
         else:
-            command.placeholder = "Watching live. Press f for full events, r to refresh, q to quit."
+            command.placeholder = "Watching live. f toggle events · F2 prompt · F3 drafts · F4 events · r refresh"
 
     def _show_error(self, message: str) -> None:
-        prompt = self.query_one("#prompt", Static)
-        prompt.update(Text.assemble(("TUI action failed\n", "bold red"), (message, "red")))
+        self.query_one("#prompt", Markdown).update(f"# TUI action failed\n\n{message}")
+
+
+def _prompt_markdown(run: dict[str, Any]) -> str:
+    status = run.get("status")
+    if status == "waiting_user":
+        message = _latest_event_payload(run, "l2_message_user").get("message") or run.get("output", {}).get("requested_edit")
+        return (
+            "# L2 needs your answer\n\n"
+            f"{message or 'No message payload found.'}\n\n"
+            "> Type below and press Enter. The same run resumes immediately.\n\n"
+            "_Press `F2` to open this prompt in a large scrollable window._"
+        )
+    if status == "waiting_approval":
+        return (
+            "# Human approval gate\n\n"
+            "Commands: **approve**, **reject `<reason>`**, or **edit `<message>`**.\n\n"
+            "> The run stays paused until you choose.\n\n"
+            "_Press `F2` to open this gate in a large scrollable window._"
+        )
+    return (
+        "# Runtime is running\n\n"
+        "No user input required right now.\n\n"
+        "_Keys: `F4` events window · `F3` drafts window · `f` compact/full events · `r` refresh · `q` quit watcher._"
+    )
 
 
 def _collect_drafts(run: dict[str, Any]) -> list[dict[str, Any]]:
@@ -391,6 +474,37 @@ def _collect_drafts(run: dict[str, Any]) -> list[dict[str, Any]]:
             drafts.extend(item for item in payload.get("edited_drafts", []) if isinstance(item, dict))
             drafts.extend(item for item in payload.get("drafts", []) if isinstance(item, dict))
     return drafts
+
+
+def _drafts_markdown(run: dict[str, Any]) -> str:
+    drafts = _collect_drafts(run)
+    if not drafts:
+        return "# Draft preview\n\n_No drafts yet._"
+    sections = ["# Draft preview"]
+    for index, draft in enumerate(drafts, start=1):
+        title = f"{draft.get('channel', 'unknown')} · {draft.get('status', 'draft')} · draft {index}"
+        text = _draft_text(draft) or "_No draft text yet._"
+        sections.append(f"## {title}\n\n{text}")
+    return "\n\n---\n\n".join(sections)
+
+
+def _events_markdown(run: dict[str, Any], *, show_full: bool) -> str:
+    events = run.get("events", [])
+    if not events:
+        return "# Event log\n\n_No events yet._"
+    visible_events = events if show_full else events[-12:]
+    sections = ["# Event log"]
+    if not show_full and len(events) > len(visible_events):
+        sections.append(f"_Showing last {len(visible_events)} of {len(events)} events. Press `f` or `e` for full payload visibility._")
+    for event in visible_events:
+        event_type = str(event.get("event_type", "unknown"))
+        created = _format_timestamp(event.get("created_at"))
+        payload = event.get("payload", {})
+        payload_json = json.dumps(payload, indent=2 if show_full else None, ensure_ascii=False, sort_keys=True)
+        if not show_full:
+            payload_json = _compact_payload(payload)
+        sections.append(f"## {event_type} · {created}\n\n```json\n{payload_json}\n```")
+    return "\n\n".join(sections)
 
 
 def _draft_text(draft: dict[str, Any]) -> str:
