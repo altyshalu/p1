@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any
 
 from l2l3_protocol.config import Settings
@@ -29,7 +30,8 @@ class HermesRuntime:
                 max_iterations=self.settings.hermes_max_iterations,
                 enabled_toolsets=enabled_toolsets,
             )
-            result: dict[str, Any] = agent.run_conversation(
+            result: dict[str, Any] = await asyncio.to_thread(
+                agent.run_conversation,
                 user_message=prompt,
                 system_message=system_message,
                 task_id=task_id,
