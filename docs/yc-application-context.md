@@ -2,7 +2,9 @@
 
 ## How long have the founders known one another and how did you meet? Have any of the founders not met in person?
 
-We have known each other for three months. We met through a startup development program run by the Kyrgyz Republic for startups going to Silicon Valley (Dive into Silicon Valley). Both of our previous startups won spots in the program, and we spent a month together in the US. During that trip we realized we wanted to build together and started working on this new product along with ABRT AI Lab. All founders have met in person.
+We have known each other for three months, but it has been an intense three months. We met through a Kyrgyz Republic startup program that sent both of our previous startups to Silicon Valley. Both teams won spots, and we spent a month together in the US living and working around the same startup house/community.
+
+That month was a real stress test: new country, long days, pitching, feedback, pressure, and constant plan changes. We saw how each other thinks, reacts under stress, handles feedback, and keeps working when things are messy. After that trip we decided to build together and started Taskforce with ABRT AI Lab. All founders have met in person.
 
 ## Who writes code, or does other technical work on your product? Was any of it done by a non-founder? Please explain.
 
@@ -18,7 +20,7 @@ Taskforce
 
 ## Describe what your company does in 50 characters or less.*
 
-Helps companies run and coordinate AI agents
+Coordination layer for AI agent teams
 
 ## Company URL, if any
 
@@ -34,11 +36,11 @@ taskforcehub.dev
 
 ## What is your company going to make? Please describe your product and what it does or will do.
 
-Taskforce is the coordination protocol that lets AI agents work autonomously and safely so humans don't get stuck in the middle doing dirty work.
+Every serious AI workflow has the same bottleneck: a human stuck in the middle, checking outputs, fixing failures, and babysitting agents. Taskforce is the coordination layer that removes that human from the middle safely.
 
-AI-native companies can't scale today because humans have to constantly babysit their agents—checking outputs, repairing failures, and managing chaos. Taskforce assigns work to specialized AI workers, checks their output against strict contracts, fixes errors automatically, and asks a human for approval only at strategic, real-world milestones. 
+A team gives Taskforce a workflow, and Taskforce breaks it into jobs, assigns each job to the right AI worker, checks the output, retries or repairs failures, preserves memory, and stops for human approval only when something important is about to happen in the real world.
 
-We are building the operating layer that turns raw LLM loops into a reliable, predictable digital workforce, keeping humans focused on strategy and judgment instead of back-office cleanup.
+The first use case is VC and company operations: sourcing startups, researching markets, doing diligence, preparing reports, supporting founders, and running internal workflows. We are building the coordination protocol that makes AI agents useful as a reliable workforce, not just as one-off chatbots.
 
 ## Where do you live now, and where would the company be based after YC?
 
@@ -50,13 +52,17 @@ Bishkek, Kyrgyz Republic / Palo Alto, USA
 
 ## How far along are you?
 
-Working prototype. We have built the core coordination runtime: the supervisor layer that takes a workflow, breaks it into bounded jobs for specialized AI workers, validates their outputs, and automatically runs repair loops when they fail. It also includes explicit approval gates for human sign-offs before any real-world action is committed.
+Working prototype. We are using Taskforce with ABRT AI Lab on real VC workflows, including startup sourcing, market research, diligence, reporting, founder support, and host/candidate discovery.
 
-We are running this live on real venture capital workflows with our partner, ABRT AI Lab, automating startup sourcing, diligence, and market research.
+One concrete workflow is a multi-agent host-finding pipeline: Taskforce researches candidates, verifies identity, checks relevance, deduplicates profiles, and prepares outreach context. The goal is to turn work that normally takes days of analyst time into a supervised AI workflow that runs in hours, with humans only reviewing edge cases and approvals.
+
+Under the hood, Taskforce breaks a workflow into bounded jobs, assigns each job to the right AI worker, checks outputs, retries or repairs failures, stores run state and memory, and requires human approval before external actions (e.g. outreach)
 
 ## How long have each of you been working on this? How much of that has been full-time? Please explain.
 
-We have both been working on this full-time for the past 3 months. In that time, we have built the core product ourselves end-to-end — from protocol architecture and agent systems to AI memory research, implementation, and product design. All technical work has been done directly by the two founders.
+We have both worked on this full-time for the past 3 months, usually 12-15 hours a day. The first month overlapped with the Silicon Valley startup program, where we lived and worked around the same startup house and tested whether we could handle pressure together. Since then we have been building Taskforce every day.
+
+In that time we built the core product ourselves end-to-end: protocol architecture, agent runtime, memory research, implementation, and product design. The time frame is short, but the working relationship has been intense: we have already made technical decisions quickly, handled ambiguity, disagreed and resolved it, and kept shipping under pressure.
 
 ## What tech stack are you using, or planning to use, to build this product? Include AI models and AI coding tools you use.
 
@@ -80,9 +86,9 @@ We have not participated in or committed to any incubator, accelerator, or pre-a
 
 ## Why did you pick this idea to work on? Do you have domain expertise in this area? How do you know people need what you're making?
 
-We picked this idea because we lived the problem ourselves. AI tools can make a founder faster, but only if they spend half their time managing the agents: breaking work into steps, correcting formats, fixing API timeouts, and checking outputs. That is the dirty work in the middle of every AI workflow.
+We picked this idea because we felt the problem ourselves. AI tools can make a founder much faster, but only if the founder keeps managing the agents: breaking work into steps, checking outputs, fixing failures, preserving context, and stopping unsafe actions. That is the dirty work in the middle of every AI workflow.
 
-Companies are racing to go AI-native, but there is no foundation for it. Without a coordination layer, they don't get autonomous operations—they get AI-assisted chaos with humans babysitting agents.
+Companies are racing to become AI-native, but the foundation is missing. Without a coordination layer, they do not get autonomous operations; they get AI-assisted chaos with humans babysitting agents.
 
 Our domain expertise comes from building agentic systems directly and from working with ABRT AI Lab/ABRT VC on real VC operating workflows. These workflows are perfect early examples: sourcing, diligence, research, founder support, investor matching, reporting, and portfolio operations are repetitive, high-value, multi-step, and require reliability.
 
@@ -90,19 +96,21 @@ We know people need this because every serious AI workflow we see has the same b
 
 ## Who are your competitors? What do you understand about your business that they don't?
 
-We do not think there is a perfect direct competitor yet. The closest products are Stilla, Rodin, Copyl, Blue Prism WorkHQ, RunState Workforce, and Paperclip. They overlap with us because they also treat AI as workers, teammates, or managed automation.
+We do not think there is a perfect direct competitor yet. The closest products are Stilla, Rodin, Copyl, and Paperclip. They overlap with us because they also treat AI as workers, teammates, or managed automation.
 
-Most of them focus on selling agents, AI teammates, or enterprise automation. We are focused on the coordination layer underneath: how work gets assigned, how outputs get checked, how failures get repaired, how memory stays clean, and when a human must approve a real-world action.
+The architectural mistake we think most of the market is making is starting from the worker. They try to make better agents, more agents, or usual harness of agents. But in real company workflows, the hard part is not creating another agent. The hard part is coordinating many imperfect agents so they can do useful work without a human babysitting every step.
 
-What we understand differently is that AI-native companies will not scale by adding more individual agents. They need a protocol for managing AI labor safely and autonomously. The durable product is the operating layer that keeps humans on strategy and edge cases, not babysitting agents in the middle of every task.
+Without a coordination layer, adding more agents creates more failure modes: duplicated work, lost context, unchecked outputs, unclear ownership, and unsafe external actions. Taskforce starts from the management layer: assigning work, checking outputs, repairing failures, preserving memory, and escalating only the decisions that actually need a human (and further trying to minimize human interaction after gathering feedback).
 
 ## How do or will you make money? How much could you make?
 
-We will make money as B2B software for companies that run high-value recurring workflows with AI workers. The initial model is a subscription for the coordination runtime plus usage-based pricing for worker execution and managed enterprise deployments.
+We will make money as B2B software for companies that run recurring work through AI agents. The initial model is a subscription for the coordination runtime, plus usage-based pricing for agent execution and managed enterprise deployments.
 
-Early pricing: $1k-$5k/month for small teams running a few critical workflows; $25k-$100k/year for larger companies or funds that need custom playbooks, private deployment, governance, and integrations. For VC/fund operations, one customer can justify this if we save even one analyst hire or materially improve sourcing and diligence throughput.
+Early pricing will be $1k-$5k/month for startups and small teams running a few important workflows, and $25k-$250k/year for larger companies, funds, and operations-heavy businesses that need custom playbooks, private deployment, governance, integrations, and approval controls.
 
-If we become the operating layer for AI taskforces inside 10,000 companies at an average $25k/year, that is $250M ARR. The larger opportunity is that every company that hires people for repeatable knowledge work will eventually also manage AI workers, and that requires infrastructure.
+The market is much larger than the current "AI agents" software category. Salesforce is a $41B+ revenue company for managing customer workflows, ServiceNow is a $12B+ subscription revenue company for managing enterprise workflows, and Workday is a $9B+ revenue company for managing people and finance workflows. If AI workers become a new labor layer inside companies, they will need their own operating layer.
+
+A realistic path to $1B ARR is 20,000 companies paying an average of $50k/year, or 5,000 larger customers paying $200k/year. If Taskforce becomes the coordination layer for AI-native work, the upside is multi-billion ARR.
 
 ## If you had any other ideas you considered applying with, please list them. One may be something we've been waiting for. Often when we fund people it's to do something they list here and not in the main application.
 
@@ -120,15 +128,27 @@ A developer platform focused only on testing, evaluating, and repairing agent wo
 
 ## If you have not formed the company yet, describe the planned equity ownership breakdown among the founders, employees and any other proposed stockholders. If there are multiple founders, be sure to give the proposed equity ownership of each founder and founder title (e.g. CEO). (This question is as much for you as us.)
 
-Nikita Nosov, CEO: 47%
-Altynai, CTO: 33%
-ABRT-related strategic partner: 20%
+Planned ownership before incorporation:
 
-We expect founder equity to vest on a standard schedule, and we will finalize the ABRT-related economics in legal docs before incorporation.
+Nikita Nosov, CEO: 45%
+Altynai, CTO: 30%
+ABRT-related strategic partner: 25%
+
+Nikita has the largest share because he is the original founder, primary product lead, and primary builder of the core runtime and company direction. He leads product, engineering execution, fundraising, customer development, and go-to-market.
+
+Altynai has a major founder share because she is a technical cofounder building full-time with Nikita. She writes code, leads AI architecture and memory systems, and contributes directly to the core product, including agent memory, knowledge graphs, cross-session recall, and technical research.
+
+The ABRT-related strategic partner share reflects the incubation period, early product and workflow access, AI Lab/VC domain contribution, and their role as our first design partner for real VC workflows. This structure is still subject to final legal documentation before incorporation. We expect founder equity to vest on a standard 4-year schedule with a 1-year cliff, and we plan to create an employee option pool at the first priced round.
 
 ## What convinced you to apply to Y Combinator? Did someone encourage you to apply? Have you been to any YC events?
 
-YC partners' videos on Instagram pushed us to apply. The main reason is that YC is unusually direct about what matters: build something people want, talk to users, move fast, and be honest about progress. That is the environment we want around us while we turn Taskforce from a working prototype into a company. We have not attended YC events yet.
+We chose YC specifically because Taskforce needs exactly what YC is best at: turning a working prototype into a company by forcing us to talk to users, narrow the wedge, and move much faster.
+
+We studied YC companies like Zapier and Retool. Zapier showed that workflow automation can become a huge company by starting with a painful coordination problem. Retool showed that companies will adopt new internal infrastructure when it helps them run operations faster without replacing their whole stack. We think AI-native companies need the next version of that: infrastructure for coordinating AI workers.
+
+YC would help us most with three things: getting our first US customers beyond ABRT, pressure-testing the wedge with founders and operators who are already trying to run AI-native companies, and relocating/building from the Bay Area where the AI startup ecosystem is concentrated.
+
+We are not applying to accelerators generally. We are applying to YC because it is the place where the density of AI founders, early adopters, and blunt feedback is highest.
 
 ## How did you hear about Y Combinator?
 
