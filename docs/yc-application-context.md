@@ -18,7 +18,7 @@ Taskforce
 
 ## Describe what your company does in 50 characters or less.*
 
-Helps companies run AI agents safely
+Helps companies run and coordinate AI agents
 
 ## Company URL, if any
 
@@ -34,9 +34,11 @@ taskforcehub.dev
 
 ## What is your company going to make? Please describe your product and what it does or will do.
 
-Taskforce helps AI-native companies run real work through AI agents without keeping humans stuck in every step. A team gives Taskforce a workflow, and Taskforce breaks it into jobs, assigns each job to the right agent, checks the output, retries or repairs failures, preserves memory, and stops for human approval only when something important is about to happen in the real world.
+Taskforce is the coordination protocol that lets AI agents work autonomously and safely so humans don't get stuck in the middle doing dirty work.
 
-The first use case is VC and company operations: sourcing startups, researching markets, doing diligence, preparing reports, supporting founders, and running internal workflows. We are building the coordination protocol that makes AI agents useful as a reliable workforce, not just as one-off chatbots.
+AI-native companies can't scale today because humans have to constantly babysit their agents—checking outputs, repairing failures, and managing chaos. Taskforce assigns work to specialized AI workers, checks their output against strict contracts, fixes errors automatically, and asks a human for approval only at strategic, real-world milestones. 
+
+We are building the operating layer that turns raw LLM loops into a reliable, predictable digital workforce, keeping humans focused on strategy and judgment instead of back-office cleanup.
 
 ## Where do you live now, and where would the company be based after YC?
 
@@ -48,9 +50,9 @@ Bishkek, Kyrgyz Republic / Palo Alto, USA
 
 ## How far along are you?
 
-Working prototype. We have built the core loop: Taskforce can take a workflow, turn it into bounded jobs for AI workers, route those jobs to the right worker, check the results, retry or repair failures, store run state and memory, and require human approval before external actions.
+Working prototype. We have built the core coordination runtime: the supervisor layer that takes a workflow, breaks it into bounded jobs for specialized AI workers, validates their outputs, and automatically runs repair loops when they fail. It also includes explicit approval gates for human sign-offs before any real-world action is committed.
 
-We are using this with ABRT AI Lab/ABRT VC on real VC workflows like startup sourcing, market research, diligence, reporting, and founder support.
+We are running this live on real venture capital workflows with our partner, ABRT AI Lab, automating startup sourcing, diligence, and market research.
 
 ## How long have each of you been working on this? How much of that has been full-time? Please explain.
 
@@ -78,9 +80,9 @@ We have not participated in or committed to any incubator, accelerator, or pre-a
 
 ## Why did you pick this idea to work on? Do you have domain expertise in this area? How do you know people need what you're making?
 
-We picked this idea because we felt the problem ourselves. AI tools can make a founder much faster, but only if the founder keeps managing the agents: breaking work into steps, checking outputs, fixing failures, preserving context, and stopping unsafe actions. That is the dirty work in the middle of every AI workflow.
+We picked this idea because we lived the problem ourselves. AI tools can make a founder faster, but only if they spend half their time managing the agents: breaking work into steps, correcting formats, fixing API timeouts, and checking outputs. That is the dirty work in the middle of every AI workflow.
 
-Companies are racing to become AI-native, but the foundation is missing. Without a coordination layer, they do not get autonomous operations; they get AI-assisted chaos with humans babysitting agents.
+Companies are racing to go AI-native, but there is no foundation for it. Without a coordination layer, they don't get autonomous operations—they get AI-assisted chaos with humans babysitting agents.
 
 Our domain expertise comes from building agentic systems directly and from working with ABRT AI Lab/ABRT VC on real VC operating workflows. These workflows are perfect early examples: sourcing, diligence, research, founder support, investor matching, reporting, and portfolio operations are repetitive, high-value, multi-step, and require reliability.
 
