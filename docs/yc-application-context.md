@@ -6,7 +6,7 @@ We have known each other for three months. We met through a startup development 
 
 ## Who writes code, or does other technical work on your product? Was any of it done by a non-founder? Please explain.
 
-All technical work is done exclusively by the founders. Nikita is our lead engineer -- he builds the core L2/L3 protocol, implements the agent architecture, and handles all production code. Altynai is our AI research engineer and Head of AI Memory, focused on agent memory systems, including knowledge graphs, cross-session recall, and competitive technical analysis. She also designed our proprietary CLARK semantic memory algorithm for durable project knowledge, tool memory, and rule-based cross-session retrieval. No non-founders touch the codebase.
+All technical work is done exclusively by the founders. Nikita is our lead engineer — he builds the core L2/L3 protocol, implements the agent architecture, and handles all production code. Altynai is our AI research engineer and Head of AI Memory, focused on agent memory systems, including knowledge graphs, cross-session recall, and competitive technical analysis. She also designed our proprietary CLARK semantic memory algorithm for durable project knowledge, tool memory, and rule-based cross-session retrieval. No non-founders touch the codebase.
 
 ## Are you looking for a cofounder?
 
@@ -18,7 +18,7 @@ Taskforce
 
 ## Describe what your company does in 50 characters or less.*
 
-It helps companies manage teams of AI workers.
+Helps companies run AI agents safely
 
 ## Company URL, if any
 
@@ -34,9 +34,9 @@ taskforcehub.dev
 
 ## What is your company going to make? Please describe your product and what it does or will do.
 
-Taskforce is a coordination runtime for AI taskforces. It lets a high-level AI supervisor manage specialized AI workers through typed Work Orders, approved tools, eval gates, retry policies, memory rules, and human approval gates for external actions.
+Taskforce helps AI-native companies run real work through AI agents without keeping humans stuck in every step. A team gives Taskforce a workflow, and Taskforce breaks it into jobs, assigns each job to the right agent, checks the output, retries or repairs failures, preserves memory, and stops for human approval only when something important is about to happen in the real world.
 
-Today, running multi-step agent work is still too manual: a human has to prompt, re-prompt, inspect failures, decide what to retry, and prevent the agent from silently doing unsafe things. We are building the layer that turns that messy process into a reliable operating system for AI workers. The first use case is automating real operational workflows for AI-native companies and VC workflows: sourcing, research, diligence, founder support, reporting, and distribution.
+The first use case is VC and company operations: sourcing startups, researching markets, doing diligence, preparing reports, supporting founders, and running internal workflows. We are building the coordination protocol that makes AI agents useful as a reliable workforce, not just as one-off chatbots.
 
 ## Where do you live now, and where would the company be based after YC?
 
@@ -48,11 +48,13 @@ Bishkek, Kyrgyz Republic / Palo Alto, USA
 
 ## How far along are you?
 
-Working prototype. We have built the core orchestration runtime: a supervisor layer that creates bounded Work Orders, a worker execution layer, a Taskforce Hub for approved workers/tools/evals/playbooks, eval gates, retry/repair loops, Incident Briefs, and explicit approval gates for external actions. We also have the real partners to work with, starting with ABRT AI Lab/ABRT VC workflows.
+Working prototype. We have built the core loop: Taskforce can take a workflow, turn it into bounded jobs for AI workers, route those jobs to the right worker, check the results, retry or repair failures, store run state and memory, and require human approval before external actions.
+
+We are using this with ABRT AI Lab/ABRT VC on real VC workflows like startup sourcing, market research, diligence, reporting, and founder support.
 
 ## How long have each of you been working on this? How much of that has been full-time? Please explain.
 
-We have both been working on this full-time for the past 3 months. In that time, we have built the core product ourselves end-to-end -- from protocol architecture and agent systems to AI memory research, implementation, and product design. All technical work has been done directly by the two founders.
+We have both been working on this full-time for the past 3 months. In that time, we have built the core product ourselves end-to-end — from protocol architecture and agent systems to AI memory research, implementation, and product design. All technical work has been done directly by the two founders.
 
 ## What tech stack are you using, or planning to use, to build this product? Include AI models and AI coding tools you use.
 
@@ -76,19 +78,21 @@ We have not participated in or committed to any incubator, accelerator, or pre-a
 
 ## Why did you pick this idea to work on? Do you have domain expertise in this area? How do you know people need what you're making?
 
-We picked this idea because we hit the problem ourselves. With current AI tools, a capable founder can get a lot done, but only by acting as the manager: breaking work into tasks, supervising agents, checking outputs, retrying failures, preserving context, and stopping unsafe external actions. That human management (and micro-management) layer is the bottleneck.
+We picked this idea because we felt the problem ourselves. AI tools can make a founder much faster, but only if the founder keeps managing the agents: breaking work into steps, checking outputs, fixing failures, preserving context, and stopping unsafe actions. That is the dirty work in the middle of every AI workflow.
 
-Our domain expertise comes from building agentic systems directly and from working with ABRT AI Lab/ABRT VC on real VC operating workflows. ABRT's venture background gives us access to concrete, high-value workflows: startup sourcing, diligence, founder support, investor matching, portfolio operations, and reporting. These are not toy automations; they are messy, judgment-heavy, multi-step processes where reliability matters.
+Companies are racing to become AI-native, but the foundation is missing. Without a coordination layer, they do not get autonomous operations; they get AI-assisted chaos with humans babysitting agents.
 
-We know people need this because the same pattern appears in every serious AI workflow we see: companies do not just need another chatbot or single-purpose agent. They need a way to coordinate many AI workers, enforce boundaries, evaluate work, learn from failures, and keep humans in the loop only when judgment or external action is required.
+Our domain expertise comes from building agentic systems directly and from working with ABRT AI Lab/ABRT VC on real VC operating workflows. These workflows are perfect early examples: sourcing, diligence, research, founder support, investor matching, reporting, and portfolio operations are repetitive, high-value, multi-step, and require reliability.
+
+We know people need this because every serious AI workflow we see has the same bottleneck: the human is still stuck in the loop doing operational cleanup. Taskforce moves humans back to strategy, judgment, and edge cases instead of keeping them in the middle of every task.
 
 ## Who are your competitors? What do you understand about your business that they don't?
 
-We do not think there is a perfect direct competitor yet. The closest products are Stilla, Rodin, Copyl, Blue Prism WorkHQ, RunState Workforce, and Paperclip. They overlap with us because they all treat AI as workers/teammates or try to coordinate agentic work.
+We do not think there is a perfect direct competitor yet. The closest products are Stilla, Rodin, Copyl, Blue Prism WorkHQ, RunState Workforce, and Paperclip. They overlap with us because they also treat AI as workers, teammates, or managed automation.
 
-The difference is that most of them sell agents, AI teammates, enterprise automation, or a managed workspace. We are building the underlying coordination runtime: a command layer that decides which worker should do what, validates Work Orders, controls tools, checks outputs with evals, handles retries/repairs, keeps memory clean, and gates external actions.
+Most of them focus on selling agents, AI teammates, or enterprise automation. We are focused on the coordination layer underneath: how work gets assigned, how outputs get checked, how failures get repaired, how memory stays clean, and when a human must approve a real-world action.
 
-Our bet is that once companies depend on AI workers, the bottleneck is not making another worker. The bottleneck is managing many workers reliably. The durable product is the operating layer that makes AI labor inspectable, bounded, and safe enough for real business operations.
+What we understand differently is that AI-native companies will not scale by adding more individual agents. They need a protocol for managing AI labor safely and autonomously. The durable product is the operating layer that keeps humans on strategy and edge cases, not babysitting agents in the middle of every task.
 
 ## How do or will you make money? How much could you make?
 
