@@ -1,6 +1,6 @@
 # YC Coding Agent Session: Building a Disciplined L2/L3 Agent Runtime
 
-This is a curated, sanitized excerpt from a longer Codex Desktop session.
+This is a curated, sanitized excerpt from a longer Codex Desktop session. The full sanitized export is much larger; this file is meant to be readable while still showing enough of the real engineering loop to be useful for YC's optional coding-agent-session prompt.
 
 The original session was mostly in Russian. The transcript excerpts below are translated or lightly compressed for readability, while preserving the actual sequence: critique -> plan -> implementation -> verification. Secrets, local paths, long tool logs, binary payloads, and unrelated compaction dumps were removed.
 
@@ -22,7 +22,17 @@ The important engineering principle in this session was: no fake success. No hid
 
 ## Outcome
 
-The session moved the system from a mostly declarative protocol skeleton to a runtime with real enforcement:
+The larger session moved the system through several layers:
+
+- First, we clarified the product philosophy: L2 should be the thinking/supervision layer and L3 should be the bounded execution layer.
+- Then we designed an external memory stack instead of using Hermes-native memory.
+- Then we implemented the first real runtime with FastAPI, Postgres working memory, agentmemory episodic memory, Mem0/Qdrant semantic memory, and Git-backed procedural registries.
+- Then we built and iterated on cockpit/live observability so the user could watch L2/L3 runs.
+- Then we audited the implementation against the philosophy and found that too much of the discipline was still decorative.
+- Then we implemented the missing runtime discipline: contract enforcement, eval enforcement, retry/failure context, and DB/API-backed registry marketplace.
+- Finally, we removed demo/fallback behavior, fixed a real async blocking bug around Hermes/LLM calls, rebuilt the Docker stack, and verified real services.
+
+The most important coding milestone in the session moved the system from a mostly declarative protocol skeleton to a runtime with real enforcement:
 
 - DB/API-backed registry marketplace for tools, workers, evals, process packs, failure patterns, and registry change candidates.
 - Contract validation before and after L3 execution.
@@ -41,12 +51,143 @@ uv run pytest
 
 ## Session Arc
 
-The useful part of the session had four phases:
+The central implementation arc had four phases:
 
 1. Audit the implementation against the L2/L3 philosophy.
 2. Identify where the code was too decorative: eval fields, retry policy, side-effect policy, and registry evolution existed mostly as data/prompt discipline, not runtime behavior.
 3. Convert that critique into a concrete implementation plan.
 4. Implement with a TDD loop and verify the full suite.
+
+---
+
+# 0. Broader Session Context
+
+This section gives the surrounding context that led to the implementation excerpt. It is included because the full session was not just a single feature request; it was a progression from product philosophy to system architecture to real runtime behavior.
+
+## Product Thesis: L2/L3 Communication
+
+The initial philosophy was that AI work should be split into two layers:
+
+- L2: a supervisor/reasoning layer that decides what should happen.
+- L3: a bounded execution layer made of workers, scripts, tools, evaluators, adapters, and human gates.
+
+The user wanted a system where humans primarily answer “what” and agents handle “how,” without losing visibility or safety.
+
+The working thesis became:
+
+> L2 should not directly do all work. It should inspect run state, choose bounded actions, delegate to registered L3 workers, receive artifacts/evals/failures, and decide whether to retry, repair, ask the user, finish, or escalate.
+
+The critical constraint:
+
+> The system should create agentic leverage without letting agents silently invent reality. L2 can be dynamic, but L3 execution must be contract-bound, observable, evaluated, and constrained by registries and approval policies.
+
+## Memory Architecture
+
+A major early decision was to avoid relying on Hermes built-in memory. The session separated memory into four explicit layers:
+
+- Working memory: short-lived run state, tasks, events, artifacts, approvals.
+- Episodic memory: traces, failures, retries, outcomes, run history.
+- Semantic memory: durable knowledge about projects, tools, entities, rules.
+- Procedural memory: skills, runbooks, process packs, worker profiles, eval specs, policies.
+
+The chosen v1 stack:
+
+```text
+working memory   = Postgres state store
+episodic memory  = agentmemory REST sidecar
+semantic memory  = Mem0 with local Qdrant
+procedural memory = Git-backed registry files
+```
+
+Later, procedural registry moved toward DB/API-backed marketplace while keeping YAML as explicit seed/import data.
+
+The runtime setup document captured this:
+
+```text
+This runtime keeps protocol memory outside Hermes built-in memory:
+
+- working memory: Postgres
+- episodic memory: agentmemory REST sidecar
+- semantic memory: Mem0 library with local Qdrant
+- procedural memory: Git-backed registries/
+```
+
+That memory split mattered because the system was not supposed to be “one chatbot with context.” It was supposed to be a traceable runtime where each kind of state has a purpose.
+
+## First Runtime Shape
+
+Before the marketplace/enforcement work, the system already had a real local stack:
+
+```text
+Python 3.13
+uv
+FastAPI
+Hermes
+Postgres
+agentmemory
+Mem0
+Qdrant
+Docker Compose
+JSONL logs
+```
+
+The local setup flow was:
+
+```text
+docker compose up --build
+uv run l2l3-cockpit
+```
+
+The first generic API shape included:
+
+```text
+POST /runs
+GET  /runs/{id}
+POST /runs/{id}/messages
+POST /runs/{id}/control
+GET  /runs/{id}/events/stream
+```
+
+The first dogfood process was `build-in-public`: use trend/source signals, produce content drafts, evaluate them, and stop before external publishing for human approval.
+
+The system stored run/task state in Postgres so the process could be inspected:
+
+> Runtime creates a `TaskContract` and stores it in Postgres. It also stores events, artifacts, and eval results, so the whole process is trackable.
+
+## Observability And Cockpit Work
+
+The user wanted the system to be transparent and friendly, not a black box. The session explored both TUI and web cockpit directions. The original TUI experiment was rejected by the user as not good enough, which led to a cleaner direction:
+
+- API-first runtime.
+- Web cockpit or live terminal watcher as visibility layer.
+- No separate fancy UI until the runtime semantics were correct.
+- Show chat/messages, events, worker tasks, artifacts, evals, and run controls.
+
+The important point was not the UI aesthetics. The important product requirement was:
+
+> The user should be able to see the internal kitchen of the L2/L3 run in a user-understandable way, with enough detail to debug or trust the system.
+
+That observability requirement later shaped the live CLI changes: full event payload toggle, compact/full event view, better task/event rendering, and run controls.
+
+## No-Fallback Trust Boundary
+
+A central rule emerged during the session:
+
+> No demos, no fallbacks, no mocks, no fake/example data, no synthetic stand-ins, no silent degraded behavior unless explicitly requested.
+
+The reason was practical, not aesthetic:
+
+> Demo/fallback/mock behavior can make the owner believe the system works when only a substitute path works. That is a trust failure.
+
+This rule was later saved into agentmemory and project instructions, and it affected implementation decisions:
+
+- Missing inputs should fail explicitly.
+- Missing workers/evals/tools should fail explicitly.
+- Runtime should not fabricate artifacts.
+- CLI should not create runs from embedded demo data.
+- Tests may use fakes, but production paths must not.
+
+The session later enforced this in code by removing a `demo` path from the live CLI and requiring real source files for real runs.
 
 ---
 
@@ -403,7 +544,176 @@ uv run pytest
 
 ---
 
-# 6. Why This Matters
+# 6. Real Services, Debugging, And Follow-Through
+
+The larger session did not stop at “tests pass.” Several follow-up loops mattered because they showed whether the runtime worked as a system, not just as code.
+
+## Docker Stack Verification
+
+After implementation, the user started Docker and asked Codex to run the system. Codex brought up the real services rather than substituting a local fake path.
+
+The verified services included:
+
+```text
+app        = FastAPI runtime
+postgres   = working memory database
+qdrant     = semantic memory vector store
+agentmemory = episodic memory sidecar
+```
+
+Codex reported:
+
+```text
+docker compose up -d --build
+app running on localhost
+Postgres healthy
+Qdrant running
+agentmemory running
+API health OK
+Registry synced: 23 items
+```
+
+This part mattered because it validated that the protocol runtime was not just a local Python object graph. It had actual service boundaries, migrations, registry sync, and runtime APIs.
+
+## Real LLM Path
+
+The user asked which LLM was writing drafts.
+
+Codex traced the real path:
+
+```text
+worker: trend-draft-writer
+worker_type: hermes_agent
+runtime: HermesRuntime
+model: deepseek-v4-flash
+base URL: DeepSeek-compatible API endpoint
+```
+
+The answer made the execution path explicit: drafts were written by a Hermes agent worker through the configured model provider, not by a hidden stub.
+
+## Bug: Hermes Blocking The FastAPI Event Loop
+
+During a real live run, the user hit a timeout in the live dashboard.
+
+The user-visible symptom:
+
+```text
+uv run l2l3-live demo trend-radar
+Status: running
+Dashboard polling /runs/{id} times out
+```
+
+Codex investigated and diagnosed that the issue was not simply a TUI rendering problem:
+
+> The cause looks like the server, not the TUI: the LLM/Hermes call was running synchronously inside the async runtime and could block the FastAPI event loop. The pipeline was running, but `/runs/{id}` could not respond to polling, so the dashboard timed out.
+
+Fix:
+
+- Move Hermes conversation execution off the FastAPI event loop into a separate thread.
+- Keep the runtime path real; do not replace Hermes with a fake provider.
+- Add tests around the Hermes runtime behavior.
+- Improve live event rendering.
+
+Codex summarized the fix:
+
+```text
+Main timeout cause: Hermes/LLM call blocked the async API event loop.
+Now Hermes conversation runs in a separate thread.
+```
+
+It also improved the live watcher:
+
+- `f` toggles compact/full event payload.
+- `q` exits watcher without stopping the run.
+- Event payloads render as JSON rather than truncated Python repr.
+- The dashboard shows clearer colors, controls, task tables, and event details.
+
+Verification after the fix:
+
+```text
+uv run pytest
+28 passed
+
+docker compose up -d --build
+GET /health -> ok
+registry sync -> {"synced": 23}
+```
+
+Commits from that loop:
+
+```text
+fix(runtime): offload hermes conversations
+feat(cli): toggle expanded event payloads
+```
+
+This was a useful example of the agent debugging a production-shaped integration issue: the code was “working,” but the observability layer could not poll because blocking I/O froze the API loop.
+
+## No-Fallback Enforcement In The CLI
+
+The session also found a trust-boundary problem: a `demo` command and embedded example data could make the system look operational without real inputs.
+
+The user challenged that pattern. Codex agreed and fixed it:
+
+> This was a bad pattern: `demo` plus embedded `example/*` data could create the false feeling that a real pipeline works.
+
+Changes:
+
+- Removed `l2l3-live demo`.
+- Removed hardcoded fake/example sources.
+- Required real input files for real runs.
+- Updated help text to make the real command explicit.
+- Added tests to make sure the demo path was gone.
+- Saved the no-demo/no-fallback rule into agentmemory and project instructions.
+
+New CLI shape:
+
+```text
+l2l3-live start trend-radar --sources-file ./trend-sources.json --channel x
+```
+
+If there is no real source file, no run is created.
+
+Verification:
+
+```text
+uv run pytest
+30 passed
+
+curl /health
+{"status":"ok","service":"l2l3-protocol"}
+```
+
+Commit from that loop:
+
+```text
+fix(cli): require real trend radar inputs
+```
+
+This mattered because it turned a philosophical rule into product behavior. The runtime should not let a user accidentally confuse a demo with a real process.
+
+## Real Migration Verification
+
+Later in the session, Codex also checked migrations against a real Postgres instance rather than relying only on unit tests.
+
+When the default local Postgres port was occupied by another container, Codex did not mutate the unknown database. It started a temporary isolated Postgres on a random port, ran the actual Alembic upgrade, then removed the container.
+
+The reasoning:
+
+> The port is occupied by another local container, so I will not mutate that database. I will start a separate temporary Postgres with a random port, run the real `alembic upgrade head`, then delete the container.
+
+Verification:
+
+```text
+INFO [alembic.runtime.migration] Context impl PostgresqlImpl.
+alembic upgrade head completed on temporary Postgres
+container removed
+```
+
+This was another no-fallback example: real migration, real database engine, isolated from unrelated local services.
+
+---
+
+# 7. Why This Matters
 
 The session is not impressive because the agent wrote a lot of code. The useful signal is that the agent helped convert an abstract product philosophy into enforceable runtime behavior.
 
@@ -441,6 +751,9 @@ This session demonstrates several working habits:
 - We use tests as the interface between intent and implementation.
 - We let the agent continue past the first green test when it detects an architectural gap.
 - We keep the human in charge of strategic scope while delegating implementation detail.
+- We verify real services after code changes instead of stopping at a mocked success.
+- We treat observability and operator experience as part of the runtime, not as decoration.
+- We encode learned operating rules into memory and project instructions so they persist beyond one turn.
 
 ## Residual Caveats
 
@@ -450,6 +763,7 @@ This was still an early v1 implementation:
 - Marketplace UI was intentionally deferred.
 - Community-driven registry distribution was intentionally deferred.
 - Some operational hardening still belongs in later milestones.
+- Some fakes remained inside tests, but production runtime paths were tightened to require real inputs/integrations.
 
 Those caveats were deliberate scope control, not hidden limitations.
 
@@ -487,6 +801,59 @@ tests/test_settings_and_logging.py ..                  [ 91%]
 tests/test_web_cockpit.py ..                           [100%]
 
 24 passed in 0.71s
+```
+
+Additional verification from the larger session:
+
+```text
+uv run pytest
+28 passed
+
+docker compose up -d --build
+GET /health -> ok
+registry sync -> {"synced": 23}
+```
+
+After removing the demo path and requiring real input files:
+
+```text
+uv run pytest
+30 passed
+
+uv run l2l3-live --help
+usage: l2l3-live [-h] [--api-url API_URL] {start,watch} ...
+
+uv run l2l3-live start trend-radar --help
+--sources-file SOURCES_FILE
+--channel CHANNELS
+```
+
+Docker health evidence:
+
+```text
+curl /health
+{"status":"ok","service":"l2l3-protocol"}
+
+docker compose ps
+agentmemory running
+app running
+postgres healthy
+qdrant running
+```
+
+Representative commits from the broader session:
+
+```text
+feat(runtime): add review control actions
+feat(cli): add live run dashboard
+fix(runtime): offload hermes conversations
+feat(cli): toggle expanded event payloads
+fix(cli): require real trend radar inputs
+feat(runtime): adopt taskforce hub terminology
+feat(runtime)!: add explicit l2 execution and design modes
+fix(db): move local postgres to port 5434
+docs: add sanitized YC agent session export
+docs: add curated YC coding agent session
 ```
 
 Sanitization note:
