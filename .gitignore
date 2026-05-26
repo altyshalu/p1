@@ -4,6 +4,8 @@
 .antigravitycli/
 logs/*.jsonl
 logs/*.log
+docs/codex-session-*.md
+docs/*.md.save
 __pycache__/
 .pytest_cache/
 .ruff_cache/
