@@ -1,12 +1,8 @@
 # YC Coding Agent Session: Building a Disciplined L2/L3 Agent Runtime
 
-This is a curated, sanitized excerpt from a longer Codex Desktop session. The full sanitized export is much larger; this file is meant to be readable while still showing enough of the real engineering loop to be useful for YC's optional coding-agent-session prompt.
+This is a curated, sanitized excerpt from a longer Codex Desktop session. The original export is much larger; this file is meant to be readable while still showing enough of the real engineering loop to be useful for YC's optional coding-agent-session prompt.
 
 The original session was mostly in Russian. The transcript excerpts below are translated or lightly compressed for readability, while preserving the actual sequence: critique -> plan -> implementation -> verification. Secrets, local paths, long tool logs, binary payloads, and unrelated compaction dumps were removed.
-
-Full sanitized export available locally:
-
-`docs/yc-codex-session-019e5c94-sanitized.md`
 
 ## Why This Session Is Representative
 
