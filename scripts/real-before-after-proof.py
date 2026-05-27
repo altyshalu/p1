@@ -32,7 +32,7 @@ def require_run_with_diagnosis(api_url: str, run_id: str) -> dict[str, Any]:
     return run
 
 
-def require_approved_proposal(api_url: str, proposal_id: str | None, baseline_run_id: str) -> dict[str, Any]:
+def require_implemented_proposal(api_url: str, proposal_id: str | None, baseline_run_id: str) -> dict[str, Any]:
     if proposal_id is None:
         query = urlencode({"run_id": baseline_run_id})
         proposals = request_json(f"{api_url}/improvement-proposals?{query}")
@@ -46,8 +46,11 @@ def require_approved_proposal(api_url: str, proposal_id: str | None, baseline_ru
         proposal = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
         if proposal is None:
             raise RuntimeError(f"improvement proposal not found: {proposal_id}")
-    if proposal.get("status") != "approved":
-        raise RuntimeError(f"proposal must be approved before before/after proof: {proposal.get('id')} status={proposal.get('status')}")
+    if proposal.get("status") != "implemented":
+        raise RuntimeError(f"proposal must be marked implemented before before/after proof: {proposal.get('id')} status={proposal.get('status')}")
+    proof_spec = proposal.get("proof_spec")
+    if not isinstance(proof_spec, dict) or proof_spec.get("real_run_required") is not True:
+        raise RuntimeError(f"proposal has no real-run proof spec: {proposal.get('id')}")
     return proposal
 
 
@@ -108,9 +111,10 @@ def main() -> None:
         raise RuntimeError(f"real API health check failed: {health}")
 
     baseline = require_run_with_diagnosis(api_url, args.baseline_run_id)
-    proposal = require_approved_proposal(api_url, args.proposal_id, args.baseline_run_id)
+    proposal = require_implemented_proposal(api_url, args.proposal_id, args.baseline_run_id)
     before = baseline["diagnosis"]
-    before_signature = proposal.get("failure_signature", "unknown")
+    proof_spec = proposal["proof_spec"]
+    before_signature = proof_spec.get("expected_absent_signature") or proposal.get("failure_signature", "unknown")
 
     created = request_json(
         f"{api_url}/runs",
@@ -125,9 +129,12 @@ def main() -> None:
     repeated_signature = any(isinstance(item, dict) and item.get("failure_signature") == before_signature for item in after_proposals)
     if after.get("root_cause") == before.get("root_cause") and repeated_signature:
         raise RuntimeError(
-            "before/after proof failed: after run repeated the approved proposal failure "
+            "before/after proof failed: after run repeated the implemented proposal failure "
             f"root_cause={after.get('root_cause')} signature={before_signature}"
         )
+    proven = request_json(f"{api_url}/improvement-proposals/{proposal['id']}/mark-proven", method="POST")
+    if not isinstance(proven, dict) or proven.get("status") != "proven":
+        raise RuntimeError(f"proposal proof passed but mark-proven failed: {proven}")
 
     print(
         json.dumps(
@@ -139,6 +146,7 @@ def main() -> None:
                     "proposal_type": proposal.get("proposal_type"),
                     "target_component": proposal.get("target_component"),
                     "failure_signature": proposal.get("failure_signature"),
+                    "status_after_proof": proven.get("status"),
                 },
                 "before": {
                     "status": baseline.get("status"),
