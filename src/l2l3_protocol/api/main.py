@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from l2l3_protocol.api.state import app_state, build_memory_router
 from l2l3_protocol.config import get_settings
 from l2l3_protocol.core.schemas import (
+    FailureLearningStatus,
     ImprovementProposalStatus,
     ProcessRun,
     ProcessRunCreate,
+    RecentSystemReviewCreate,
     RegistryChangeCandidateCreate,
     RegistryKind,
     RunControlCreate,
@@ -33,6 +35,7 @@ from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 from l2l3_protocol.runtime.diagnostics import analyze_run
+from l2l3_protocol.runtime.self_improvement import build_failure_learnings, build_recent_system_review, proposal_from_failure_learning
 
 
 @asynccontextmanager
@@ -120,6 +123,9 @@ async def execute_run(run_id: UUID) -> None:
                 for proposal in proposals:
                     await store.add_improvement_proposal(proposal)
                     await store.add_event(run_id, "improvement_proposal_created", proposal.model_dump(mode="json"))
+                learnings = await store.record_failure_learnings(build_failure_learnings(failed_state, diagnosis.payload, proposals))
+                for learning in learnings:
+                    await store.add_event(run_id, "failure_learning_recorded", learning.model_dump(mode="json"))
             get_logger("protocol.events").exception("background_run_failed", run_id=str(run_id), error_type=type(exc).__name__)
 
 
@@ -209,6 +215,73 @@ async def reject_improvement_proposal(proposal_id: UUID, payload: dict[str, str]
         raise HTTPException(status_code=404, detail="improvement proposal not found") from None
     await session.commit()
     return proposal.model_dump(mode="json")
+
+
+@app.post("/improvement-proposals/{proposal_id}/mark-implemented")
+async def mark_improvement_proposal_implemented(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    try:
+        proposal = await store.mark_improvement_proposal_implemented(proposal_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="improvement proposal not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return proposal.model_dump(mode="json")
+
+
+@app.post("/improvement-proposals/{proposal_id}/mark-proven")
+async def mark_improvement_proposal_proven(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    try:
+        proposal = await store.mark_improvement_proposal_proven(proposal_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="improvement proposal not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return proposal.model_dump(mode="json")
+
+
+@app.get("/failure-learnings")
+async def list_failure_learnings(
+    status: FailureLearningStatus | None = None,
+    playbook_key: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    learnings = await WorkingMemoryStore(session).list_failure_learnings(status=status, playbook_key=playbook_key)
+    return [learning.model_dump(mode="json") for learning in learnings]
+
+
+@app.post("/system-reviews/recent")
+async def create_recent_system_review(payload: RecentSystemReviewCreate, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    recent_runs = await store.list_recent_runs(limit=payload.limit, playbook_key=payload.playbook_key)
+    learnings = await store.list_failure_learnings(status=FailureLearningStatus.ACTIVE, playbook_key=payload.playbook_key)
+    review = build_recent_system_review(
+        recent_runs=recent_runs,
+        learnings=learnings,
+        limit=payload.limit,
+        playbook_key=payload.playbook_key,
+    )
+    created_proposal_ids: list[str] = []
+    for learning in learnings:
+        if learning.occurrence_count < 2:
+            continue
+        if await store.has_open_improvement_proposal(learning.failure_signature, learning.target_component):
+            continue
+        proposal = await store.add_improvement_proposal(proposal_from_failure_learning(learning))
+        created_proposal_ids.append(str(proposal.id))
+    review.created_proposal_ids = created_proposal_ids
+    review = await store.add_system_review(review)
+    await session.commit()
+    return review.model_dump(mode="json")
+
+
+@app.get("/system-reviews")
+async def list_system_reviews(playbook_key: str | None = None, session: AsyncSession = Depends(get_session)) -> list[dict]:
+    reviews = await WorkingMemoryStore(session).list_system_reviews(playbook_key=playbook_key)
+    return [review.model_dump(mode="json") for review in reviews]
 
 
 async def list_hub_items(kind: RegistryKind, session: AsyncSession) -> list[dict]:

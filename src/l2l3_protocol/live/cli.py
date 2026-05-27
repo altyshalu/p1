@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 
 from l2l3_protocol.live.client import LiveApiClient
 from l2l3_protocol.live.tui import LiveRunApp
@@ -30,6 +31,11 @@ def parse_args() -> argparse.Namespace:
     start.add_argument("--goal", default=DEFAULT_TREND_RADAR_GOAL)
     watch = subparsers.add_parser("watch")
     watch.add_argument("run_id")
+    review = subparsers.add_parser("review")
+    review_subparsers = review.add_subparsers(dest="review_command", required=True)
+    recent = review_subparsers.add_parser("recent")
+    recent.add_argument("--limit", type=int, default=50)
+    recent.add_argument("--playbook-key", default="build-in-public-trend-radar")
     return parser.parse_args()
 
 
@@ -48,9 +54,19 @@ async def watch_run(api_url: str, run_id: str) -> None:
     await LiveRunApp(api_url=api_url, run_id=run_id).run_async()
 
 
+async def review_recent_runs(api_url: str, limit: int, playbook_key: str | None) -> None:
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    client = LiveApiClient(api_url)
+    review = await client.create_recent_system_review(limit=limit, playbook_key=playbook_key)
+    print(json.dumps(review, indent=2, ensure_ascii=False))
+
+
 def main() -> None:
     args = parse_args()
     if args.command == "start":
         asyncio.run(start_run(args.api_url, args.name, args.query, args.providers, args.channels, args.max_results, args.goal))
     elif args.command == "watch":
         asyncio.run(watch_run(args.api_url, args.run_id))
+    elif args.command == "review":
+        asyncio.run(review_recent_runs(args.api_url, args.limit, args.playbook_key))

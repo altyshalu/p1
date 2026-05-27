@@ -11,6 +11,7 @@ from l2l3_protocol.logging import get_logger
 from l2l3_protocol.memory.adapters import MemoryRouter, ProceduralRegistry
 from l2l3_protocol.runtime.work_orders import WorkOrderValidationError, validate_work_order_inputs, validate_work_order_output, validate_tool_policy
 from l2l3_protocol.runtime.diagnostics import analyze_run
+from l2l3_protocol.runtime.self_improvement import build_failure_learnings
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.l2_design_controller import L2DesignController
 from l2l3_protocol.runtime.l2_supervisor import L2Supervisor
@@ -243,6 +244,9 @@ class ProcessRuntime:
         for proposal in proposals:
             await self.store.add_improvement_proposal(proposal)
             await self.store.add_event(run_id, "improvement_proposal_created", proposal.model_dump(mode="json"))
+        learnings = await self.store.record_failure_learnings(build_failure_learnings(state, diagnosis.payload, proposals))
+        for learning in learnings:
+            await self.store.add_event(run_id, "failure_learning_recorded", learning.model_dump(mode="json"))
 
     async def _run_design_mode(self, run_id: UUID, state: dict[str, Any]) -> None:
         await self.store.set_run_status(run_id, RunStatus.RUNNING)

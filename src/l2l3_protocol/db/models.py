@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -129,7 +129,49 @@ class ImprovementProposalRecord(Base):
     risk: Mapped[str] = mapped_column(String)
     success_check: Mapped[str] = mapped_column(String)
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    behavior_change_requires_approval: Mapped[bool] = mapped_column(Boolean, default=True)
+    proof_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(40), index=True)
     rejection_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    implemented_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proven_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class FailureLearningRecord(Base):
+    __tablename__ = "failure_learnings"
+    __table_args__ = (UniqueConstraint("failure_signature", "target_component", name="uq_failure_learnings_signature_target"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    failure_signature: Mapped[str] = mapped_column(String(160), index=True)
+    target_component: Mapped[str] = mapped_column(String(160), index=True)
+    root_cause: Mapped[str] = mapped_column(String(120), index=True)
+    playbook_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    proposal_type: Mapped[str] = mapped_column(String(80), index=True)
+    learning_summary: Mapped[str] = mapped_column(String)
+    proposed_next_step: Mapped[str] = mapped_column(String)
+    risk: Mapped[str] = mapped_column(String)
+    success_check: Mapped[str] = mapped_column(String)
+    severity: Mapped[str] = mapped_column(String(40), index=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    first_seen_run_id: Mapped[str] = mapped_column(String(80))
+    last_seen_run_id: Mapped[str] = mapped_column(String(80), index=True)
+    evidence_refs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    run_ids: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SystemReviewRecord(Base):
+    __tablename__ = "system_reviews"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    scope: Mapped[str] = mapped_column(String(80), index=True)
+    playbook_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    run_count: Mapped[int] = mapped_column(Integer, default=0)
+    learning_count: Mapped[int] = mapped_column(Integer, default=0)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

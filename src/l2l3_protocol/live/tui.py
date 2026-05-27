@@ -482,9 +482,23 @@ def _run_verdict_markdown(run: dict[str, Any]) -> str:
         for proposal in proposals[:3]:
             if not isinstance(proposal, dict):
                 continue
+            proof = proposal.get("proof_spec", {})
+            proof_line = ""
+            if isinstance(proof, dict) and proof.get("expected_absent_signature"):
+                proof_line = f" Proof: repeat real run; absent `{proof.get('expected_absent_signature')}`."
             lines.append(
                 f"- `{proposal.get('proposal_type', 'unknown')}` · `{proposal.get('status', 'unknown')}`: "
-                f"{proposal.get('proposed_change', 'No proposed change recorded.')}"
+                f"{proposal.get('proposed_change', 'No proposed change recorded.')}{proof_line}"
+            )
+    learnings = run.get("failure_learnings", [])
+    if isinstance(learnings, list) and learnings:
+        lines.extend(["", "## Stored failure learnings"])
+        for learning in learnings[:3]:
+            if not isinstance(learning, dict):
+                continue
+            lines.append(
+                f"- `{learning.get('failure_signature', 'unknown')}` seen "
+                f"{learning.get('occurrence_count', '?')} time(s): {learning.get('proposed_next_step', 'No next step recorded.')}"
             )
     lines.extend(
         [

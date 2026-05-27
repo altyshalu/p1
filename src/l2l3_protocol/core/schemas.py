@@ -41,6 +41,7 @@ class ArtifactType(StrEnum):
     REGISTRY_CHANGE_CANDIDATE = "registry_change_candidate"
     PLAYBOOK_PROPOSAL = "playbook_proposal"
     RUN_DIAGNOSIS = "run_diagnosis"
+    SYSTEM_REVIEW = "system_review"
     DESIGN_REPORT = "design_report"
     GENERIC = "generic"
 
@@ -72,6 +73,15 @@ class ImprovementProposalStatus(StrEnum):
     PROPOSED = "proposed"
     APPROVED = "approved"
     REJECTED = "rejected"
+    IMPLEMENTED = "implemented"
+    PROVEN = "proven"
+    STALE = "stale"
+
+
+class FailureLearningStatus(StrEnum):
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+    STALE = "stale"
 
 
 class ProcessRunCreate(BaseModel):
@@ -228,7 +238,53 @@ class ImprovementProposal(BaseModel):
     risk: str
     success_check: str
     evidence: list[dict[str, Any]] = Field(default_factory=list)
+    behavior_change_requires_approval: bool = True
+    proof_spec: dict[str, Any] = Field(default_factory=dict)
     status: ImprovementProposalStatus = ImprovementProposalStatus.PROPOSED
     rejection_reason: str | None = None
+    approved_at: datetime | None = None
+    implemented_at: datetime | None = None
+    proven_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+
+class FailureLearning(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    failure_signature: str
+    target_component: str
+    root_cause: str
+    playbook_key: str | None = None
+    proposal_type: str
+    learning_summary: str
+    proposed_next_step: str
+    risk: str
+    success_check: str
+    severity: str = "medium"
+    occurrence_count: int = 1
+    first_seen_run_id: str
+    last_seen_run_id: str
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    run_ids: list[str] = Field(default_factory=list)
+    status: FailureLearningStatus = FailureLearningStatus.ACTIVE
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class SystemReview(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    scope: str = "recent_runs"
+    playbook_key: str | None = None
+    run_count: int = 0
+    learning_count: int = 0
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    created_proposal_ids: list[str] = Field(default_factory=list)
+    created_at: datetime | None = None
+
+
+class RecentSystemReviewCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(default=50, ge=1, le=250)
+    playbook_key: str | None = None

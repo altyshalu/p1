@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from l2l3_protocol.core.schemas import Artifact, ArtifactType, ImprovementProposal
+from l2l3_protocol.runtime.self_improvement import proof_spec_for_proposal
 
 
 INTERNAL_FAILURE_TO_ROOT_CAUSE = {
@@ -30,6 +31,8 @@ def analyze_run(state: dict[str, Any]) -> tuple[Artifact, list[ImprovementPropos
     improvement_needed = root_cause != "none" or bool(low_quality) or repeated_repair
     summary = _summary(state, outcome, root_cause, evidence, low_quality, repeated_repair)
     diagnosis_payload = {
+        "run_id": run_id,
+        "playbook_key": state.get("playbook_key"),
         "outcome": outcome,
         "root_cause": root_cause,
         "summary": summary,
@@ -197,6 +200,7 @@ def _proposal_from_diagnosis(run_id: str, diagnosis: dict[str, Any]) -> Improvem
     proposal_type = _proposal_type(root_cause)
     target_component = _target_component(root_cause, evidence, diagnosis.get("low_quality_evals", []))
     failure_signature = _failure_signature(root_cause, evidence)
+    success_check = "Repeat a comparable real run and verify the same root cause is absent while required evals still pass."
     return ImprovementProposal(
         run_id=UUID(run_id),
         source_run_id=run_id,
@@ -206,8 +210,17 @@ def _proposal_from_diagnosis(run_id: str, diagnosis: dict[str, Any]) -> Improvem
         problem=diagnosis["summary"],
         proposed_change=_proposed_change(root_cause, target_component, evidence, diagnosis.get("low_quality_evals", [])),
         risk="Behavior-changing improvements require explicit approval before implementation.",
-        success_check="Repeat a comparable real run and verify the same root cause is absent while required evals still pass.",
+        success_check=success_check,
         evidence=evidence,
+        behavior_change_requires_approval=True,
+        proof_spec=proof_spec_for_proposal(
+            baseline_run_id=run_id,
+            playbook_key=diagnosis.get("playbook_key"),
+            target_component=target_component,
+            failure_signature=failure_signature,
+            root_cause=root_cause,
+            success_check=success_check,
+        ),
     )
 
 

@@ -42,6 +42,10 @@ def test_failed_run_diagnosis_uses_incident_brief_evidence_and_proposes_improvem
     assert "Hugging Face provider repair" in proposals[0].proposed_change
     assert proposals[0].source_run_id == run["id"]
     assert proposals[0].evidence[0]["task_id"] == task_id
+    assert proposals[0].behavior_change_requires_approval is True
+    assert proposals[0].proof_spec["real_run_required"] is True
+    assert proposals[0].proof_spec["baseline_run_id"] == run["id"]
+    assert proposals[0].proof_spec["expected_absent_signature"] == "provider_no_results:trend-source-collector"
 
 
 def test_successful_run_with_no_incidents_records_no_improvement_needed() -> None:

@@ -8,6 +8,7 @@ from l2l3_protocol.config import Settings
 from l2l3_protocol.core.schemas import (
     Artifact,
     EvalResult,
+    FailureLearning,
     ImprovementProposal,
     MemoryWrite,
     ProcessRun,
@@ -31,6 +32,7 @@ class FakeStore:
         self.artifacts: list[Artifact] = []
         self.evals: list[EvalResult] = []
         self.improvement_proposals: list[ImprovementProposal] = []
+        self.failure_learnings: list[FailureLearning] = []
         self.events: list[dict[str, Any]] = []
         self.registry_items = yaml_registry_items(Path("registries"))
 
@@ -71,6 +73,7 @@ class FakeStore:
             "events": self.events,
             "diagnosis": next((artifact.payload for artifact in reversed(self.artifacts) if artifact.artifact_type.value == "run_diagnosis"), None),
             "improvement_proposals": [proposal.model_dump(mode="json") for proposal in self.improvement_proposals],
+            "failure_learnings": [learning.model_dump(mode="json") for learning in self.failure_learnings],
         }
 
     async def add_task(self, work_order: WorkOrder) -> WorkOrder:
@@ -96,6 +99,10 @@ class FakeStore:
     async def add_improvement_proposal(self, proposal: ImprovementProposal) -> ImprovementProposal:
         self.improvement_proposals.append(proposal)
         return proposal
+
+    async def record_failure_learnings(self, learnings: list[FailureLearning]) -> list[FailureLearning]:
+        self.failure_learnings.extend(learnings)
+        return learnings
 
     async def get_registry_item(self, kind: RegistryKind, key: str) -> RegistryItem | None:
         return next((item for item in self.registry_items if item.kind == kind and item.key == key), None)

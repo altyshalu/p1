@@ -161,6 +161,14 @@ def test_run_verdict_shows_diagnosis_and_improvement_proposals() -> None:
                 "proposal_type": "improve_tool",
                 "status": "proposed",
                 "proposed_change": "Improve provider repair guidance.",
+                "proof_spec": {"expected_absent_signature": "provider_no_results:trend-source-collector"},
+            }
+        ],
+        "failure_learnings": [
+            {
+                "failure_signature": "provider_no_results:trend-source-collector",
+                "occurrence_count": 2,
+                "proposed_next_step": "Improve provider repair guidance.",
             }
         ],
     }
@@ -171,6 +179,8 @@ def test_run_verdict_shows_diagnosis_and_improvement_proposals() -> None:
     assert "tool_or_provider_failure" in markdown
     assert "improve_tool" in markdown
     assert "Improve provider repair guidance." in markdown
+    assert "provider_no_results:trend-source-collector" in markdown
+    assert "Stored failure learnings" in markdown
 
 
 def test_compact_payload_preserves_toggle_signal() -> None:

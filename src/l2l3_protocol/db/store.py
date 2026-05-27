@@ -2,12 +2,14 @@ from typing import Any
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from l2l3_protocol.core.schemas import (
     Artifact,
     EvalResult,
+    FailureLearning,
+    FailureLearningStatus,
     ImprovementProposal,
     ImprovementProposalStatus,
     ProcessRun,
@@ -17,6 +19,7 @@ from l2l3_protocol.core.schemas import (
     RegistryItem,
     RegistryKind,
     RunStatus,
+    SystemReview,
     TaskStatus,
     WorkOrder,
 )
@@ -24,10 +27,12 @@ from l2l3_protocol.db.models import (
     ArtifactRecord,
     EvalResultRecord,
     EventRecord,
+    FailureLearningRecord,
     ImprovementProposalRecord,
     ProcessRunRecord,
     RegistryChangeCandidateRecord,
     RegistryItemRecord,
+    SystemReviewRecord,
     WorkOrderRecord,
 )
 from l2l3_protocol.hub.registry import apply_registry_change, is_safe_registry_change
@@ -81,6 +86,13 @@ class WorkingMemoryStore:
                 select(ImprovementProposalRecord).where(ImprovementProposalRecord.run_id == run_id).order_by(ImprovementProposalRecord.created_at)
             )
         ).scalars().all()
+        failure_learnings = (
+            await self.session.execute(
+                select(FailureLearningRecord)
+                .where(FailureLearningRecord.last_seen_run_id == str(run_id))
+                .order_by(FailureLearningRecord.updated_at)
+            )
+        ).scalars().all()
         artifacts_payload = [
             {
                 "id": str(artifact.id),
@@ -115,6 +127,7 @@ class WorkingMemoryStore:
             ],
             "diagnosis": diagnoses[-1]["payload"] if diagnoses else None,
             "improvement_proposals": [self._improvement_proposal_from_record(record).model_dump(mode="json") for record in improvement_proposals],
+            "failure_learnings": [self._failure_learning_from_record(record).model_dump(mode="json") for record in failure_learnings],
         }
 
     async def get_run_status(self, run_id: UUID) -> RunStatus:
@@ -209,8 +222,13 @@ class WorkingMemoryStore:
             risk=proposal.risk,
             success_check=proposal.success_check,
             evidence={"items": proposal.evidence},
+            behavior_change_requires_approval=proposal.behavior_change_requires_approval,
+            proof_spec=proposal.proof_spec,
             status=proposal.status.value,
             rejection_reason=proposal.rejection_reason,
+            approved_at=proposal.approved_at,
+            implemented_at=proposal.implemented_at,
+            proven_at=proposal.proven_at,
             created_at=datetime.now(UTC),
         )
         self.session.add(record)
@@ -236,6 +254,7 @@ class WorkingMemoryStore:
             raise KeyError(f"improvement proposal not found: {proposal_id}")
         record.status = ImprovementProposalStatus.APPROVED.value
         record.rejection_reason = None
+        record.approved_at = datetime.now(UTC)
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
@@ -249,6 +268,150 @@ class WorkingMemoryStore:
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
+
+    async def mark_improvement_proposal_implemented(self, proposal_id: UUID) -> ImprovementProposal:
+        record = await self.session.get(ImprovementProposalRecord, proposal_id)
+        if record is None:
+            raise KeyError(f"improvement proposal not found: {proposal_id}")
+        if record.status != ImprovementProposalStatus.APPROVED.value:
+            raise ValueError(f"proposal must be approved before implementation: status={record.status}")
+        record.status = ImprovementProposalStatus.IMPLEMENTED.value
+        record.implemented_at = datetime.now(UTC)
+        await self._persist()
+        await self.session.refresh(record)
+        return self._improvement_proposal_from_record(record)
+
+    async def mark_improvement_proposal_proven(self, proposal_id: UUID) -> ImprovementProposal:
+        record = await self.session.get(ImprovementProposalRecord, proposal_id)
+        if record is None:
+            raise KeyError(f"improvement proposal not found: {proposal_id}")
+        if record.status != ImprovementProposalStatus.IMPLEMENTED.value:
+            raise ValueError(f"proposal must be implemented before proof can mark it proven: status={record.status}")
+        record.status = ImprovementProposalStatus.PROVEN.value
+        record.proven_at = datetime.now(UTC)
+        await self._persist()
+        await self.session.refresh(record)
+        return self._improvement_proposal_from_record(record)
+
+    async def record_failure_learnings(self, learnings: list[FailureLearning]) -> list[FailureLearning]:
+        recorded: list[FailureLearning] = []
+        for learning in learnings:
+            record = (
+                await self.session.execute(
+                    select(FailureLearningRecord).where(
+                        FailureLearningRecord.failure_signature == learning.failure_signature,
+                        FailureLearningRecord.target_component == learning.target_component,
+                    )
+                )
+            ).scalar_one_or_none()
+            if record is None:
+                record = FailureLearningRecord(
+                    id=learning.id,
+                    failure_signature=learning.failure_signature,
+                    target_component=learning.target_component,
+                    root_cause=learning.root_cause,
+                    playbook_key=learning.playbook_key,
+                    proposal_type=learning.proposal_type,
+                    learning_summary=learning.learning_summary,
+                    proposed_next_step=learning.proposed_next_step,
+                    risk=learning.risk,
+                    success_check=learning.success_check,
+                    severity=learning.severity,
+                    occurrence_count=learning.occurrence_count,
+                    first_seen_run_id=learning.first_seen_run_id,
+                    last_seen_run_id=learning.last_seen_run_id,
+                    evidence_refs={"items": learning.evidence_refs},
+                    run_ids={"items": learning.run_ids},
+                    status=learning.status.value,
+                    created_at=datetime.now(UTC),
+                )
+                self.session.add(record)
+            else:
+                run_ids = self._json_items(record.run_ids)
+                if learning.last_seen_run_id not in run_ids:
+                    run_ids.append(learning.last_seen_run_id)
+                    record.occurrence_count += 1
+                record.root_cause = learning.root_cause
+                record.playbook_key = learning.playbook_key
+                record.proposal_type = learning.proposal_type
+                record.learning_summary = learning.learning_summary
+                record.proposed_next_step = learning.proposed_next_step
+                record.risk = learning.risk
+                record.success_check = learning.success_check
+                record.severity = self._max_severity(record.severity, learning.severity)
+                record.last_seen_run_id = learning.last_seen_run_id
+                evidence_refs = (self._json_items(record.evidence_refs) + learning.evidence_refs)[-30:]
+                record.evidence_refs = {"items": evidence_refs}
+                record.run_ids = {"items": run_ids[-50:]}
+                record.status = FailureLearningStatus.ACTIVE.value
+            await self._persist()
+            await self.session.refresh(record)
+            recorded.append(self._failure_learning_from_record(record))
+        return recorded
+
+    async def list_failure_learnings(
+        self,
+        status: FailureLearningStatus | None = None,
+        playbook_key: str | None = None,
+    ) -> list[FailureLearning]:
+        statement = select(FailureLearningRecord).order_by(desc(FailureLearningRecord.occurrence_count), desc(FailureLearningRecord.updated_at))
+        if status is not None:
+            statement = statement.where(FailureLearningRecord.status == status.value)
+        if playbook_key is not None:
+            statement = statement.where(FailureLearningRecord.playbook_key == playbook_key)
+        records = (await self.session.execute(statement)).scalars().all()
+        return [self._failure_learning_from_record(record) for record in records]
+
+    async def has_open_improvement_proposal(self, failure_signature: str, target_component: str) -> bool:
+        open_statuses = {
+            ImprovementProposalStatus.PROPOSED.value,
+            ImprovementProposalStatus.APPROVED.value,
+            ImprovementProposalStatus.IMPLEMENTED.value,
+        }
+        record = (
+            await self.session.execute(
+                select(ImprovementProposalRecord).where(
+                    ImprovementProposalRecord.failure_signature == failure_signature,
+                    ImprovementProposalRecord.target_component == target_component,
+                    ImprovementProposalRecord.status.in_(open_statuses),
+                )
+            )
+        ).scalar_one_or_none()
+        return record is not None
+
+    async def list_recent_runs(self, limit: int = 50, playbook_key: str | None = None) -> list[dict[str, Any]]:
+        statement = select(ProcessRunRecord.id).order_by(desc(ProcessRunRecord.updated_at)).limit(limit)
+        if playbook_key is not None:
+            statement = statement.where(ProcessRunRecord.playbook_key == playbook_key)
+        run_ids = (await self.session.execute(statement)).scalars().all()
+        runs: list[dict[str, Any]] = []
+        for run_id in run_ids:
+            run = await self.get_run(run_id)
+            if run is not None:
+                runs.append(run)
+        return runs
+
+    async def add_system_review(self, review: SystemReview) -> SystemReview:
+        record = SystemReviewRecord(
+            id=review.id,
+            scope=review.scope,
+            playbook_key=review.playbook_key,
+            run_count=review.run_count,
+            learning_count=review.learning_count,
+            payload=review.model_dump(mode="json"),
+            created_at=datetime.now(UTC),
+        )
+        self.session.add(record)
+        await self._persist()
+        await self.session.refresh(record)
+        return self._system_review_from_record(record)
+
+    async def list_system_reviews(self, playbook_key: str | None = None) -> list[SystemReview]:
+        statement = select(SystemReviewRecord).order_by(desc(SystemReviewRecord.created_at))
+        if playbook_key is not None:
+            statement = statement.where(SystemReviewRecord.playbook_key == playbook_key)
+        records = (await self.session.execute(statement)).scalars().all()
+        return [self._system_review_from_record(record) for record in records]
 
     async def upsert_registry_item(self, item: RegistryItem) -> RegistryItem:
         record = await self._get_registry_item_record(item.kind, item.key)
@@ -375,8 +538,64 @@ class WorkingMemoryStore:
             risk=record.risk,
             success_check=record.success_check,
             evidence=evidence,
+            behavior_change_requires_approval=record.behavior_change_requires_approval,
+            proof_spec=record.proof_spec,
             status=ImprovementProposalStatus(record.status),
             rejection_reason=record.rejection_reason,
+            approved_at=record.approved_at,
+            implemented_at=record.implemented_at,
+            proven_at=record.proven_at,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )
+
+    @staticmethod
+    def _failure_learning_from_record(record: FailureLearningRecord) -> FailureLearning:
+        return FailureLearning(
+            id=record.id,
+            failure_signature=record.failure_signature,
+            target_component=record.target_component,
+            root_cause=record.root_cause,
+            playbook_key=record.playbook_key,
+            proposal_type=record.proposal_type,
+            learning_summary=record.learning_summary,
+            proposed_next_step=record.proposed_next_step,
+            risk=record.risk,
+            success_check=record.success_check,
+            severity=record.severity,
+            occurrence_count=record.occurrence_count,
+            first_seen_run_id=record.first_seen_run_id,
+            last_seen_run_id=record.last_seen_run_id,
+            evidence_refs=WorkingMemoryStore._json_items(record.evidence_refs),
+            run_ids=WorkingMemoryStore._json_items(record.run_ids),
+            status=FailureLearningStatus(record.status),
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
+    def _system_review_from_record(record: SystemReviewRecord) -> SystemReview:
+        payload = record.payload if isinstance(record.payload, dict) else {}
+        return SystemReview(
+            id=record.id,
+            scope=record.scope,
+            playbook_key=record.playbook_key,
+            run_count=record.run_count,
+            learning_count=record.learning_count,
+            findings=payload.get("findings", []),
+            recommendations=payload.get("recommendations", []),
+            created_proposal_ids=payload.get("created_proposal_ids", []),
+            created_at=record.created_at,
+        )
+
+    @staticmethod
+    def _json_items(payload: dict[str, Any] | None) -> list[Any]:
+        if not isinstance(payload, dict):
+            return []
+        items = payload.get("items", [])
+        return items if isinstance(items, list) else []
+
+    @staticmethod
+    def _max_severity(current: str, incoming: str) -> str:
+        order = {"low": 0, "medium": 1, "high": 2}
+        return incoming if order.get(incoming, 0) > order.get(current, 0) else current

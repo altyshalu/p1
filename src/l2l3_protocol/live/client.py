@@ -55,3 +55,12 @@ class LiveApiClient:
             response = await client.post(f"{self.api_url}/runs/{run_id}/messages", json={"message": message})
             response.raise_for_status()
             return response.json()
+
+    async def create_recent_system_review(self, *, limit: int = 50, playbook_key: str | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"limit": limit}
+        if playbook_key is not None:
+            payload["playbook_key"] = playbook_key
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+            response = await client.post(f"{self.api_url}/system-reviews/recent", json=payload)
+            response.raise_for_status()
+            return response.json()
