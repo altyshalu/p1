@@ -48,6 +48,13 @@ class ProcessRuntime:
         playbook = await self._load_playbook(state["playbook_key"])
         worker_profiles = await self._allowed_worker_profiles(playbook)
         max_turns = int(playbook.get("max_supervisor_turns", 8))
+        input_error = self._run_input_error(state, worker_profiles)
+        if input_error is not None:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": input_error})
+            await self.store.add_event(run_id, "run_input_validation_failed", {"error": input_error, "failure_type": "input_validation"})
+            await self.store.add_event(run_id, "run_failed", {"reason": input_error})
+            await self._record_run_diagnosis(run_id)
+            return await self._require_run(run_id)
         await self.store.set_run_status(run_id, RunStatus.RUNNING)
         if not any(event.get("event_type") == "run_started" for event in state.get("events", [])):
             await self.store.add_event(run_id, "run_started", {"playbook_key": state["playbook_key"], "goal": state["goal"], "l2_mode": mode.value})
@@ -59,6 +66,12 @@ class ProcessRuntime:
             state = await self.store.get_run(run_id)
             if state is None:
                 raise KeyError(f"run not found: {run_id}")
+            stop_reason = self._repair_stop_reason(state)
+            if stop_reason is not None:
+                await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": stop_reason})
+                await self.store.add_event(run_id, "repair_budget_exhausted", {"reason": stop_reason})
+                await self.store.add_event(run_id, "run_failed", {"reason": stop_reason})
+                break
             action = await self.supervisor.next_action(playbook, worker_profiles, state, turn)
             await self.store.add_event(run_id, "l2_action_selected", action.model_dump(mode="json"))
 
@@ -241,6 +254,41 @@ class ProcessRuntime:
             await self._record_registry_candidate(run_id, candidate)
             await self.store.add_event(run_id, "design_candidate_created", candidate)
         await self.store.set_run_status(run_id, RunStatus.WAITING_APPROVAL, {"design_proposal": payload})
+
+    @staticmethod
+    def _repair_stop_reason(state: dict[str, Any]) -> str | None:
+        latest_incident: dict[str, Any] | None = None
+        for event in reversed(state.get("events", [])):
+            if event.get("event_type") != INCIDENT_BRIEF_EVENT:
+                continue
+            payload = event.get("payload", {})
+            if isinstance(payload, dict):
+                latest_incident = payload
+            break
+        if latest_incident is None:
+            return None
+        if int(latest_incident.get("retry_count_remaining", 1) or 0) > 0:
+            return None
+        worker = str(latest_incident.get("worker_profile") or "unknown-worker")
+        failure_type = str(latest_incident.get("failure_type") or "unknown_failure")
+        return f"repair budget exhausted for {worker}/{failure_type}"
+
+    @staticmethod
+    def _run_input_error(state: dict[str, Any], worker_profiles: dict[str, dict[str, Any]]) -> str | None:
+        if state.get("playbook_key") != "build-in-public-trend-radar":
+            return None
+        providers = state.get("input", {}).get("inputs", {}).get("providers", [])
+        if not isinstance(providers, list):
+            return "trend-radar input.providers must be a list"
+        collector = worker_profiles.get("trend-source-collector", {})
+        supported = set((collector.get("provider_repair_policy", {}).get("provider_capabilities") or {}).keys())
+        if not supported:
+            return "trend-source-collector provider capabilities are missing"
+        requested = {str(provider).lower() for provider in providers}
+        unsupported = sorted(requested - supported)
+        if unsupported:
+            return f"unsupported providers requested: {unsupported}; supported providers: {sorted(supported)}"
+        return None
 
     async def _hub_snapshot(self) -> dict[str, Any]:
         return {

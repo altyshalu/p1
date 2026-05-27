@@ -221,6 +221,8 @@ class ImprovementProposal(BaseModel):
     run_id: UUID
     source_run_id: str
     proposal_type: str
+    target_component: str = "unknown"
+    failure_signature: str = "unknown"
     problem: str
     proposed_change: str
     risk: str

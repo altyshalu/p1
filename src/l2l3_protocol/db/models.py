@@ -122,6 +122,8 @@ class ImprovementProposalRecord(Base):
     run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
     source_run_id: Mapped[str] = mapped_column(String(80), index=True)
     proposal_type: Mapped[str] = mapped_column(String(80), index=True)
+    target_component: Mapped[str] = mapped_column(String(160), default="unknown", index=True)
+    failure_signature: Mapped[str] = mapped_column(String(160), default="unknown", index=True)
     problem: Mapped[str] = mapped_column(String)
     proposed_change: Mapped[str] = mapped_column(String)
     risk: Mapped[str] = mapped_column(String)

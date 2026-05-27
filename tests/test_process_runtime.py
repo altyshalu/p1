@@ -122,6 +122,8 @@ class FakeHermes(HermesRuntime):
         return True
 
     async def run(self, prompt: str, system_message: str, task_id: str, enabled_toolsets: list[str] | None = None) -> str:
+        if not self.responses:
+            raise AssertionError("Hermes should not be called")
         response = self.responses[min(self.calls, len(self.responses) - 1)]
         self.calls += 1
         return response
@@ -200,6 +202,63 @@ async def test_runtime_records_worker_failure_without_synthetic_data() -> None:
     assert store.improvement_proposals
     assert store.improvement_proposals[0].problem
     assert any(event["event_type"] == "task_failed" for event in store.events)
+
+
+@pytest.mark.asyncio
+async def test_runtime_stops_before_l2_when_repair_budget_is_exhausted() -> None:
+    run = ProcessRun(
+        playbook_key="build-in-public",
+        goal="Share progress",
+        status=RunStatus.RUNNING,
+        input={"require_human_approval": False},
+    )
+    store = FakeStore(run)
+    store.events.append(
+        {
+            "event_type": "incident_brief",
+            "task_id": "task-1",
+            "payload": {
+                "worker_profile": "signal-collector",
+                "failure_type": "input_validation",
+                "error": "signals are missing",
+                "retry_count_remaining": 0,
+            },
+        }
+    )
+
+    output = await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([])).run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "failed"
+    assert any(event["event_type"] == "repair_budget_exhausted" for event in store.events)
+    assert "signal-collector/input_validation" in store.run.output["reason"]
+    assert any(artifact.artifact_type.value == "run_diagnosis" for artifact in store.artifacts)
+    assert store.improvement_proposals
+
+
+@pytest.mark.asyncio
+async def test_runtime_fails_invalid_trend_provider_before_l2() -> None:
+    run = ProcessRun(
+        playbook_key="build-in-public-trend-radar",
+        goal="Run trend radar",
+        status=RunStatus.CREATED,
+        input={
+            "require_human_approval": True,
+            "inputs": {
+                "query": "agent runtime observability",
+                "providers": ["github", "notarealprovider"],
+                "channels": ["x"],
+            },
+        },
+    )
+    store = FakeStore(run)
+
+    output = await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([])).run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "failed"
+    assert "unsupported providers" in store.run.output["reason"]
+    assert any(event["event_type"] == "run_input_validation_failed" for event in store.events)
+    assert any(artifact.artifact_type.value == "run_diagnosis" for artifact in store.artifacts)
+    assert store.improvement_proposals[0].proposal_type == "improve_policy"
 
 
 @pytest.mark.asyncio

@@ -69,6 +69,7 @@ def _evidence(state: dict[str, Any]) -> list[dict[str, Any]]:
             "task_failed",
             "work_order_validation_failed",
             "work_order_output_validation_failed",
+            "run_input_validation_failed",
             "task_eval_failed",
             "run_failed",
         }:
@@ -194,16 +195,85 @@ def _proposal_from_diagnosis(run_id: str, diagnosis: dict[str, Any]) -> Improvem
     root_cause = str(diagnosis["root_cause"])
     evidence = diagnosis.get("evidence", [])
     proposal_type = _proposal_type(root_cause)
+    target_component = _target_component(root_cause, evidence, diagnosis.get("low_quality_evals", []))
+    failure_signature = _failure_signature(root_cause, evidence)
     return ImprovementProposal(
         run_id=UUID(run_id),
         source_run_id=run_id,
         proposal_type=proposal_type,
+        target_component=target_component,
+        failure_signature=failure_signature,
         problem=diagnosis["summary"],
-        proposed_change=_proposed_change(root_cause),
+        proposed_change=_proposed_change(root_cause, target_component, evidence, diagnosis.get("low_quality_evals", [])),
         risk="Behavior-changing improvements require explicit approval before implementation.",
         success_check="Repeat a comparable real run and verify the same root cause is absent while required evals still pass.",
         evidence=evidence,
     )
+
+
+def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quality: list[dict[str, Any]]) -> str:
+    primary = _primary_evidence(root_cause, evidence) if evidence else {}
+    worker = str(primary.get("worker_profile") or "unknown-worker")
+    failure_type = str(primary.get("failure_type") or "")
+    if root_cause == "tool_or_provider_failure":
+        provider = _provider_from_evidence(primary)
+        return f"trend-source-collector/provider:{provider}" if provider else "trend-source-collector/provider:unknown"
+    if root_cause == "quality_gate_failed":
+        eval_key = str((low_quality[0] if low_quality else {}).get("eval_key") or "unknown-eval")
+        worker = worker if worker != "unknown-worker" else _worker_for_eval(eval_key)
+        return f"{worker}/{eval_key}"
+    if root_cause == "repeated_repair":
+        return "playbook:repair-stop-rules"
+    if root_cause == "policy_or_tool_permission_failed":
+        return f"policy:{worker}/{failure_type or 'tool-policy'}"
+    if root_cause == "bad_or_missing_input" and _is_provider_input_validation(primary):
+        return "trend-radar/input.providers"
+    if root_cause in {"missing_capability_or_registry_item", "missing_runtime_dependency"}:
+        return f"runtime:{root_cause}"
+    return worker
+
+
+def _failure_signature(root_cause: str, evidence: list[dict[str, Any]]) -> str:
+    if not evidence:
+        return root_cause
+    primary = _primary_evidence(root_cause, evidence)
+    failure_type = str(primary.get("failure_type") or root_cause)
+    if root_cause == "bad_or_missing_input" and _is_provider_input_validation(primary):
+        return f"{failure_type}:trend-radar/input.providers"
+    worker = str(primary.get("worker_profile") or "unknown-worker")
+    return f"{failure_type}:{worker}"
+
+
+def _is_provider_input_validation(item: dict[str, Any]) -> bool:
+    payload = item.get("payload", {})
+    error = item.get("error") or (payload.get("error") if isinstance(payload, dict) else "")
+    return "unsupported providers requested" in str(error)
+
+
+def _provider_from_evidence(item: dict[str, Any]) -> str | None:
+    payload = item.get("payload", {})
+    if isinstance(payload, dict):
+        structured = payload.get("structured_error")
+        if isinstance(structured, dict):
+            failures = structured.get("provider_failures")
+            if isinstance(failures, dict) and failures:
+                return str(next(iter(failures))).lower()
+        failures = payload.get("provider_failures")
+        if isinstance(failures, dict) and failures:
+            return str(next(iter(failures))).lower()
+    haystack = " ".join(str(value).lower() for value in [item.get("error"), item.get("failure_type"), payload])
+    for provider in ("huggingface", "github", "arxiv"):
+        if provider in haystack:
+            return provider
+    return None
+
+
+def _worker_for_eval(eval_key: str) -> str:
+    if eval_key == "trend-claim-grounding":
+        return "claim-grounding-judge"
+    if eval_key == "trend-draft-quality":
+        return "trend-draft-quality-judge"
+    return "eval-worker"
 
 
 def _proposal_type(root_cause: str) -> str:
@@ -220,17 +290,26 @@ def _proposal_type(root_cause: str) -> str:
     return "fix_code"
 
 
-def _proposed_change(root_cause: str) -> str:
+def _proposed_change(root_cause: str, target_component: str, evidence: list[dict[str, Any]], low_quality: list[dict[str, Any]]) -> str:
     if root_cause == "tool_or_provider_failure":
+        if "provider:huggingface" in target_component:
+            return "Extend Hugging Face provider repair so the source collector tries approved dataset/space resource types and shorter real queries before exhausting the provider."
+        if "provider:github" in target_component:
+            return "Extend GitHub provider repair so the source collector generates narrower real repository queries before exhausting the provider."
         return "Improve provider repair guidance or the registered tool behavior for this real failure mode."
     if root_cause == "quality_gate_failed":
+        eval_key = str((low_quality[0] if low_quality else {}).get("eval_key") or "")
+        if eval_key == "trend-claim-grounding":
+            return "Fix the claim-grounding contract between draft writer, schema normalizer, and claim-grounding judge so drafts preserve non-empty claims with source_url evidence."
         return "Improve the worker output or eval criteria so the required quality gate can pass on a repeated real run."
     if root_cause == "worker_output_contract_failed":
         return "Tighten worker output shaping or add an approved normalizer before the failing contract boundary."
     if root_cause == "bad_or_missing_input":
+        if target_component == "trend-radar/input.providers":
+            return "Validate trend-radar providers before L2 planning and reject unsupported providers explicitly instead of letting L2 route around the bad input."
         return "Make required input expectations explicit at run creation or repair the L2 Work Order construction."
     if root_cause == "policy_or_tool_permission_failed":
-        return "Align Playbook, worker, and tool policy so only approved real tools are requested."
+        return f"Align Playbook, worker, and tool policy for {target_component} so only compatible approved real tools are requested."
     if root_cause == "external_action_policy_violation":
         return "Tighten External Action policy checks and worker instructions around approval-required actions."
     if root_cause == "missing_capability_or_registry_item":

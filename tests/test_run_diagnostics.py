@@ -37,6 +37,9 @@ def test_failed_run_diagnosis_uses_incident_brief_evidence_and_proposes_improvem
     assert proposals
     assert proposals[0].status == ImprovementProposalStatus.PROPOSED
     assert proposals[0].proposal_type == "improve_tool"
+    assert proposals[0].target_component == "trend-source-collector/provider:huggingface"
+    assert proposals[0].failure_signature == "provider_no_results:trend-source-collector"
+    assert "Hugging Face provider repair" in proposals[0].proposed_change
     assert proposals[0].source_run_id == run["id"]
     assert proposals[0].evidence[0]["task_id"] == task_id
 
@@ -89,6 +92,7 @@ def test_max_turn_failure_after_repeated_eval_repairs_is_repeated_repair() -> No
     assert diagnosis.payload["repeated_repair"] is True
     assert "max_supervisor_turns exceeded" in diagnosis.payload["summary"]
     assert proposals[0].proposal_type == "improve_playbook"
+    assert proposals[0].target_component == "playbook:repair-stop-rules"
 
 
 def test_diagnosis_prefers_typed_incident_over_untyped_task_wrapper() -> None:
@@ -126,3 +130,66 @@ def test_diagnosis_prefers_typed_incident_over_untyped_task_wrapper() -> None:
     assert diagnosis.payload["root_cause"] == "tool_or_provider_failure"
     assert "huggingface search returned no results" in diagnosis.payload["summary"]
     assert proposals[0].proposal_type == "improve_tool"
+
+
+def test_claim_grounding_failure_proposal_targets_eval_contract() -> None:
+    run = {
+        "id": str(uuid4()),
+        "status": "waiting_approval",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [
+            {
+                "task_id": str(uuid4()),
+                "eval_key": "trend-claim-grounding",
+                "passed": False,
+                "score": 0.3333333333333333,
+                "threshold": 1.0,
+                "reasons": ["Draft has no claims."],
+            }
+        ],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "payload": {
+                    "worker_profile": "claim-grounding-judge",
+                    "failure_type": "eval_failed",
+                    "error": "eval did not meet threshold",
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "quality_gate_failed"
+    assert proposals[0].proposal_type == "improve_eval"
+    assert proposals[0].target_component == "claim-grounding-judge/trend-claim-grounding"
+    assert proposals[0].failure_signature == "eval_failed:claim-grounding-judge"
+    assert "claim-grounding contract" in proposals[0].proposed_change
+
+
+def test_invalid_provider_proposal_targets_trend_radar_inputs() -> None:
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "run_input_validation_failed",
+                "payload": {
+                    "failure_type": "input_validation",
+                    "error": "unsupported providers requested: ['notarealprovider']; supported providers: ['arxiv', 'github', 'huggingface']",
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "bad_or_missing_input"
+    assert proposals[0].proposal_type == "improve_policy"
+    assert proposals[0].target_component == "trend-radar/input.providers"
+    assert proposals[0].failure_signature == "input_validation:trend-radar/input.providers"
