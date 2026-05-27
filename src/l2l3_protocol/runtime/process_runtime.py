@@ -4,7 +4,7 @@ import json
 from typing import Any
 from uuid import UUID
 
-from l2l3_protocol.core.schemas import Artifact, ArtifactType, EvalResult, MemoryLayer, MemoryWrite, RegistryKind, RunMode, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.core.schemas import Artifact, ArtifactType, EvalResult, ImprovementProposalStatus, MemoryLayer, MemoryWrite, RegistryKind, RunMode, RunStatus, TaskStatus, WorkOrder
 from l2l3_protocol.core.terminology import INCIDENT_BRIEF_EVENT
 from l2l3_protocol.db.store import WorkingMemoryStore
 from l2l3_protocol.logging import get_logger
@@ -140,13 +140,14 @@ class ProcessRuntime:
         return await self._require_run(run_id)
 
     async def _execute_task(self, run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
+        task_inputs = await self._inputs_with_implemented_improvements(task)
         work_order = WorkOrder(
             run_id=run_id,
             task_type=task["task_type"],
             goal=task["goal"],
             worker_profile=task["worker_profile"],
             worker_type=profile.get("worker_type", "sandboxed_subprocess"),
-            inputs=task.get("inputs", {}),
+            inputs=task_inputs,
             output_schema=profile.get("output_schema", {}),
             allowed_tools=profile.get("allowed_tools", []),
             budget=profile.get("budget", {}),
@@ -201,6 +202,34 @@ class ProcessRuntime:
                 await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
                 await self.store.add_event(run_id, "task_eval_failed", eval_result.model_dump(mode="json"), work_order.id)
                 await self._record_failure_context(run_id, work_order.id, work_order, profile, "eval_failed", "eval did not meet threshold", eval_result)
+
+    async def _inputs_with_implemented_improvements(self, task: dict[str, Any]) -> dict[str, Any]:
+        inputs = dict(task.get("inputs", {}))
+        if task.get("worker_profile") != "trend-source-collector":
+            return inputs
+        requested_providers = inputs.get("providers")
+        if not isinstance(requested_providers, list) or not requested_providers:
+            return inputs
+        requested = {"huggingface" if str(provider).lower() == "hf" else str(provider).lower() for provider in requested_providers}
+        implemented = await self.store.list_improvement_proposals(status=ImprovementProposalStatus.IMPLEMENTED)
+        proven = await self.store.list_improvement_proposals(status=ImprovementProposalStatus.PROVEN)
+        provider_proposals: list[tuple[str, str]] = []
+        for proposal in implemented + proven:
+            if proposal.failure_signature != "provider_no_results:trend-source-collector":
+                continue
+            if not proposal.target_component.startswith("trend-source-collector/provider:"):
+                continue
+            provider = proposal.target_component.rsplit(":", 1)[-1].lower()
+            provider = "huggingface" if provider == "hf" else provider
+            if provider in requested:
+                provider_proposals.append((provider, str(proposal.id)))
+        if not provider_proposals:
+            return inputs
+        inputs["approved_provider_auto_repairs"] = {
+            "providers": sorted({provider for provider, _proposal_id in provider_proposals}),
+            "source_proposal_ids": sorted({proposal_id for _provider, proposal_id in provider_proposals}),
+        }
+        return inputs
 
     async def _record_eval(self, run_id: UUID, task_id: UUID, work_order: WorkOrder, payload: dict[str, Any]) -> EvalResult:
         eval_key = work_order.grader_spec.get("eval_key")

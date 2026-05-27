@@ -36,7 +36,7 @@ from l2l3_protocol.logging import configure_logging, get_logger
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.runtime.hermes import HermesRuntime
-from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor
+from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor, L3WorkerExecutionError
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 from l2l3_protocol.runtime.diagnostics import analyze_run
 from l2l3_protocol.runtime.self_improvement import build_failure_learnings, proposal_from_failure_learning
@@ -232,6 +232,54 @@ async def mark_improvement_proposal_implemented(proposal_id: UUID, session: Asyn
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await session.commit()
     return proposal.model_dump(mode="json")
+
+
+@app.post("/improvement-proposals/{proposal_id}/implement")
+async def implement_improvement_proposal(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    proposal = await store.get_improvement_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="improvement proposal not found")
+    if proposal.status != ImprovementProposalStatus.APPROVED:
+        raise HTTPException(status_code=409, detail=f"proposal must be approved before implementation: status={proposal.status.value}")
+    implementation_profile = await store.get_registry_item(RegistryKind.WORKER, "improvement-implementation-worker")
+    if implementation_profile is None:
+        raise HTTPException(status_code=409, detail="registry worker is not seeded: improvement-implementation-worker")
+    work_order = WorkOrder(
+        id=uuid4(),
+        run_id=uuid4(),
+        task_type="implement_approved_proposal",
+        goal="Apply an approved self-improvement proposal through a controlled implementation handler.",
+        worker_profile="improvement-implementation-worker",
+        worker_type=implementation_profile.spec.get("worker_type", "sandboxed_subprocess"),
+        inputs={"proposal": proposal.model_dump(mode="json")},
+        output_schema=implementation_profile.spec.get("output_schema", {}),
+        allowed_tools=[],
+        budget=implementation_profile.spec.get("budget", {}),
+        external_action_policy=implementation_profile.spec.get("external_action_policy", {}),
+    )
+    try:
+        worker_output = await L3SandboxExecutor(app_state.hermes).run(
+            work_order,
+            {"source": "improvement-proposals/implement", "proposal_id": str(proposal.id)},
+            implementation_profile.spec,
+        )
+        implementation_result = dict(worker_output["implementation_result"])
+        implementation_result["_worker_execution"] = worker_output.get("_worker_execution", {})
+        implemented = await store.implement_improvement_proposal(proposal_id, implementation_result)
+        await store.add_event(
+            implemented.run_id,
+            "improvement_proposal_implemented",
+            {"proposal_id": str(implemented.id), "implementation_result": implementation_result},
+        )
+    except L3WorkerExecutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError:
+        raise HTTPException(status_code=404, detail="improvement proposal not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return implemented.model_dump(mode="json")
 
 
 @app.post("/improvement-proposals/{proposal_id}/mark-proven")

@@ -225,6 +225,7 @@ class WorkingMemoryStore:
             evidence={"items": proposal.evidence},
             behavior_change_requires_approval=proposal.behavior_change_requires_approval,
             proof_spec=proposal.proof_spec,
+            implementation_result=proposal.implementation_result,
             status=proposal.status.value,
             rejection_reason=proposal.rejection_reason,
             approved_at=proposal.approved_at,
@@ -248,6 +249,10 @@ class WorkingMemoryStore:
             statement = statement.where(ImprovementProposalRecord.run_id == run_id)
         records = (await self.session.execute(statement)).scalars().all()
         return [self._improvement_proposal_from_record(record) for record in records]
+
+    async def get_improvement_proposal(self, proposal_id: UUID) -> ImprovementProposal | None:
+        record = await self.session.get(ImprovementProposalRecord, proposal_id)
+        return self._improvement_proposal_from_record(record) if record is not None else None
 
     async def approve_improvement_proposal(self, proposal_id: UUID) -> ImprovementProposal:
         record = await self.session.get(ImprovementProposalRecord, proposal_id)
@@ -282,6 +287,9 @@ class WorkingMemoryStore:
         return self._improvement_proposal_from_record(record)
 
     async def mark_improvement_proposal_implemented(self, proposal_id: UUID) -> ImprovementProposal:
+        return await self.implement_improvement_proposal(proposal_id, {})
+
+    async def implement_improvement_proposal(self, proposal_id: UUID, implementation_result: dict[str, Any]) -> ImprovementProposal:
         record = await self.session.get(ImprovementProposalRecord, proposal_id)
         if record is None:
             raise KeyError(f"improvement proposal not found: {proposal_id}")
@@ -289,6 +297,7 @@ class WorkingMemoryStore:
             raise ValueError(f"proposal must be approved before implementation: status={record.status}")
         record.status = ImprovementProposalStatus.IMPLEMENTED.value
         record.implemented_at = datetime.now(UTC)
+        record.implementation_result = implementation_result
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
@@ -570,6 +579,7 @@ class WorkingMemoryStore:
             evidence=evidence,
             behavior_change_requires_approval=record.behavior_change_requires_approval,
             proof_spec=record.proof_spec,
+            implementation_result=record.implementation_result or {},
             status=ImprovementProposalStatus(record.status),
             rejection_reason=record.rejection_reason,
             approved_at=record.approved_at,

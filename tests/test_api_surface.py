@@ -14,6 +14,7 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ("/improvement-proposals", "GET") in routes
     assert ("/improvement-proposals/{proposal_id}/approve", "POST") in routes
     assert ("/improvement-proposals/{proposal_id}/reject", "POST") in routes
+    assert ("/improvement-proposals/{proposal_id}/implement", "POST") in routes
     assert ("/improvement-proposals/{proposal_id}/mark-implemented", "POST") in routes
     assert ("/improvement-proposals/{proposal_id}/mark-proven", "POST") in routes
     assert ("/failure-learnings", "GET") in routes

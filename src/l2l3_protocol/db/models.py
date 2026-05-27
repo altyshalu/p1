@@ -131,6 +131,7 @@ class ImprovementProposalRecord(Base):
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     behavior_change_requires_approval: Mapped[bool] = mapped_column(Boolean, default=True)
     proof_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    implementation_result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(40), index=True)
     rejection_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -124,6 +124,7 @@ def collect_trend_sources(work_order: dict[str, Any], context: dict[str, Any]) -
         raise WorkerInputError("max_results must be >= 1")
 
     provider_repairs = _provider_repairs(work_order["inputs"].get("provider_repairs", {}))
+    approved_auto_repairs = _approved_auto_repair_providers(work_order["inputs"].get("approved_provider_auto_repairs", {}))
     allowed_toolsets = set(work_order.get("allowed_tools", []))
     source_results: list[dict[str, Any]] = []
     provider_attempts: dict[str, list[dict[str, Any]]] = {}
@@ -131,7 +132,14 @@ def collect_trend_sources(work_order: dict[str, Any], context: dict[str, Any]) -
     for provider in providers:
         normalized_provider = "huggingface" if provider == "hf" else provider
         try:
-            items, attempts = _search_provider_with_l2_repairs(normalized_provider, query, max_results, allowed_toolsets, provider_repairs)
+            items, attempts = _search_provider_with_l2_repairs(
+                normalized_provider,
+                query,
+                max_results,
+                allowed_toolsets,
+                provider_repairs,
+                normalized_provider in approved_auto_repairs,
+            )
             source_results.append({"source": normalized_provider, "items": items})
             provider_attempts[normalized_provider] = attempts
         except WorkerInputError as exc:
@@ -183,15 +191,36 @@ def _provider_repairs(value: Any) -> dict[str, list[dict[str, Any]]]:
     return repairs
 
 
+def _approved_auto_repair_providers(value: Any) -> set[str]:
+    if value is None or value == {}:
+        return set()
+    if value is True:
+        return {"github", "arxiv", "huggingface"}
+    if not isinstance(value, dict):
+        raise WorkerInputError("approved_provider_auto_repairs must be an object or true")
+    raw_providers = value.get("providers")
+    if not isinstance(raw_providers, list) or not raw_providers:
+        raise WorkerInputError("approved_provider_auto_repairs.providers must be a non-empty list")
+    providers = set()
+    for provider in raw_providers:
+        normalized_provider = require_text(provider, "approved_provider_auto_repairs.providers[]").lower()
+        providers.add("huggingface" if normalized_provider == "hf" else normalized_provider)
+    return providers
+
+
 def _search_provider_with_l2_repairs(
     provider: str,
     query: str,
     max_results: int,
     allowed_toolsets: set[str],
     provider_repairs: dict[str, list[dict[str, Any]]],
+    approved_auto_repairs: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     attempts = [{"query": query, "strategy": "initial", "resource_type": _default_resource_type(provider)}]
     attempts.extend(provider_repairs.get(provider, []))
+    if approved_auto_repairs:
+        attempts.extend(approved_provider_auto_repairs(provider, query))
+    attempts = _dedupe_provider_attempts(attempts)
     attempted: list[dict[str, Any]] = []
     errors: list[str] = []
     for attempt in attempts:
@@ -212,6 +241,49 @@ def _search_provider_with_l2_repairs(
     error = WorkerInputError(f"{provider} search failed after {len(attempts)} real attempts: {errors}")
     error.attempts = attempted
     raise error
+
+
+def approved_provider_auto_repairs(provider: str, query: str) -> list[dict[str, Any]]:
+    normalized_provider = "huggingface" if provider == "hf" else provider.lower()
+    variants = _query_variants(query)
+    attempts: list[dict[str, Any]] = []
+    if normalized_provider == "huggingface":
+        for resource_type in ("datasets", "spaces", "models"):
+            for variant in variants:
+                attempts.append({"query": variant, "strategy": "approved_provider_auto_repair", "resource_type": resource_type})
+        return _dedupe_provider_attempts(attempts)
+    if normalized_provider == "github":
+        return [
+            {"query": variant, "strategy": "approved_provider_auto_repair", "resource_type": "repositories"}
+            for variant in variants
+        ]
+    if normalized_provider == "arxiv":
+        return [{"query": variant, "strategy": "approved_provider_auto_repair", "resource_type": "papers"} for variant in variants]
+    return []
+
+
+def _query_variants(query: str) -> list[str]:
+    clean = " ".join(require_text(query, "query").replace("/", " ").replace("_", " ").split())
+    tokens = [token for token in re.split(r"\s+", clean) if token]
+    variants: list[str] = [clean]
+    for length in (4, 3, 2, 1):
+        if len(tokens) >= length:
+            variants.append(" ".join(tokens[:length]))
+    return [variant for variant in dict.fromkeys(variants) if variant]
+
+
+def _dedupe_provider_attempts(attempts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for attempt in attempts:
+        query = str(attempt.get("query") or "").strip()
+        resource_type = str(attempt.get("resource_type") or "").strip()
+        key = (query.lower(), resource_type.lower(), "")
+        if not query or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(attempt)
+    return deduped
 
 
 def _default_resource_type(provider: str) -> str:

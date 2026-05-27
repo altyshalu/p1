@@ -6,7 +6,7 @@ from uuid import UUID
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import Artifact, EvalResult, FailureLearning, ImprovementProposal, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.core.schemas import Artifact, EvalResult, FailureLearning, ImprovementProposal, ImprovementProposalStatus, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskStatus, WorkOrder
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
@@ -79,6 +79,18 @@ class FakeStore:
     async def add_improvement_proposal(self, proposal: ImprovementProposal) -> ImprovementProposal:
         self.improvement_proposals.append(proposal)
         return proposal
+
+    async def list_improvement_proposals(
+        self,
+        status: ImprovementProposalStatus | None = None,
+        run_id: UUID | None = None,
+    ) -> list[ImprovementProposal]:
+        proposals = self.improvement_proposals
+        if status is not None:
+            proposals = [proposal for proposal in proposals if proposal.status == status]
+        if run_id is not None:
+            proposals = [proposal for proposal in proposals if proposal.run_id == run_id]
+        return proposals
 
     async def record_failure_learnings(self, learnings: list[FailureLearning]) -> list[FailureLearning]:
         self.failure_learnings.extend(learnings)

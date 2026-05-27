@@ -1,0 +1,75 @@
+import json
+import sys
+from typing import Any
+
+from l2l3_protocol.workers.build_in_public_worker import approved_provider_auto_repairs
+
+
+class ProposalImplementationError(ValueError):
+    pass
+
+
+def require_text(value: Any, key: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ProposalImplementationError(f"missing required non-empty string: {key}")
+    return value.strip()
+
+
+def implement_approved_proposal(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    proposal = work_order.get("inputs", {}).get("proposal")
+    if not isinstance(proposal, dict):
+        raise ProposalImplementationError("missing required object input: proposal")
+    status = require_text(proposal.get("status"), "proposal.status")
+    if status != "approved":
+        raise ProposalImplementationError(f"proposal must be approved before implementation: status={status}")
+
+    failure_signature = require_text(proposal.get("failure_signature"), "proposal.failure_signature")
+    target_component = require_text(proposal.get("target_component"), "proposal.target_component")
+    proposal_type = require_text(proposal.get("proposal_type"), "proposal.proposal_type")
+    if proposal_type != "improve_tool":
+        raise ProposalImplementationError(f"unsupported proposal_type for controlled implementation: {proposal_type}")
+
+    if failure_signature == "provider_no_results:trend-source-collector" and target_component.startswith(
+        "trend-source-collector/provider:"
+    ):
+        provider = target_component.rsplit(":", 1)[-1].strip().lower()
+        if provider == "hf":
+            provider = "huggingface"
+        sample_repairs = approved_provider_auto_repairs(provider, "agent runtime eval memory")
+        if not sample_repairs:
+            raise ProposalImplementationError(f"no approved provider repair strategy exists for provider: {provider}")
+        return {
+            "implementation_result": {
+                "status": "implemented",
+                "implementation_worker": "improvement-implementation-worker",
+                "target_component": target_component,
+                "failure_signature": failure_signature,
+                "applied_change": "Enabled controlled provider retry expansion in trend-source-collector.",
+                "runtime_behavior_change": {
+                    "provider": provider,
+                    "strategy": "When a provider returns no real results, retry approved real-query/resource variants before failing explicitly.",
+                    "attempt_count_for_sample_query": len(sample_repairs) + 1,
+                    "auto_repair_attempts": sample_repairs,
+                },
+                "approval_boundary": "Proposal status was approved before implementation.",
+                "proof_required": True,
+            }
+        }
+
+    raise ProposalImplementationError(
+        f"no controlled implementation handler for failure_signature={failure_signature} target_component={target_component}"
+    )
+
+
+def main() -> None:
+    request = json.loads(sys.stdin.read())
+    try:
+        result = implement_approved_proposal(request["work_order"], request["context"])
+    except ProposalImplementationError as exc:
+        sys.stderr.write(json.dumps({"error_type": "ProposalImplementationError", "message": str(exc)}, ensure_ascii=True))
+        raise SystemExit(2) from None
+    sys.stdout.write(json.dumps(result, ensure_ascii=True))
+
+
+if __name__ == "__main__":
+    main()

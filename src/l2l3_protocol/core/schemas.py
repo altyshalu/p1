@@ -240,6 +240,7 @@ class ImprovementProposal(BaseModel):
     evidence: list[dict[str, Any]] = Field(default_factory=list)
     behavior_change_requires_approval: bool = True
     proof_spec: dict[str, Any] = Field(default_factory=dict)
+    implementation_result: dict[str, Any] = Field(default_factory=dict)
     status: ImprovementProposalStatus = ImprovementProposalStatus.PROPOSED
     rejection_reason: str | None = None
     approved_at: datetime | None = None

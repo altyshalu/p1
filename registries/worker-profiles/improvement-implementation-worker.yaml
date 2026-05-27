@@ -1,0 +1,23 @@
+key: improvement-implementation-worker
+description: Apply approved self-improvement proposals through controlled runtime implementation handlers.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.proposal_implementation_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [proposal]
+  properties:
+    proposal:
+      type: object
+output_schema:
+  type: object
+  required: [implementation_result]
+stop_conditions:
+  - approved_proposal_implemented
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none
