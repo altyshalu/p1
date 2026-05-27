@@ -97,21 +97,14 @@ def wait_for_diagnosis(api_url: str, run_id: str, timeout_seconds: int) -> dict[
     raise RuntimeError(f"after run did not produce diagnosis before timeout: {run_id}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Run a real before/after proof for an approved improvement proposal.")
-    parser.add_argument("--api-url", default="http://localhost:8080")
-    parser.add_argument("--baseline-run-id", required=True)
-    parser.add_argument("--proposal-id")
-    parser.add_argument("--timeout-seconds", type=int, default=900)
-    args = parser.parse_args()
-
-    api_url = args.api_url.rstrip("/")
+def run_before_after_proof(api_url: str, baseline_run_id: str, proposal_id: str | None, timeout_seconds: int) -> dict[str, Any]:
+    api_url = api_url.rstrip("/")
     health = request_json(f"{api_url}/health")
     if not isinstance(health, dict) or health.get("status") != "ok":
         raise RuntimeError(f"real API health check failed: {health}")
 
-    baseline = require_run_with_diagnosis(api_url, args.baseline_run_id)
-    proposal = require_implemented_proposal(api_url, args.proposal_id, args.baseline_run_id)
+    baseline = require_run_with_diagnosis(api_url, baseline_run_id)
+    proposal = require_implemented_proposal(api_url, proposal_id, baseline_run_id)
     before = baseline["diagnosis"]
     proof_spec = proposal["proof_spec"]
     before_signature = proof_spec.get("expected_absent_signature") or proposal.get("failure_signature", "unknown")
@@ -123,7 +116,7 @@ def main() -> None:
     )
     if not isinstance(created, dict) or not created.get("id"):
         raise RuntimeError(f"real after run creation failed: {created}")
-    after_run = wait_for_diagnosis(api_url, str(created["id"]), args.timeout_seconds)
+    after_run = wait_for_diagnosis(api_url, str(created["id"]), timeout_seconds)
     after = after_run["diagnosis"]
     after_proposals = after_run.get("improvement_proposals", [])
     repeated_signature = any(isinstance(item, dict) and item.get("failure_signature") == before_signature for item in after_proposals)
@@ -132,37 +125,51 @@ def main() -> None:
             "before/after proof failed: after run repeated the implemented proposal failure "
             f"root_cause={after.get('root_cause')} signature={before_signature}"
         )
-    proven = request_json(f"{api_url}/improvement-proposals/{proposal['id']}/mark-proven", method="POST")
+
+    proof_result = {
+        "status": "passed",
+        "baseline_run_id": baseline_run_id,
+        "after_run_id": created["id"],
+        "proof_command": proof_spec.get("proof_command"),
+        "before": {
+            "status": baseline.get("status"),
+            "root_cause": before.get("root_cause"),
+            "summary": before.get("summary"),
+        },
+        "after": {
+            "status": after_run.get("status"),
+            "root_cause": after.get("root_cause"),
+            "summary": after.get("summary"),
+        },
+    }
+    proven = request_json(f"{api_url}/improvement-proposals/{proposal['id']}/mark-proven", method="POST", payload=proof_result)
     if not isinstance(proven, dict) or proven.get("status") != "proven":
         raise RuntimeError(f"proposal proof passed but mark-proven failed: {proven}")
 
-    print(
-        json.dumps(
-            {
-                "baseline_run_id": args.baseline_run_id,
-                "after_run_id": created["id"],
-                "approved_proposal": {
-                    "id": proposal["id"],
-                    "proposal_type": proposal.get("proposal_type"),
-                    "target_component": proposal.get("target_component"),
-                    "failure_signature": proposal.get("failure_signature"),
-                    "status_after_proof": proven.get("status"),
-                },
-                "before": {
-                    "status": baseline.get("status"),
-                    "root_cause": before.get("root_cause"),
-                    "summary": before.get("summary"),
-                },
-                "after": {
-                    "status": after_run.get("status"),
-                    "root_cause": after.get("root_cause"),
-                    "summary": after.get("summary"),
-                },
-            },
-            indent=2,
-            ensure_ascii=False,
-        )
-    )
+    return {
+        "baseline_run_id": baseline_run_id,
+        "after_run_id": created["id"],
+        "approved_proposal": {
+            "id": proposal["id"],
+            "proposal_type": proposal.get("proposal_type"),
+            "target_component": proposal.get("target_component"),
+            "failure_signature": proposal.get("failure_signature"),
+            "status_after_proof": proven.get("status"),
+        },
+        "before": proof_result["before"],
+        "after": proof_result["after"],
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run a real before/after proof for an approved improvement proposal.")
+    parser.add_argument("--api-url", default="http://localhost:8080")
+    parser.add_argument("--baseline-run-id", required=True)
+    parser.add_argument("--proposal-id")
+    parser.add_argument("--timeout-seconds", type=int, default=900)
+    args = parser.parse_args()
+
+    print(json.dumps(run_before_after_proof(args.api_url, args.baseline_run_id, args.proposal_id, args.timeout_seconds), indent=2, ensure_ascii=False))
 
 
 if __name__ == "__main__":

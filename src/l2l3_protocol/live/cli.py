@@ -6,6 +6,7 @@ import json
 
 from l2l3_protocol.live.client import LiveApiClient
 from l2l3_protocol.live.tui import LiveRunApp
+from l2l3_protocol.runtime.self_improvement import render_recent_system_review_markdown
 
 
 DEFAULT_TREND_RADAR_GOAL = "Find AI/dev trends and produce reviewed build-in-public draft."
@@ -36,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     recent = review_subparsers.add_parser("recent")
     recent.add_argument("--limit", type=int, default=50)
     recent.add_argument("--playbook-key", default="build-in-public-trend-radar")
+    recent.add_argument("--format", choices=["json", "markdown"], default="markdown")
+    report = subparsers.add_parser("report")
+    report_subparsers = report.add_subparsers(dest="report_command", required=True)
+    learned = report_subparsers.add_parser("learned")
+    learned.add_argument("--format", choices=["json", "markdown"], default="markdown")
     return parser.parse_args()
 
 
@@ -54,12 +60,24 @@ async def watch_run(api_url: str, run_id: str) -> None:
     await LiveRunApp(api_url=api_url, run_id=run_id).run_async()
 
 
-async def review_recent_runs(api_url: str, limit: int, playbook_key: str | None) -> None:
+async def review_recent_runs(api_url: str, limit: int, playbook_key: str | None, output_format: str) -> None:
     if limit < 1:
         raise ValueError("limit must be >= 1")
     client = LiveApiClient(api_url)
     review = await client.create_recent_system_review(limit=limit, playbook_key=playbook_key)
-    print(json.dumps(review, indent=2, ensure_ascii=False))
+    if output_format == "json":
+        print(json.dumps(review, indent=2, ensure_ascii=False))
+        return
+    print(render_recent_system_review_markdown(review))
+
+
+async def report_learnings(api_url: str, output_format: str) -> None:
+    client = LiveApiClient(api_url)
+    report = await client.get_system_learning_report()
+    if output_format == "json":
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return
+    print(report.get("markdown") or json.dumps(report, indent=2, ensure_ascii=False))
 
 
 def main() -> None:
@@ -69,4 +87,6 @@ def main() -> None:
     elif args.command == "watch":
         asyncio.run(watch_run(args.api_url, args.run_id))
     elif args.command == "review":
-        asyncio.run(review_recent_runs(args.api_url, args.limit, args.playbook_key))
+        asyncio.run(review_recent_runs(args.api_url, args.limit, args.playbook_key, args.format))
+    elif args.command == "report":
+        asyncio.run(report_learnings(args.api_url, args.format))

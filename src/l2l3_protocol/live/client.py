@@ -64,3 +64,16 @@ class LiveApiClient:
             response = await client.post(f"{self.api_url}/system-reviews/recent", json=payload)
             response.raise_for_status()
             return response.json()
+
+    async def get_system_learning_report(self) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"{self.api_url}/reports/system-learning")
+            response.raise_for_status()
+            return response.json()
+
+    async def list_regression_cases(self) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+            response = await client.get(f"{self.api_url}/regression-cases")
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, list) else []
