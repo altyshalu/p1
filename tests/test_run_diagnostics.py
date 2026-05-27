@@ -89,3 +89,40 @@ def test_max_turn_failure_after_repeated_eval_repairs_is_repeated_repair() -> No
     assert diagnosis.payload["repeated_repair"] is True
     assert "max_supervisor_turns exceeded" in diagnosis.payload["summary"]
     assert proposals[0].proposal_type == "improve_playbook"
+
+
+def test_diagnosis_prefers_typed_incident_over_untyped_task_wrapper() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "waiting_approval",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [{"eval_key": "trend-draft-quality", "passed": True, "score": 1.0}],
+        "events": [
+            {
+                "event_type": "task_failed",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "trend-source-collector",
+                    "error": "trend providers failed",
+                },
+            },
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "trend-source-collector",
+                    "failure_type": "provider_no_results",
+                    "error": "huggingface search returned no results",
+                },
+            },
+            {"event_type": "run_finished", "payload": {"status": "waiting_approval"}},
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "tool_or_provider_failure"
+    assert "huggingface search returned no results" in diagnosis.payload["summary"]
+    assert proposals[0].proposal_type == "improve_tool"

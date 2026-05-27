@@ -103,18 +103,20 @@ def _root_cause(state: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         return "repeated_repair"
     if _low_quality_evals(state):
         return "quality_gate_failed"
-    if evidence:
-        failure_type = str(evidence[0].get("failure_type") or "")
+    for item in evidence:
+        failure_type = str(item.get("failure_type") or "")
         if failure_type in INTERNAL_FAILURE_TO_ROOT_CAUSE:
             return INTERNAL_FAILURE_TO_ROOT_CAUSE[failure_type]
-        if evidence[0].get("event_type") == "run_failed":
-            payload = evidence[0].get("payload", {})
+    for item in evidence:
+        if item.get("event_type") == "run_failed":
+            payload = item.get("payload", {})
             error_type = str(payload.get("error_type", "")) if isinstance(payload, dict) else ""
             if "KeyError" in error_type:
                 return "missing_capability_or_registry_item"
             if "RuntimeError" in error_type:
                 return "missing_runtime_dependency"
             return "runtime_failed"
+    if evidence:
         return "runtime_failed"
     return "none"
 
@@ -159,10 +161,15 @@ def _summary(
     if root_cause == "repeated_repair":
         detail = f" Final failure: {run_failed_reason}." if run_failed_reason else ""
         return f"Run ended as {outcome}. Multiple repair attempts were recorded before completion.{detail}"
+    if root_cause == "quality_gate_failed" and low_quality:
+        keys = ", ".join(str(item.get("eval_key")) for item in low_quality)
+        reasons = "; ".join(str(reason) for item in low_quality for reason in item.get("reasons", [])[:2])
+        reason_detail = f" Reasons: {reasons}." if reasons else ""
+        return f"Run ended as {outcome}. Root cause: {root_cause}. Failed evals: {keys}.{reason_detail}"
     if evidence:
-        first = evidence[0]
-        worker = first.get("worker_profile") or "unknown worker"
-        error = first.get("error") or first.get("failure_type") or "no error detail"
+        item = _primary_evidence(root_cause, evidence)
+        worker = item.get("worker_profile") or "unknown worker"
+        error = item.get("error") or item.get("failure_type") or "no error detail"
         return f"Run ended as {outcome}. Root cause: {root_cause}. Evidence points to {worker}: {error}."
     if low_quality:
         keys = ", ".join(str(item.get("eval_key")) for item in low_quality)
@@ -170,6 +177,17 @@ def _summary(
     if repeated_repair:
         return f"Run ended as {outcome}. Multiple repair attempts were recorded."
     return f"Run ended as {outcome}. No incidents or failed evals were found."
+
+
+def _primary_evidence(root_cause: str, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in evidence:
+        failure_type = str(item.get("failure_type") or "")
+        if INTERNAL_FAILURE_TO_ROOT_CAUSE.get(failure_type) == root_cause:
+            return item
+    for item in evidence:
+        if item.get("error") or item.get("failure_type"):
+            return item
+    return evidence[0]
 
 
 def _proposal_from_diagnosis(run_id: str, diagnosis: dict[str, Any]) -> ImprovementProposal:
