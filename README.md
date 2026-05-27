@@ -154,6 +154,45 @@ uv run l2l3-live watch <run-id>
 
 The TUI shows run status, Work Orders, evals, Incident Briefs, approval prompts, and separate scrollable views for long draft/event content.
 
+## Current Self-Improvement Loop
+
+The current hardened dogfood path is `build-in-public-trend-radar`.
+
+It exercises the L2/L3 protocol against real source APIs:
+
+1. L2 creates bounded Work Orders.
+2. L3 workers collect, deduplicate, score, draft, normalize, edit, and evaluate.
+3. Runtime stores tasks, artifacts, evals, events, Incident Briefs, and diagnosis.
+4. Failed or low-quality runs create evidence-backed improvement proposals.
+5. Serious behavior changes require approval.
+6. Approved proposals can be implemented through the controlled implementation worker.
+7. Before/after proof reruns a comparable real workflow and marks the proposal `proven` only when the original failure signature is absent.
+
+Useful endpoints:
+
+```sh
+curl http://localhost:8080/failure-learnings
+curl http://localhost:8080/improvement-proposals
+curl -X POST http://localhost:8080/system-reviews/recent \
+  -H 'content-type: application/json' \
+  -d '{"limit":20,"playbook_key":"build-in-public-trend-radar"}'
+curl -X POST http://localhost:8080/improvement-proposals/<proposal-id>/approve
+curl -X POST http://localhost:8080/improvement-proposals/<proposal-id>/implement
+```
+
+Real before/after proof:
+
+```sh
+uv run python scripts/real-before-after-proof.py \
+  --api-url http://localhost:8080 \
+  --baseline-run-id <baseline-run-id> \
+  --proposal-id <implemented-proposal-id>
+```
+
+Known proven milestone:
+
+- Hugging Face provider-no-results in Trend Radar was diagnosed, proposed, approved, implemented, and proven through a real comparable run.
+
 ## API Basics
 
 Create an Execution Mode run:
@@ -219,6 +258,7 @@ This repository has a strict trust boundary:
 - [Architecture](docs/architecture.md)
 - [Development Guide](docs/development.md)
 - [Runtime Setup](docs/runtime-setup.md)
+- [Parallel L2/L3 Hardening Plan](docs/plans/2026-05-27-parallel-l2l3-hardening-plan.md)
 - [Glossary](docs/glossary.md)
 - [L2 Runtime Modes](docs/l2-runtime-modes.md)
 - [Build-in-Public System Spec](docs/build-in-public-system-spec-v1.md)

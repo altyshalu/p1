@@ -211,3 +211,18 @@ uv run l2l3-live start trend-radar \
 ```
 
 The proof is valid only when the run uses real Postgres, real Hermes/model credentials, real source APIs, and real runtime workers. If any required service or credential is missing, the proof must fail explicitly. Do not replace it with mocks, fakes, simulations, embedded example responses, or synthetic provider data.
+
+## Parallel Runtime Work
+
+When two developers work on the L2/L3 loop in parallel, split ownership by subsystem:
+
+- Runtime/worker owner: `runtime/`, `workers/`, worker profiles, failure patterns, proof-critical run behavior.
+- Memory/reporting owner: `self_improvement.py`, store aggregation, system reviews, reporting scripts, regression catalog.
+
+Avoid overlapping edits to proposal, learning, and diagnosis schemas unless both developers review the interface. Use feature branches from updated `main`, keep commits small, and merge through an integration branch before final real proof.
+
+The current non-UI hardening plan is documented in:
+
+```text
+docs/plans/2026-05-27-parallel-l2l3-hardening-plan.md
+```

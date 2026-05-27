@@ -79,6 +79,48 @@ Controls:
 - When `waiting_user`: type the L2 answer in the input bar and press Enter.
 - When `waiting_approval`: type `approve`, `reject <reason>`, or `edit <message>`.
 
+## Diagnosis And Self-Improvement
+
+Fetch a completed, failed, or blocked run:
+
+```sh
+curl http://localhost:8080/runs/<run_id>
+```
+
+The run payload includes diagnosis, improvement proposals, and failure learnings when available.
+
+List active lessons from real work:
+
+```sh
+curl http://localhost:8080/failure-learnings
+```
+
+Review recent real runs:
+
+```sh
+curl -X POST http://localhost:8080/system-reviews/recent \
+  -H 'content-type: application/json' \
+  -d '{"limit":20,"playbook_key":"build-in-public-trend-radar"}'
+```
+
+Approve and implement a supported proposal:
+
+```sh
+curl -X POST http://localhost:8080/improvement-proposals/<proposal-id>/approve
+curl -X POST http://localhost:8080/improvement-proposals/<proposal-id>/implement
+```
+
+Run real before/after proof:
+
+```sh
+uv run python scripts/real-before-after-proof.py \
+  --api-url http://localhost:8080 \
+  --baseline-run-id <baseline-run-id> \
+  --proposal-id <implemented-proposal-id>
+```
+
+This proof path must use real services. If Postgres, Hermes/model credentials, source APIs, or required registry data are missing, the proof should fail explicitly.
+
 ## Taskforce Hub
 
 The Runtime uses the database-backed Taskforce Hub as the source of truth. `registries/` is only explicit seed data for setup.

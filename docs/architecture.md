@@ -29,6 +29,12 @@ flowchart LR
     Eval -->|"pass"| Memory["Memory Writes / Final Output"]
     Eval -->|"fail"| Incident["Incident Brief"]
     Incident --> L2
+    Incident --> Diagnosis["Run Diagnosis"]
+    Diagnosis --> Proposals["Improvement Proposals"]
+    Proposals --> Approval2["Approval Gate"]
+    Approval2 --> Implementer["Implementation Worker"]
+    Implementer --> Proof["Real Before/After Proof"]
+    Proof --> Memory
 
     Designer --> Proposal["Playbook Proposal"]
     Proposal --> Approval["Human Approval Gate"]
@@ -157,6 +163,25 @@ They include:
 - eval result when relevant
 
 L2 should repair internally when the decision is technical and safe. It should escalate only for product/editorial decisions, unsafe External Actions, spending, posting, or approval-required Hub changes.
+
+## Self-Improvement Loop
+
+The runtime now records a post-run diagnosis and, when evidence supports it, creates improvement proposals. The proposal lifecycle is:
+
+```text
+proposed -> approved -> implemented -> proven
+                 \-> rejected
+```
+
+Rules:
+
+- A proposal must cite real run evidence.
+- Behavior-changing proposals require approval.
+- The implementation worker only handles controlled, known improvement handlers.
+- Unsupported implementation requests fail explicitly.
+- A proposal can be marked `proven` only after a real comparable run shows the original failure signature is absent.
+
+The first proven path is the Trend Radar Hugging Face provider repair: an approved proposal enabled controlled real provider retry variants, then a before/after run proved that the original provider-no-results failure did not repeat.
 
 ## External Actions
 
