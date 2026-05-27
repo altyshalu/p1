@@ -250,6 +250,73 @@ def test_draft_schema_normalizer_maps_claim_text_to_eval_text() -> None:
     assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
 
 
+def test_draft_schema_normalizer_injects_channel_from_real_run_inputs() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "channels": ["x"],
+                "drafts": [
+                    {
+                        "text": "AgentBase is a local-first TypeScript agent runtime. https://github.com/shenyangs/AgentBase",
+                        "claims": [
+                            {
+                                "text": "AgentBase is a local-first TypeScript agent runtime.",
+                                "source_url": "https://github.com/shenyangs/AgentBase",
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["channel"] == "x"
+    assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_draft_schema_normalizer_injects_channel_from_run_context_for_repair_tasks() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "text": "AgentBase is a local-first TypeScript agent runtime. https://github.com/shenyangs/AgentBase",
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ],
+            }
+        },
+        {"input": {"channel": "x"}},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["channel"] == "x"
+    assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_draft_schema_normalizer_accepts_string_drafts_from_repair_path() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "channel": "x",
+                "drafts": ["AgentBase is a local-first runtime. https://github.com/shenyangs/AgentBase"],
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["text"].startswith("AgentBase is a local-first runtime.")
+    assert draft["channel"] == "x"
+    assert draft["claims"][0]["source_url"] == "https://github.com/shenyangs/AgentBase"
+
+
 def test_draft_schema_normalizer_derives_thread_claim_text_from_thread_item_without_repr() -> None:
     payload = normalize_draft_schema(
         {

@@ -489,17 +489,50 @@ def stop_slop_edit(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
 def normalize_draft_schema(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     drafts = require_list(work_order["inputs"], "drafts")
     source_format = work_order["inputs"].get("source_format", "separate_section")
+    channel = _draft_channel_from_inputs(work_order["inputs"], context)
     normalized = []
-    for draft in drafts:
+    for index, draft in enumerate(drafts):
         item = _normalize_draft_shape(draft)
+        if not item.get("channel"):
+            item_channel = _channel_for_index(channel, index)
+            if item_channel:
+                item["channel"] = item_channel
         if source_format == "separate_section":
             item["text"] = _format_sources_separately(require_text(item.get("text"), "draft.text"), item.get("sources", []))
         normalized.append(item)
     return {"drafts": normalized}
 
 
-def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(draft)
+def _draft_channel_from_inputs(inputs: dict[str, Any], context: dict[str, Any] | None = None) -> str | list[str] | None:
+    channel = inputs.get("channel")
+    if isinstance(channel, str) and channel.strip():
+        return channel.strip()
+    channels = inputs.get("channels")
+    if isinstance(channels, list):
+        normalized_channels = [str(item).strip() for item in channels if str(item).strip()]
+        if normalized_channels:
+            return normalized_channels
+    run_input = context.get("input") if isinstance(context, dict) else None
+    if isinstance(run_input, dict):
+        return _draft_channel_from_inputs(run_input)
+    return None
+
+
+def _channel_for_index(channel: str | list[str] | None, index: int) -> str | None:
+    if isinstance(channel, str):
+        return channel
+    if isinstance(channel, list) and channel:
+        return channel[min(index, len(channel) - 1)]
+    return None
+
+
+def _normalize_draft_shape(draft: Any) -> dict[str, Any]:
+    if isinstance(draft, dict):
+        normalized = dict(draft)
+    elif isinstance(draft, str) and draft.strip():
+        normalized = {"text": draft.strip()}
+    else:
+        raise WorkerInputError("draft must be an object or non-empty string")
     if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
         for text_key in ("body", "content", "message"):
             value = normalized.get(text_key)

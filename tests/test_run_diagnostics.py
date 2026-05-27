@@ -173,6 +173,62 @@ def test_claim_grounding_failure_proposal_targets_eval_contract() -> None:
     assert "claim-grounding contract" in proposals[0].proposed_change
 
 
+def test_repaired_eval_failure_does_not_create_terminal_quality_proposal() -> None:
+    run = {
+        "id": str(uuid4()),
+        "status": "waiting_approval",
+        "tasks": [],
+        "artifacts": [],
+        "evals": [
+            {
+                "task_id": str(uuid4()),
+                "eval_key": "trend-claim-grounding",
+                "passed": False,
+                "score": 0.6666666666666666,
+                "threshold": 1.0,
+                "reasons": ["Draft has no claims."],
+            },
+            {
+                "task_id": str(uuid4()),
+                "eval_key": "trend-claim-grounding",
+                "passed": True,
+                "score": 1.0,
+                "threshold": 1.0,
+                "reasons": [],
+            },
+            {
+                "task_id": str(uuid4()),
+                "eval_key": "trend-draft-quality",
+                "passed": True,
+                "score": 1.0,
+                "threshold": 0.8,
+                "reasons": [],
+            },
+        ],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "payload": {
+                    "worker_profile": "claim-grounding-judge",
+                    "failure_type": "eval_failed",
+                    "error": "eval did not meet threshold",
+                    "eval_result": {
+                        "eval_key": "trend-claim-grounding",
+                        "passed": False,
+                    },
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "none"
+    assert diagnosis.payload["improvement_needed"] is False
+    assert diagnosis.payload["evidence"] == []
+    assert proposals == []
+
+
 def test_invalid_provider_proposal_targets_trend_radar_inputs() -> None:
     run = {
         "id": str(uuid4()),

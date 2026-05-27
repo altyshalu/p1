@@ -563,6 +563,7 @@ class WorkingMemoryStore:
         ).scalar_one_or_none()
 
     async def _sync_regression_case_for_proposal(self, proposal_record: ImprovementProposalRecord, proof_result: dict[str, Any] | None) -> None:
+        await self.session.refresh(proposal_record)
         proposal = self._improvement_proposal_from_record(proposal_record)
         baseline_run: dict[str, Any] | None = None
         try:

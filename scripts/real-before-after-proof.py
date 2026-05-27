@@ -46,8 +46,11 @@ def require_implemented_proposal(api_url: str, proposal_id: str | None, baseline
         proposal = next((item for item in proposals if isinstance(item, dict) and item.get("id") == proposal_id), None)
         if proposal is None:
             raise RuntimeError(f"improvement proposal not found: {proposal_id}")
-    if proposal.get("status") != "implemented":
-        raise RuntimeError(f"proposal must be marked implemented before before/after proof: {proposal.get('id')} status={proposal.get('status')}")
+    if proposal.get("status") not in {"implemented", "proven"}:
+        raise RuntimeError(
+            "proposal must be marked implemented or proven before before/after proof: "
+            f"{proposal.get('id')} status={proposal.get('status')}"
+        )
     proof_spec = proposal.get("proof_spec")
     if not isinstance(proof_spec, dict) or proof_spec.get("real_run_required") is not True:
         raise RuntimeError(f"proposal has no real-run proof spec: {proposal.get('id')}")
@@ -124,6 +127,11 @@ def run_before_after_proof(api_url: str, baseline_run_id: str, proposal_id: str 
         raise RuntimeError(
             "before/after proof failed: after run repeated the implemented proposal failure "
             f"root_cause={after.get('root_cause')} signature={before_signature}"
+        )
+    if after.get("root_cause") not in {None, "none"}:
+        raise RuntimeError(
+            "before/after proof failed: after run ended with a new root cause "
+            f"root_cause={after.get('root_cause')} summary={after.get('summary')}"
         )
 
     proof_result = {
