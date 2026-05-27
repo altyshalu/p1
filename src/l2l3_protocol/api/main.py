@@ -269,6 +269,7 @@ async def create_recent_system_review(payload: RecentSystemReviewCreate, session
         id=uuid4(),
         run_id=uuid4(),
         task_type="review_recent_runs",
+        goal="Review recent real runs and produce a prioritized self-improvement backlog.",
         worker_profile="self-improvement-reviewer",
         worker_type=reviewer_profile.spec.get("worker_type", "sandboxed_subprocess"),
         inputs={
