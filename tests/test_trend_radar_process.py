@@ -185,6 +185,30 @@ def test_draft_schema_normalizer_derives_claims_from_explicit_sources_without_in
     assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
 
 
+def test_draft_schema_normalizer_maps_body_to_text_for_real_draft_writer_contract() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "body": "openai/codex is a terminal coding agent. https://github.com/openai/codex",
+                        "source_urls": ["https://github.com/openai/codex"],
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["text"].startswith("openai/codex is a terminal coding agent")
+    assert draft["claims"][0]["source_url"] == "https://github.com/openai/codex"
+    assert stop_slop_edit({"inputs": {"drafts": payload["drafts"]}}, {})["edited_drafts"][0]["text"]
+    assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
 def test_stop_slop_editor_accepts_thread_drafts_without_user_mapping() -> None:
     payload = stop_slop_edit({"inputs": {"drafts": [{"channel": "x", "thread": ["A game-changing update."], "sources": []}]}}, {})
 

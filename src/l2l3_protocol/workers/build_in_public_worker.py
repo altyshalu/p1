@@ -429,6 +429,12 @@ def normalize_draft_schema(work_order: dict[str, Any], context: dict[str, Any]) 
 def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(draft)
     if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
+        for text_key in ("body", "content", "message"):
+            value = normalized.get(text_key)
+            if isinstance(value, str) and value.strip():
+                normalized["text"] = value.strip()
+                break
+    if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
         thread = normalized.get("thread")
         if isinstance(thread, list) and thread:
             normalized["text"] = "\n\n".join(str(item).strip() for item in thread if str(item).strip())
