@@ -36,6 +36,7 @@ from l2l3_protocol.db.models import (
     WorkOrderRecord,
 )
 from l2l3_protocol.hub.registry import apply_registry_change, is_safe_registry_change
+from l2l3_protocol.runtime.self_improvement import proof_spec_for_proposal
 
 
 class WorkingMemoryStore:
@@ -255,6 +256,17 @@ class WorkingMemoryStore:
         record.status = ImprovementProposalStatus.APPROVED.value
         record.rejection_reason = None
         record.approved_at = datetime.now(UTC)
+        if not record.proof_spec:
+            state = await self.get_run(record.run_id)
+            diagnosis = state.get("diagnosis", {}) if isinstance(state, dict) else {}
+            record.proof_spec = proof_spec_for_proposal(
+                baseline_run_id=record.source_run_id,
+                playbook_key=state.get("playbook_key") if isinstance(state, dict) else None,
+                target_component=record.target_component,
+                failure_signature=record.failure_signature,
+                root_cause=diagnosis.get("root_cause") if isinstance(diagnosis, dict) else None,
+                success_check=record.success_check,
+            )
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
