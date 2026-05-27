@@ -489,17 +489,50 @@ def stop_slop_edit(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
 def normalize_draft_schema(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     drafts = require_list(work_order["inputs"], "drafts")
     source_format = work_order["inputs"].get("source_format", "separate_section")
+    channel = _draft_channel_from_inputs(work_order["inputs"], context)
     normalized = []
-    for draft in drafts:
+    for index, draft in enumerate(drafts):
         item = _normalize_draft_shape(draft)
+        if not item.get("channel"):
+            item_channel = _channel_for_index(channel, index)
+            if item_channel:
+                item["channel"] = item_channel
         if source_format == "separate_section":
             item["text"] = _format_sources_separately(require_text(item.get("text"), "draft.text"), item.get("sources", []))
         normalized.append(item)
     return {"drafts": normalized}
 
 
-def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(draft)
+def _draft_channel_from_inputs(inputs: dict[str, Any], context: dict[str, Any] | None = None) -> str | list[str] | None:
+    channel = inputs.get("channel")
+    if isinstance(channel, str) and channel.strip():
+        return channel.strip()
+    channels = inputs.get("channels")
+    if isinstance(channels, list):
+        normalized_channels = [str(item).strip() for item in channels if str(item).strip()]
+        if normalized_channels:
+            return normalized_channels
+    run_input = context.get("input") if isinstance(context, dict) else None
+    if isinstance(run_input, dict):
+        return _draft_channel_from_inputs(run_input)
+    return None
+
+
+def _channel_for_index(channel: str | list[str] | None, index: int) -> str | None:
+    if isinstance(channel, str):
+        return channel
+    if isinstance(channel, list) and channel:
+        return channel[min(index, len(channel) - 1)]
+    return None
+
+
+def _normalize_draft_shape(draft: Any) -> dict[str, Any]:
+    if isinstance(draft, dict):
+        normalized = dict(draft)
+    elif isinstance(draft, str) and draft.strip():
+        normalized = {"text": draft.strip()}
+    else:
+        raise WorkerInputError("draft must be an object or non-empty string")
     if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
         for text_key in ("body", "content", "message"):
             value = normalized.get(text_key)
@@ -509,18 +542,22 @@ def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
         thread = normalized.get("thread")
         if isinstance(thread, list) and thread:
-            normalized["text"] = "\n\n".join(str(item).strip() for item in thread if str(item).strip())
+            normalized["text"] = "\n\n".join(_thread_item_text(item) for item in thread if _thread_item_text(item))
     normalized.setdefault("status", "draft")
     normalized.setdefault("publish", False)
     text = normalized.get("text") if isinstance(normalized.get("text"), str) else ""
     sources = _draft_source_urls(normalized, text)
     claims = normalized.get("claims")
+    if not isinstance(claims, list):
+        thread_claims = _claims_from_thread(normalized.get("thread"))
+        if thread_claims:
+            claims = thread_claims
     if isinstance(claims, list):
         normalized_claims = []
         for claim in claims:
             if not isinstance(claim, dict):
                 continue
-            normalized_claim = dict(claim)
+            normalized_claim = _normalize_claim(claim, text)
             evidence_urls = normalized_claim.get("evidence_urls")
             if not normalized_claim.get("source_url") and isinstance(evidence_urls, list) and evidence_urls:
                 normalized_claim["source_url"] = str(evidence_urls[0])
@@ -532,6 +569,42 @@ def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
         normalized["claims"] = [{"text": text.strip(), "source_url": sources[0], "evidence_urls": sources}]
     normalized["sources"] = [str(source) for source in sources if str(source).strip()]
     return normalized
+
+
+def _thread_item_text(item: Any) -> str:
+    if isinstance(item, dict):
+        value = item.get("text") or item.get("body") or item.get("content") or item.get("message")
+        return str(value).strip() if value is not None else ""
+    return str(item).strip()
+
+
+def _claims_from_thread(thread: Any) -> list[dict[str, Any]]:
+    if not isinstance(thread, list):
+        return []
+    claims: list[dict[str, Any]] = []
+    for item in thread:
+        if not isinstance(item, dict):
+            continue
+        item_text = _thread_item_text(item)
+        item_claims = item.get("claims")
+        if not isinstance(item_claims, list):
+            continue
+        for claim in item_claims:
+            if not isinstance(claim, dict):
+                continue
+            claims.append(_normalize_claim(claim, item_text))
+    return claims
+
+
+def _normalize_claim(claim: dict[str, Any], fallback_text: str) -> dict[str, Any]:
+    normalized_claim = dict(claim)
+    if not isinstance(normalized_claim.get("text"), str) or not normalized_claim.get("text", "").strip():
+        claim_text = normalized_claim.get("claim_text")
+        if isinstance(claim_text, str) and claim_text.strip():
+            normalized_claim["text"] = claim_text.strip()
+        elif fallback_text.strip():
+            normalized_claim["text"] = fallback_text.strip()
+    return normalized_claim
 
 
 def _draft_source_urls(draft: dict[str, Any], text: str) -> list[str]:
@@ -558,6 +631,21 @@ def _draft_source_urls(draft: dict[str, Any], text: str) -> list[str]:
                 else:
                     flattened.append(item)
             _append_source_urls(sources, flattened)
+    thread = draft.get("thread")
+    if isinstance(thread, list):
+        for item in thread:
+            if not isinstance(item, dict):
+                continue
+            item_claims = item.get("claims")
+            if not isinstance(item_claims, list):
+                continue
+            for claim in item_claims:
+                if not isinstance(claim, dict):
+                    continue
+                _append_source_urls(sources, [claim.get("source_url")])
+                evidence_urls = claim.get("evidence_urls")
+                if isinstance(evidence_urls, list):
+                    _append_source_urls(sources, evidence_urls)
     _append_source_urls(sources, URL_PATTERN.findall(text))
     return sources
 

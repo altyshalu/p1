@@ -143,7 +143,18 @@ class ImprovementProposalRecord(Base):
 
 class FailureLearningRecord(Base):
     __tablename__ = "failure_learnings"
-    __table_args__ = (UniqueConstraint("failure_signature", "target_component", name="uq_failure_learnings_signature_target"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "failure_signature",
+            "target_component",
+            "playbook_key",
+            "root_cause",
+            "worker_family",
+            "eval_family",
+            "tool_family",
+            name="uq_failure_learnings_grouping_key",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     failure_signature: Mapped[str] = mapped_column(String(160), index=True)
@@ -159,6 +170,11 @@ class FailureLearningRecord(Base):
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
     first_seen_run_id: Mapped[str] = mapped_column(String(80))
     last_seen_run_id: Mapped[str] = mapped_column(String(80), index=True)
+    worker_family: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    eval_family: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    tool_family: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    repair_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    human_intervention_count: Mapped[int] = mapped_column(Integer, default=0)
     evidence_refs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     run_ids: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     status: Mapped[str] = mapped_column(String(40), index=True)
@@ -176,3 +192,22 @@ class SystemReviewRecord(Base):
     learning_count: Mapped[int] = mapped_column(Integer, default=0)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RegressionCaseRecord(Base):
+    __tablename__ = "regression_cases"
+    __table_args__ = (UniqueConstraint("proposal_id", name="uq_regression_cases_proposal_id"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    proposal_id: Mapped[UUID] = mapped_column(ForeignKey("improvement_proposals.id"), index=True)
+    baseline_run_id: Mapped[str] = mapped_column(String(80), index=True)
+    failure_signature: Mapped[str] = mapped_column(String(160), index=True)
+    target_component: Mapped[str] = mapped_column(String(160), index=True)
+    comparable_run_input: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    proof_command: Mapped[str] = mapped_column(String)
+    expected_absent_failure: Mapped[str] = mapped_column(String(160), index=True)
+    last_after_run_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    last_proof_status: Mapped[str] = mapped_column(String(40), index=True, default="pending")
+    last_proof_result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

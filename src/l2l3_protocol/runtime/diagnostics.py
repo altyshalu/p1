@@ -64,9 +64,13 @@ def _outcome(state: dict[str, Any]) -> str:
 
 def _evidence(state: dict[str, Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    latest_eval_passed_by_key = _latest_eval_passed_by_key(state)
     for event in state.get("events", []):
         event_type = event.get("event_type")
         payload = event.get("payload", {})
+        eval_key = _event_eval_key(event)
+        if eval_key and latest_eval_passed_by_key.get(eval_key) is True:
+            continue
         if event_type in {
             "incident_brief",
             "task_failed",
@@ -86,7 +90,7 @@ def _evidence(state: dict[str, Any]) -> list[dict[str, Any]]:
                     "payload": payload,
                 }
             )
-    for eval_result in state.get("evals", []):
+    for eval_result in _latest_evals_by_key(state).values():
         if eval_result.get("passed") is False:
             items.append(
                 {
@@ -143,9 +147,37 @@ def _low_quality_evals(state: dict[str, Any]) -> list[dict[str, Any]]:
             "threshold": item.get("threshold"),
             "reasons": item.get("reasons", []),
         }
-        for item in state.get("evals", [])
+        for item in _latest_evals_by_key(state).values()
         if item.get("passed") is False
     ]
+
+
+def _latest_evals_by_key(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for item in state.get("evals", []):
+        eval_key = item.get("eval_key")
+        if isinstance(eval_key, str) and eval_key:
+            latest[eval_key] = item
+    return latest
+
+
+def _latest_eval_passed_by_key(state: dict[str, Any]) -> dict[str, bool]:
+    return {key: bool(value.get("passed")) for key, value in _latest_evals_by_key(state).items()}
+
+
+def _event_eval_key(event: dict[str, Any]) -> str | None:
+    payload = event.get("payload", {})
+    if not isinstance(payload, dict):
+        return None
+    eval_key = payload.get("eval_key")
+    if isinstance(eval_key, str) and eval_key:
+        return eval_key
+    eval_result = payload.get("eval_result")
+    if isinstance(eval_result, dict):
+        nested_eval_key = eval_result.get("eval_key")
+        if isinstance(nested_eval_key, str) and nested_eval_key:
+            return nested_eval_key
+    return None
 
 
 def _repeated_repair(state: dict[str, Any]) -> bool:

@@ -20,6 +20,8 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ("/failure-learnings", "GET") in routes
     assert ("/system-reviews/recent", "POST") in routes
     assert ("/system-reviews", "GET") in routes
+    assert ("/reports/system-learning", "GET") in routes
+    assert ("/regression-cases", "GET") in routes
 
 
 def test_run_create_rejects_old_process_key_field() -> None:

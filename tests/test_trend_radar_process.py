@@ -221,6 +221,136 @@ def test_draft_schema_normalizer_maps_body_to_text_for_real_draft_writer_contrac
     assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
 
 
+def test_draft_schema_normalizer_maps_claim_text_to_eval_text() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "text": "1/ AgentBase ships traces and replay. https://github.com/shenyangs/AgentBase",
+                        "claims": [
+                            {
+                                "id": "atom-2",
+                                "claim_text": "AgentBase ships traces and replay.",
+                                "source_url": "https://github.com/shenyangs/AgentBase",
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    claim = payload["drafts"][0]["claims"][0]
+
+    assert claim["text"] == "AgentBase ships traces and replay."
+    assert claim["source_url"] == "https://github.com/shenyangs/AgentBase"
+    assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_draft_schema_normalizer_injects_channel_from_real_run_inputs() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "channels": ["x"],
+                "drafts": [
+                    {
+                        "text": "AgentBase is a local-first TypeScript agent runtime. https://github.com/shenyangs/AgentBase",
+                        "claims": [
+                            {
+                                "text": "AgentBase is a local-first TypeScript agent runtime.",
+                                "source_url": "https://github.com/shenyangs/AgentBase",
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["channel"] == "x"
+    assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_draft_schema_normalizer_injects_channel_from_run_context_for_repair_tasks() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "text": "AgentBase is a local-first TypeScript agent runtime. https://github.com/shenyangs/AgentBase",
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ],
+            }
+        },
+        {"input": {"channel": "x"}},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["channel"] == "x"
+    assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
+def test_draft_schema_normalizer_accepts_string_drafts_from_repair_path() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "channel": "x",
+                "drafts": ["AgentBase is a local-first runtime. https://github.com/shenyangs/AgentBase"],
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["text"].startswith("AgentBase is a local-first runtime.")
+    assert draft["channel"] == "x"
+    assert draft["claims"][0]["source_url"] == "https://github.com/shenyangs/AgentBase"
+
+
+def test_draft_schema_normalizer_derives_thread_claim_text_from_thread_item_without_repr() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "thread": [
+                            {
+                                "text": "1/ MUSE-Autoskill uses skill-level memory. arxiv.org/abs/2605.27366",
+                                "claims": [{"id": "atom-6", "source_url": "http://arxiv.org/abs/2605.27366v1"}],
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert "{'text':" not in draft["text"]
+    assert draft["claims"] == [
+        {
+            "id": "atom-6",
+            "source_url": "http://arxiv.org/abs/2605.27366v1",
+            "text": "1/ MUSE-Autoskill uses skill-level memory. arxiv.org/abs/2605.27366",
+        }
+    ]
+    assert draft["sources"] == ["http://arxiv.org/abs/2605.27366v1"]
+    assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
 def test_stop_slop_editor_accepts_thread_drafts_without_user_mapping() -> None:
     payload = stop_slop_edit({"inputs": {"drafts": [{"channel": "x", "thread": ["A game-changing update."], "sources": []}]}}, {})
 
