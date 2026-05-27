@@ -297,13 +297,31 @@ class WorkingMemoryStore:
         record = await self.session.get(ImprovementProposalRecord, proposal_id)
         if record is None:
             raise KeyError(f"improvement proposal not found: {proposal_id}")
+        if record.status == ImprovementProposalStatus.PROVEN.value:
+            await self._resolve_matching_failure_learning(record)
+            await self._persist()
+            await self.session.refresh(record)
+            return self._improvement_proposal_from_record(record)
         if record.status != ImprovementProposalStatus.IMPLEMENTED.value:
             raise ValueError(f"proposal must be implemented before proof can mark it proven: status={record.status}")
         record.status = ImprovementProposalStatus.PROVEN.value
         record.proven_at = datetime.now(UTC)
+        await self._resolve_matching_failure_learning(record)
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
+
+    async def _resolve_matching_failure_learning(self, proposal: ImprovementProposalRecord) -> None:
+        learning = (
+            await self.session.execute(
+                select(FailureLearningRecord).where(
+                    FailureLearningRecord.failure_signature == proposal.failure_signature,
+                    FailureLearningRecord.target_component == proposal.target_component,
+                )
+            )
+        ).scalar_one_or_none()
+        if learning is not None:
+            learning.status = FailureLearningStatus.RESOLVED.value
 
     async def record_failure_learnings(self, learnings: list[FailureLearning]) -> list[FailureLearning]:
         recorded: list[FailureLearning] = []
