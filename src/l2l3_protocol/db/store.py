@@ -615,6 +615,7 @@ class WorkingMemoryStore:
             findings=payload.get("findings", []),
             recommendations=payload.get("recommendations", []),
             created_proposal_ids=payload.get("created_proposal_ids", []),
+            worker_execution=payload.get("worker_execution", {}),
             created_at=record.created_at,
         )
 

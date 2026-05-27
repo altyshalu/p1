@@ -288,6 +288,7 @@ async def create_recent_system_review(payload: RecentSystemReviewCreate, session
         reviewer_profile.spec,
     )
     review = SystemReview.model_validate(worker_output["system_review"])
+    review.worker_execution = worker_output.get("_worker_execution", {})
     created_proposal_ids: list[str] = []
     for learning in learnings:
         if learning.occurrence_count < 2:

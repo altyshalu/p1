@@ -280,6 +280,7 @@ class SystemReview(BaseModel):
     findings: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
     created_proposal_ids: list[str] = Field(default_factory=list)
+    worker_execution: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
 
 
