@@ -209,6 +209,59 @@ async def test_l2_supervisor_blocks_approval_before_required_evals_pass() -> Non
 
 
 @pytest.mark.asyncio
+async def test_l2_supervisor_rejects_equivalent_duplicate_work_order() -> None:
+    hermes = FakeHermes(
+        [
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "collect",
+                  "worker_profile": "signal-collector",
+                  "goal": "Collect the same signals again.",
+                  "inputs": {"signals": ["already handled"]},
+                  "artifact_type": "signals"
+                }
+              ]
+            }
+            """,
+            """
+            {
+              "action": "spawn_tasks",
+              "tasks": [
+                {
+                  "task_type": "collect",
+                  "worker_profile": "signal-collector",
+                  "goal": "Collect changed signals.",
+                  "inputs": {"signals": ["new evidence"]},
+                  "artifact_type": "signals"
+                }
+              ]
+            }
+            """,
+        ]
+    )
+    state = {
+        "goal": "x",
+        "tasks": [
+            {
+                "task_type": "collect",
+                "worker_profile": "signal-collector",
+                "inputs": {"signals": ["already handled"]},
+                "status": "completed",
+            }
+        ],
+        "events": [],
+    }
+
+    action = await L2Supervisor(hermes).next_action(playbook(), worker_profiles(), state, 0)
+
+    assert action.tasks[0].inputs == {"signals": ["new evidence"]}
+    assert "equivalent Work Order already exists" in hermes.prompts[1]
+
+
+@pytest.mark.asyncio
 async def test_l3_executor_rejects_missing_required_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module_path = tmp_path / "bad_worker.py"
     module_path.write_text("import json, sys; json.loads(sys.stdin.read()); print('{}')", encoding="utf-8")

@@ -209,6 +209,11 @@ class L2Supervisor:
                 raise ValueError(f"worker is not allowed by Playbook: {task.worker_profile}")
             if task.worker_profile not in worker_profiles:
                 raise ValueError(f"worker profile is not registered: {task.worker_profile}")
+            if _equivalent_task_already_exists(state, task.model_dump(mode="json")):
+                raise ValueError(
+                    f"equivalent Work Order already exists for worker={task.worker_profile} task_type={task.task_type}; "
+                    "change inputs based on new evidence or choose a different action"
+                )
             if task.worker_profile == "approval-adapter" and not _required_evals_passed(playbook, state):
                 raise ValueError("approval-adapter is not allowed until required evals pass")
 
@@ -242,3 +247,26 @@ def _required_evals_passed(playbook: dict[str, Any], state: dict[str, Any]) -> b
         if eval_key:
             latest_by_key[str(eval_key)] = eval_result
     return all(bool(latest_by_key.get(str(eval_key), {}).get("passed")) for eval_key in required_eval_keys)
+
+
+def _equivalent_task_already_exists(state: dict[str, Any], task: dict[str, Any]) -> bool:
+    task_identity = (
+        task.get("worker_profile"),
+        task.get("task_type"),
+        _stable_json(task.get("inputs", {})),
+    )
+    for existing in state.get("tasks", []):
+        if not isinstance(existing, dict):
+            continue
+        existing_identity = (
+            existing.get("worker_profile"),
+            existing.get("task_type"),
+            _stable_json(existing.get("inputs", {})),
+        )
+        if existing_identity == task_identity:
+            return True
+    return False
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
