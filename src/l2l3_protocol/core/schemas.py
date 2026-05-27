@@ -265,6 +265,11 @@ class FailureLearning(BaseModel):
     occurrence_count: int = 1
     first_seen_run_id: str
     last_seen_run_id: str
+    worker_family: str | None = None
+    eval_family: str | None = None
+    tool_family: str | None = None
+    repair_attempt_count: int = 0
+    human_intervention_count: int = 0
     evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
     run_ids: list[str] = Field(default_factory=list)
     status: FailureLearningStatus = FailureLearningStatus.ACTIVE
@@ -280,6 +285,11 @@ class SystemReview(BaseModel):
     learning_count: int = 0
     findings: list[dict[str, Any]] = Field(default_factory=list)
     recommendations: list[dict[str, Any]] = Field(default_factory=list)
+    weak_components: list[dict[str, Any]] = Field(default_factory=list)
+    excess_repairs: list[dict[str, Any]] = Field(default_factory=list)
+    human_interruptions: list[dict[str, Any]] = Field(default_factory=list)
+    needed_changes: list[dict[str, Any]] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
     created_proposal_ids: list[str] = Field(default_factory=list)
     worker_execution: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
@@ -290,3 +300,19 @@ class RecentSystemReviewCreate(BaseModel):
 
     limit: int = Field(default=50, ge=1, le=250)
     playbook_key: str | None = None
+
+
+class RegressionCase(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    proposal_id: UUID
+    baseline_run_id: str
+    failure_signature: str
+    target_component: str
+    comparable_run_input: dict[str, Any] = Field(default_factory=dict)
+    proof_command: str
+    expected_absent_failure: str
+    last_after_run_id: str | None = None
+    last_proof_status: str = "pending"
+    last_proof_result: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

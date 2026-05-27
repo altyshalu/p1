@@ -13,6 +13,7 @@ from l2l3_protocol.core.schemas import (
     ImprovementProposal,
     ImprovementProposalStatus,
     ProcessRun,
+    RegressionCase,
     RegistryChangeCandidate,
     RegistryChangeCandidateCreate,
     RegistryChangeStatus,
@@ -30,13 +31,14 @@ from l2l3_protocol.db.models import (
     FailureLearningRecord,
     ImprovementProposalRecord,
     ProcessRunRecord,
+    RegressionCaseRecord,
     RegistryChangeCandidateRecord,
     RegistryItemRecord,
     SystemReviewRecord,
     WorkOrderRecord,
 )
 from l2l3_protocol.hub.registry import apply_registry_change, is_safe_registry_change
-from l2l3_protocol.runtime.self_improvement import proof_spec_for_proposal
+from l2l3_protocol.runtime.self_improvement import build_regression_case, proof_spec_for_proposal
 
 
 class WorkingMemoryStore:
@@ -127,8 +129,8 @@ class WorkingMemoryStore:
                 for event in events
             ],
             "diagnosis": diagnoses[-1]["payload"] if diagnoses else None,
-            "improvement_proposals": [self._improvement_proposal_from_record(record).model_dump(mode="json") for record in improvement_proposals],
-            "failure_learnings": [self._failure_learning_from_record(record).model_dump(mode="json") for record in failure_learnings],
+            "improvement_proposals": [self._improvement_proposal_from_record(item).model_dump(mode="json") for item in improvement_proposals],
+            "failure_learnings": [self._failure_learning_from_record(item).model_dump(mode="json") for item in failure_learnings],
         }
 
     async def get_run_status(self, run_id: UUID) -> RunStatus:
@@ -302,47 +304,42 @@ class WorkingMemoryStore:
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
 
-    async def mark_improvement_proposal_proven(self, proposal_id: UUID) -> ImprovementProposal:
+    async def mark_improvement_proposal_proven(self, proposal_id: UUID, proof_result: dict[str, Any] | None = None) -> ImprovementProposal:
         record = await self.session.get(ImprovementProposalRecord, proposal_id)
         if record is None:
             raise KeyError(f"improvement proposal not found: {proposal_id}")
-        if record.status == ImprovementProposalStatus.PROVEN.value:
-            await self._resolve_matching_failure_learning(record)
-            await self._persist()
-            await self.session.refresh(record)
-            return self._improvement_proposal_from_record(record)
-        if record.status != ImprovementProposalStatus.IMPLEMENTED.value:
+        if record.status not in {ImprovementProposalStatus.IMPLEMENTED.value, ImprovementProposalStatus.PROVEN.value}:
             raise ValueError(f"proposal must be implemented before proof can mark it proven: status={record.status}")
         record.status = ImprovementProposalStatus.PROVEN.value
-        record.proven_at = datetime.now(UTC)
+        if record.proven_at is None:
+            record.proven_at = datetime.now(UTC)
+        implementation_result = dict(record.implementation_result or {})
+        if proof_result:
+            implementation_result["last_proof_result"] = proof_result
+        record.implementation_result = implementation_result
         await self._resolve_matching_failure_learning(record)
+        await self._sync_regression_case_for_proposal(record, proof_result)
         await self._persist()
         await self.session.refresh(record)
         return self._improvement_proposal_from_record(record)
 
     async def _resolve_matching_failure_learning(self, proposal: ImprovementProposalRecord) -> None:
-        learning = (
+        records = (
             await self.session.execute(
                 select(FailureLearningRecord).where(
                     FailureLearningRecord.failure_signature == proposal.failure_signature,
                     FailureLearningRecord.target_component == proposal.target_component,
+                    FailureLearningRecord.status == FailureLearningStatus.ACTIVE.value,
                 )
             )
-        ).scalar_one_or_none()
-        if learning is not None:
-            learning.status = FailureLearningStatus.RESOLVED.value
+        ).scalars().all()
+        for record in records:
+            record.status = FailureLearningStatus.RESOLVED.value
 
     async def record_failure_learnings(self, learnings: list[FailureLearning]) -> list[FailureLearning]:
         recorded: list[FailureLearning] = []
         for learning in learnings:
-            record = (
-                await self.session.execute(
-                    select(FailureLearningRecord).where(
-                        FailureLearningRecord.failure_signature == learning.failure_signature,
-                        FailureLearningRecord.target_component == learning.target_component,
-                    )
-                )
-            ).scalar_one_or_none()
+            record = await self._find_matching_failure_learning_record(learning)
             if record is None:
                 record = FailureLearningRecord(
                     id=learning.id,
@@ -359,6 +356,11 @@ class WorkingMemoryStore:
                     occurrence_count=learning.occurrence_count,
                     first_seen_run_id=learning.first_seen_run_id,
                     last_seen_run_id=learning.last_seen_run_id,
+                    worker_family=learning.worker_family,
+                    eval_family=learning.eval_family,
+                    tool_family=learning.tool_family,
+                    repair_attempt_count=learning.repair_attempt_count,
+                    human_intervention_count=learning.human_intervention_count,
                     evidence_refs={"items": learning.evidence_refs},
                     run_ids={"items": learning.run_ids},
                     status=learning.status.value,
@@ -379,8 +381,13 @@ class WorkingMemoryStore:
                 record.success_check = learning.success_check
                 record.severity = self._max_severity(record.severity, learning.severity)
                 record.last_seen_run_id = learning.last_seen_run_id
-                evidence_refs = (self._json_items(record.evidence_refs) + learning.evidence_refs)[-30:]
-                record.evidence_refs = {"items": evidence_refs}
+                record.worker_family = learning.worker_family
+                record.eval_family = learning.eval_family
+                record.tool_family = learning.tool_family
+                record.repair_attempt_count += learning.repair_attempt_count
+                record.human_intervention_count += learning.human_intervention_count
+                evidence_refs = self._dedupe_json_items(self._json_items(record.evidence_refs) + learning.evidence_refs)
+                record.evidence_refs = {"items": evidence_refs[-30:]}
                 record.run_ids = {"items": run_ids[-50:]}
                 record.status = FailureLearningStatus.ACTIVE.value
             await self._persist()
@@ -451,6 +458,12 @@ class WorkingMemoryStore:
             statement = statement.where(SystemReviewRecord.playbook_key == playbook_key)
         records = (await self.session.execute(statement)).scalars().all()
         return [self._system_review_from_record(record) for record in records]
+
+    async def list_regression_cases(self) -> list[RegressionCase]:
+        records = (
+            await self.session.execute(select(RegressionCaseRecord).order_by(desc(RegressionCaseRecord.updated_at), desc(RegressionCaseRecord.created_at)))
+        ).scalars().all()
+        return [self._regression_case_from_record(record) for record in records]
 
     async def upsert_registry_item(self, item: RegistryItem) -> RegistryItem:
         record = await self._get_registry_item_record(item.kind, item.key)
@@ -534,6 +547,71 @@ class WorkingMemoryStore:
             await self.session.execute(select(RegistryItemRecord).where(RegistryItemRecord.kind == kind.value, RegistryItemRecord.key == key))
         ).scalar_one_or_none()
 
+    async def _find_matching_failure_learning_record(self, learning: FailureLearning) -> FailureLearningRecord | None:
+        return (
+            await self.session.execute(
+                select(FailureLearningRecord).where(
+                    FailureLearningRecord.failure_signature == learning.failure_signature,
+                    FailureLearningRecord.target_component == learning.target_component,
+                    FailureLearningRecord.playbook_key == learning.playbook_key,
+                    FailureLearningRecord.root_cause == learning.root_cause,
+                    FailureLearningRecord.worker_family == learning.worker_family,
+                    FailureLearningRecord.eval_family == learning.eval_family,
+                    FailureLearningRecord.tool_family == learning.tool_family,
+                )
+            )
+        ).scalar_one_or_none()
+
+    async def _sync_regression_case_for_proposal(self, proposal_record: ImprovementProposalRecord, proof_result: dict[str, Any] | None) -> None:
+        proposal = self._improvement_proposal_from_record(proposal_record)
+        baseline_run: dict[str, Any] | None = None
+        try:
+            baseline_run = await self.get_run(UUID(proposal.source_run_id))
+        except (ValueError, TypeError):
+            baseline_run = None
+        comparable_run_input = self._comparable_run_input_from_run(baseline_run)
+        regression_case = build_regression_case(
+            proposal=proposal,
+            comparable_run_input=comparable_run_input,
+            proof_result=proof_result,
+        )
+        existing = (
+            await self.session.execute(select(RegressionCaseRecord).where(RegressionCaseRecord.proposal_id == proposal_record.id))
+        ).scalar_one_or_none()
+        if existing is None:
+            existing = RegressionCaseRecord(
+                id=regression_case.id,
+                proposal_id=regression_case.proposal_id,
+                baseline_run_id=regression_case.baseline_run_id,
+                failure_signature=regression_case.failure_signature,
+                target_component=regression_case.target_component,
+                comparable_run_input=regression_case.comparable_run_input,
+                proof_command=regression_case.proof_command,
+                expected_absent_failure=regression_case.expected_absent_failure,
+                last_after_run_id=regression_case.last_after_run_id,
+                last_proof_status=regression_case.last_proof_status,
+                last_proof_result=regression_case.last_proof_result,
+                created_at=datetime.now(UTC),
+            )
+            self.session.add(existing)
+        else:
+            existing.baseline_run_id = regression_case.baseline_run_id
+            existing.failure_signature = regression_case.failure_signature
+            existing.target_component = regression_case.target_component
+            existing.comparable_run_input = regression_case.comparable_run_input
+            existing.proof_command = regression_case.proof_command
+            existing.expected_absent_failure = regression_case.expected_absent_failure
+            existing.last_after_run_id = regression_case.last_after_run_id
+            existing.last_proof_status = regression_case.last_proof_status
+            existing.last_proof_result = regression_case.last_proof_result
+
+    @staticmethod
+    def _comparable_run_input_from_run(run: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(run, dict):
+            return {}
+        run_input = run.get("input")
+        return run_input if isinstance(run_input, dict) else {}
+
     @staticmethod
     def _registry_item_from_record(record: RegistryItemRecord) -> RegistryItem:
         return RegistryItem(
@@ -606,6 +684,11 @@ class WorkingMemoryStore:
             occurrence_count=record.occurrence_count,
             first_seen_run_id=record.first_seen_run_id,
             last_seen_run_id=record.last_seen_run_id,
+            worker_family=record.worker_family,
+            eval_family=record.eval_family,
+            tool_family=record.tool_family,
+            repair_attempt_count=record.repair_attempt_count,
+            human_intervention_count=record.human_intervention_count,
             evidence_refs=WorkingMemoryStore._json_items(record.evidence_refs),
             run_ids=WorkingMemoryStore._json_items(record.run_ids),
             status=FailureLearningStatus(record.status),
@@ -624,9 +707,32 @@ class WorkingMemoryStore:
             learning_count=record.learning_count,
             findings=payload.get("findings", []),
             recommendations=payload.get("recommendations", []),
+            weak_components=payload.get("weak_components", []),
+            excess_repairs=payload.get("excess_repairs", []),
+            human_interruptions=payload.get("human_interruptions", []),
+            needed_changes=payload.get("needed_changes", []),
+            risks=payload.get("risks", []),
             created_proposal_ids=payload.get("created_proposal_ids", []),
             worker_execution=payload.get("worker_execution", {}),
             created_at=record.created_at,
+        )
+
+    @staticmethod
+    def _regression_case_from_record(record: RegressionCaseRecord) -> RegressionCase:
+        return RegressionCase(
+            id=record.id,
+            proposal_id=record.proposal_id,
+            baseline_run_id=record.baseline_run_id,
+            failure_signature=record.failure_signature,
+            target_component=record.target_component,
+            comparable_run_input=record.comparable_run_input or {},
+            proof_command=record.proof_command,
+            expected_absent_failure=record.expected_absent_failure,
+            last_after_run_id=record.last_after_run_id,
+            last_proof_status=record.last_proof_status,
+            last_proof_result=record.last_proof_result or {},
+            created_at=record.created_at,
+            updated_at=record.updated_at,
         )
 
     @staticmethod
@@ -635,6 +741,18 @@ class WorkingMemoryStore:
             return []
         items = payload.get("items", [])
         return items if isinstance(items, list) else []
+
+    @staticmethod
+    def _dedupe_json_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[Any, ...]] = set()
+        for item in items:
+            key = tuple(sorted(item.items())) if isinstance(item, dict) else (str(item),)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     @staticmethod
     def _max_severity(current: str, incoming: str) -> str:

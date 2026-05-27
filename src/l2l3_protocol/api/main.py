@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import json
 from time import perf_counter
+from typing import Any
 from uuid import UUID
 from uuid import uuid4
 
@@ -32,14 +33,18 @@ from l2l3_protocol.core.terminology import normalize_hub_kind
 from l2l3_protocol.db.migrations import run_upgrade_head
 from l2l3_protocol.db.session import get_session, make_engine, make_session_factory
 from l2l3_protocol.db.store import WorkingMemoryStore
+from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.logging import configure_logging, get_logger
 from l2l3_protocol.memory.adapters import ProceduralRegistry
-from l2l3_protocol.hub.registry import yaml_registry_items
+from l2l3_protocol.runtime.diagnostics import analyze_run
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor, L3WorkerExecutionError
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
-from l2l3_protocol.runtime.diagnostics import analyze_run
-from l2l3_protocol.runtime.self_improvement import build_failure_learnings, proposal_from_failure_learning
+from l2l3_protocol.runtime.self_improvement import (
+    build_failure_learnings,
+    build_system_learning_report,
+    proposal_from_failure_learning,
+)
 
 
 @asynccontextmanager
@@ -185,6 +190,8 @@ async def stream_run_events(run_id: UUID) -> StreamingResponse:
                 return
             await asyncio.sleep(1)
 
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 
 @app.get("/improvement-proposals")
 async def list_improvement_proposals(
@@ -283,10 +290,14 @@ async def implement_improvement_proposal(proposal_id: UUID, session: AsyncSessio
 
 
 @app.post("/improvement-proposals/{proposal_id}/mark-proven")
-async def mark_improvement_proposal_proven(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def mark_improvement_proposal_proven(
+    proposal_id: UUID,
+    payload: dict[str, Any] | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     store = WorkingMemoryStore(session)
     try:
-        proposal = await store.mark_improvement_proposal_proven(proposal_id)
+        proposal = await store.mark_improvement_proposal_proven(proposal_id, proof_result=payload or {})
     except KeyError:
         raise HTTPException(status_code=404, detail="improvement proposal not found") from None
     except ValueError as exc:
@@ -356,6 +367,27 @@ async def create_recent_system_review(payload: RecentSystemReviewCreate, session
 async def list_system_reviews(playbook_key: str | None = None, session: AsyncSession = Depends(get_session)) -> list[dict]:
     reviews = await WorkingMemoryStore(session).list_system_reviews(playbook_key=playbook_key)
     return [review.model_dump(mode="json") for review in reviews]
+
+
+@app.get("/reports/system-learning")
+async def get_system_learning_report(session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    active_learnings = await store.list_failure_learnings(status=FailureLearningStatus.ACTIVE)
+    resolved_learnings = await store.list_failure_learnings(status=FailureLearningStatus.RESOLVED)
+    proposals = await store.list_improvement_proposals()
+    regression_cases = await store.list_regression_cases()
+    return build_system_learning_report(
+        active_learnings=active_learnings,
+        resolved_learnings=resolved_learnings,
+        proposals=proposals,
+        regression_cases=regression_cases,
+    )
+
+
+@app.get("/regression-cases")
+async def list_regression_cases(session: AsyncSession = Depends(get_session)) -> list[dict]:
+    cases = await WorkingMemoryStore(session).list_regression_cases()
+    return [case.model_dump(mode="json") for case in cases]
 
 
 async def list_hub_items(kind: RegistryKind, session: AsyncSession) -> list[dict]:
