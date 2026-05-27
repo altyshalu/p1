@@ -157,6 +157,34 @@ def test_draft_schema_normalizer_repairs_eval_shapes_and_source_formatting() -> 
     assert trend_quality({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
 
 
+def test_draft_schema_normalizer_derives_claims_from_explicit_sources_without_inventing_evidence() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "text": "Agent runtimes need typed work orders. Source: https://example.com/runtime",
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["sources"] == ["https://example.com/runtime"]
+    assert draft["claims"] == [
+        {
+            "text": "Agent runtimes need typed work orders. Source: https://example.com/runtime",
+            "source_url": "https://example.com/runtime",
+            "evidence_urls": ["https://example.com/runtime"],
+        }
+    ]
+    assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
+
+
 def test_stop_slop_editor_accepts_thread_drafts_without_user_mapping() -> None:
     payload = stop_slop_edit({"inputs": {"drafts": [{"channel": "x", "thread": ["A game-changing update."], "sources": []}]}}, {})
 

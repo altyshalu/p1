@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -396,6 +397,7 @@ SLOP_PHRASES = [
     "revolutionize",
     "in today's fast-paced",
 ]
+URL_PATTERN = re.compile(r"https?://[^\s)>\]}]+")
 
 
 def stop_slop_edit(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -432,9 +434,8 @@ def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
             normalized["text"] = "\n\n".join(str(item).strip() for item in thread if str(item).strip())
     normalized.setdefault("status", "draft")
     normalized.setdefault("publish", False)
-    sources = normalized.get("sources")
-    if not isinstance(sources, list):
-        sources = []
+    text = normalized.get("text") if isinstance(normalized.get("text"), str) else ""
+    sources = _draft_source_urls(normalized, text)
     claims = normalized.get("claims")
     if isinstance(claims, list):
         normalized_claims = []
@@ -449,8 +450,45 @@ def _normalize_draft_shape(draft: dict[str, Any]) -> dict[str, Any]:
                 sources.append(normalized_claim["source_url"])
             normalized_claims.append(normalized_claim)
         normalized["claims"] = normalized_claims
+    elif sources and text.strip():
+        normalized["claims"] = [{"text": text.strip(), "source_url": sources[0], "evidence_urls": sources}]
     normalized["sources"] = [str(source) for source in sources if str(source).strip()]
     return normalized
+
+
+def _draft_source_urls(draft: dict[str, Any], text: str) -> list[str]:
+    sources: list[str] = []
+    for key in ("sources", "source_urls", "evidence_urls", "evidence"):
+        value = draft.get(key)
+        if isinstance(value, str):
+            _append_source_urls(sources, [value])
+        elif isinstance(value, list):
+            flattened: list[Any] = []
+            for item in value:
+                if isinstance(item, dict):
+                    flattened.extend(
+                        [
+                            item.get("url"),
+                            item.get("source_url"),
+                            item.get("html_url"),
+                            item.get("id"),
+                        ]
+                    )
+                    evidence_urls = item.get("evidence_urls")
+                    if isinstance(evidence_urls, list):
+                        flattened.extend(evidence_urls)
+                else:
+                    flattened.append(item)
+            _append_source_urls(sources, flattened)
+    _append_source_urls(sources, URL_PATTERN.findall(text))
+    return sources
+
+
+def _append_source_urls(sources: list[str], values: list[Any]) -> None:
+    for value in values:
+        source = str(value or "").strip().rstrip(".,;:")
+        if source.startswith(("http://", "https://")) and source not in sources:
+            sources.append(source)
 
 
 def _format_sources_separately(text: str, sources: list[Any]) -> str:
