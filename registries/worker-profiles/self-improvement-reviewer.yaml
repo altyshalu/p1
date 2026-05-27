@@ -1,0 +1,29 @@
+key: self-improvement-reviewer
+description: Review recent real runs and failure learnings to form a prioritized self-improvement backlog.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.self_improvement_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [recent_runs, failure_learnings, limit]
+  properties:
+    recent_runs:
+      type: array
+    failure_learnings:
+      type: array
+    limit:
+      type: integer
+    playbook_key:
+      type: string
+output_schema:
+  type: object
+  required: [system_review]
+stop_conditions:
+  - prioritized_backlog_created
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

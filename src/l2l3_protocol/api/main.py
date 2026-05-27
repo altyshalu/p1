@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import json
 from time import perf_counter
 from uuid import UUID
+from uuid import uuid4
 
 import structlog
 import uvicorn
@@ -24,6 +25,8 @@ from l2l3_protocol.core.schemas import (
     RunControlCreate,
     RunMessageCreate,
     RunStatus,
+    SystemReview,
+    WorkOrder,
 )
 from l2l3_protocol.core.terminology import normalize_hub_kind
 from l2l3_protocol.db.migrations import run_upgrade_head
@@ -33,9 +36,10 @@ from l2l3_protocol.logging import configure_logging, get_logger
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.runtime.hermes import HermesRuntime
+from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 from l2l3_protocol.runtime.diagnostics import analyze_run
-from l2l3_protocol.runtime.self_improvement import build_failure_learnings, build_recent_system_review, proposal_from_failure_learning
+from l2l3_protocol.runtime.self_improvement import build_failure_learnings, proposal_from_failure_learning
 
 
 @asynccontextmanager
@@ -258,12 +262,32 @@ async def create_recent_system_review(payload: RecentSystemReviewCreate, session
     store = WorkingMemoryStore(session)
     recent_runs = await store.list_recent_runs(limit=payload.limit, playbook_key=payload.playbook_key)
     learnings = await store.list_failure_learnings(status=FailureLearningStatus.ACTIVE, playbook_key=payload.playbook_key)
-    review = build_recent_system_review(
-        recent_runs=recent_runs,
-        learnings=learnings,
-        limit=payload.limit,
-        playbook_key=payload.playbook_key,
+    reviewer_profile = await store.get_registry_item(RegistryKind.WORKER, "self-improvement-reviewer")
+    if reviewer_profile is None:
+        raise HTTPException(status_code=409, detail="registry worker is not seeded: self-improvement-reviewer")
+    work_order = WorkOrder(
+        id=uuid4(),
+        run_id=uuid4(),
+        task_type="review_recent_runs",
+        worker_profile="self-improvement-reviewer",
+        worker_type=reviewer_profile.spec.get("worker_type", "sandboxed_subprocess"),
+        inputs={
+            "recent_runs": recent_runs,
+            "failure_learnings": [learning.model_dump(mode="json") for learning in learnings],
+            "limit": payload.limit,
+            "playbook_key": payload.playbook_key,
+        },
+        output_schema=reviewer_profile.spec.get("output_schema", {}),
+        allowed_tools=[],
+        budget=reviewer_profile.spec.get("budget", {}),
+        external_action_policy=reviewer_profile.spec.get("external_action_policy", {}),
     )
+    worker_output = await L3SandboxExecutor(app_state.hermes).run(
+        work_order,
+        {"source": "system-reviews/recent", "real_run_count": len(recent_runs)},
+        reviewer_profile.spec,
+    )
+    review = SystemReview.model_validate(worker_output["system_review"])
     created_proposal_ids: list[str] = []
     for learning in learnings:
         if learning.occurrence_count < 2:
