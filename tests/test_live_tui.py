@@ -146,6 +146,33 @@ def test_run_verdict_highlights_requested_edit_and_failed_evals() -> None:
     assert "trend-quality" in _run_verdict_markdown(failed_eval_run)
 
 
+def test_run_verdict_shows_diagnosis_and_improvement_proposals() -> None:
+    run = {
+        "status": "failed",
+        "output": {},
+        "evals": [],
+        "diagnosis": {
+            "summary": "Run ended as failed. Root cause: tool_or_provider_failure.",
+            "root_cause": "tool_or_provider_failure",
+            "improvement_needed": True,
+        },
+        "improvement_proposals": [
+            {
+                "proposal_type": "improve_tool",
+                "status": "proposed",
+                "proposed_change": "Improve provider repair guidance.",
+            }
+        ],
+    }
+
+    markdown = _run_verdict_markdown(run)
+
+    assert "What the system learned" in markdown
+    assert "tool_or_provider_failure" in markdown
+    assert "improve_tool" in markdown
+    assert "Improve provider repair guidance." in markdown
+
+
 def test_compact_payload_preserves_toggle_signal() -> None:
     payload = {"trend_signals": [{"url": f"https://example.com/{'x' * 500}"}]}
 

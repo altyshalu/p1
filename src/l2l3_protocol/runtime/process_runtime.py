@@ -10,6 +10,7 @@ from l2l3_protocol.db.store import WorkingMemoryStore
 from l2l3_protocol.logging import get_logger
 from l2l3_protocol.memory.adapters import MemoryRouter, ProceduralRegistry
 from l2l3_protocol.runtime.work_orders import WorkOrderValidationError, validate_work_order_inputs, validate_work_order_output, validate_tool_policy
+from l2l3_protocol.runtime.diagnostics import analyze_run
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.l2_design_controller import L2DesignController
 from l2l3_protocol.runtime.l2_supervisor import L2Supervisor
@@ -94,6 +95,7 @@ class ProcessRuntime:
             await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "max_supervisor_turns exceeded"})
             await self.store.add_event(run_id, "run_failed", {"reason": "max_supervisor_turns exceeded"})
 
+        await self._record_run_diagnosis(run_id)
         return await self._require_run(run_id)
 
     async def resume_with_message(self, run_id: UUID, message: str) -> dict[str, Any]:
@@ -217,6 +219,17 @@ class ProcessRuntime:
         artifact = Artifact(run_id=run_id, artifact_type=ArtifactType.PLAYBOOK_PROPOSAL, payload=proposal)
         await self.store.add_artifact(artifact)
         await self.store.add_event(run_id, "playbook_proposal_created", proposal)
+
+    async def _record_run_diagnosis(self, run_id: UUID) -> None:
+        state = await self._require_run(run_id)
+        if any(artifact.get("artifact_type") == ArtifactType.RUN_DIAGNOSIS.value for artifact in state.get("artifacts", [])):
+            return
+        diagnosis, proposals = analyze_run(state)
+        await self.store.add_artifact(diagnosis)
+        await self.store.add_event(run_id, "run_diagnosis_created", diagnosis.payload)
+        for proposal in proposals:
+            await self.store.add_improvement_proposal(proposal)
+            await self.store.add_event(run_id, "improvement_proposal_created", proposal.model_dump(mode="json"))
 
     async def _run_design_mode(self, run_id: UUID, state: dict[str, Any]) -> None:
         await self.store.set_run_status(run_id, RunStatus.RUNNING)

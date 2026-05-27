@@ -11,6 +11,9 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ("/runs/{run_id}/messages", "POST") in routes
     assert ("/runs/{run_id}/control", "POST") in routes
     assert ("/runs/{run_id}/events/stream", "GET") in routes
+    assert ("/improvement-proposals", "GET") in routes
+    assert ("/improvement-proposals/{proposal_id}/approve", "POST") in routes
+    assert ("/improvement-proposals/{proposal_id}/reject", "POST") in routes
 
 
 def test_run_create_rejects_old_process_key_field() -> None:

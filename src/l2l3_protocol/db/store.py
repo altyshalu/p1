@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from l2l3_protocol.core.schemas import (
     Artifact,
     EvalResult,
+    ImprovementProposal,
+    ImprovementProposalStatus,
     ProcessRun,
     RegistryChangeCandidate,
     RegistryChangeCandidateCreate,
@@ -22,6 +24,7 @@ from l2l3_protocol.db.models import (
     ArtifactRecord,
     EvalResultRecord,
     EventRecord,
+    ImprovementProposalRecord,
     ProcessRunRecord,
     RegistryChangeCandidateRecord,
     RegistryItemRecord,
@@ -73,6 +76,21 @@ class WorkingMemoryStore:
         events = (
             await self.session.execute(select(EventRecord).where(EventRecord.run_id == run_id).order_by(EventRecord.created_at))
         ).scalars().all()
+        improvement_proposals = (
+            await self.session.execute(
+                select(ImprovementProposalRecord).where(ImprovementProposalRecord.run_id == run_id).order_by(ImprovementProposalRecord.created_at)
+            )
+        ).scalars().all()
+        artifacts_payload = [
+            {
+                "id": str(artifact.id),
+                "task_id": str(artifact.task_id) if artifact.task_id else None,
+                "artifact_type": artifact.artifact_type,
+                "payload": artifact.payload,
+            }
+            for artifact in artifacts
+        ]
+        diagnoses = [artifact for artifact in artifacts_payload if artifact["artifact_type"] == "run_diagnosis"]
         return {
             "id": str(record.id),
             "playbook_key": record.playbook_key,
@@ -84,15 +102,7 @@ class WorkingMemoryStore:
             "created_at": record.created_at.isoformat() if record.created_at else None,
             "updated_at": record.updated_at.isoformat() if record.updated_at else None,
             "tasks": [task.work_order for task in tasks],
-            "artifacts": [
-                {
-                    "id": str(artifact.id),
-                    "task_id": str(artifact.task_id) if artifact.task_id else None,
-                    "artifact_type": artifact.artifact_type,
-                    "payload": artifact.payload,
-                }
-                for artifact in artifacts
-            ],
+            "artifacts": artifacts_payload,
             "evals": [eval_record.payload for eval_record in evals],
             "events": [
                 {
@@ -103,6 +113,8 @@ class WorkingMemoryStore:
                 }
                 for event in events
             ],
+            "diagnosis": diagnoses[-1]["payload"] if diagnoses else None,
+            "improvement_proposals": [self._improvement_proposal_from_record(record).model_dump(mode="json") for record in improvement_proposals],
         }
 
     async def get_run_status(self, run_id: UUID) -> RunStatus:
@@ -183,6 +195,58 @@ class WorkingMemoryStore:
     async def add_event(self, run_id: UUID, event_type: str, payload: dict[str, Any], task_id: UUID | None = None) -> None:
         self.session.add(EventRecord(run_id=run_id, task_id=task_id, event_type=event_type, payload=payload, created_at=datetime.now(UTC)))
         await self._persist()
+
+    async def add_improvement_proposal(self, proposal: ImprovementProposal) -> ImprovementProposal:
+        record = ImprovementProposalRecord(
+            id=proposal.id,
+            run_id=proposal.run_id,
+            source_run_id=proposal.source_run_id,
+            proposal_type=proposal.proposal_type,
+            problem=proposal.problem,
+            proposed_change=proposal.proposed_change,
+            risk=proposal.risk,
+            success_check=proposal.success_check,
+            evidence={"items": proposal.evidence},
+            status=proposal.status.value,
+            rejection_reason=proposal.rejection_reason,
+            created_at=datetime.now(UTC),
+        )
+        self.session.add(record)
+        await self._persist()
+        return proposal
+
+    async def list_improvement_proposals(
+        self,
+        status: ImprovementProposalStatus | None = None,
+        run_id: UUID | None = None,
+    ) -> list[ImprovementProposal]:
+        statement = select(ImprovementProposalRecord).order_by(ImprovementProposalRecord.created_at)
+        if status is not None:
+            statement = statement.where(ImprovementProposalRecord.status == status.value)
+        if run_id is not None:
+            statement = statement.where(ImprovementProposalRecord.run_id == run_id)
+        records = (await self.session.execute(statement)).scalars().all()
+        return [self._improvement_proposal_from_record(record) for record in records]
+
+    async def approve_improvement_proposal(self, proposal_id: UUID) -> ImprovementProposal:
+        record = await self.session.get(ImprovementProposalRecord, proposal_id)
+        if record is None:
+            raise KeyError(f"improvement proposal not found: {proposal_id}")
+        record.status = ImprovementProposalStatus.APPROVED.value
+        record.rejection_reason = None
+        await self._persist()
+        await self.session.refresh(record)
+        return self._improvement_proposal_from_record(record)
+
+    async def reject_improvement_proposal(self, proposal_id: UUID, reason: str) -> ImprovementProposal:
+        record = await self.session.get(ImprovementProposalRecord, proposal_id)
+        if record is None:
+            raise KeyError(f"improvement proposal not found: {proposal_id}")
+        record.status = ImprovementProposalStatus.REJECTED.value
+        record.rejection_reason = reason
+        await self._persist()
+        await self.session.refresh(record)
+        return self._improvement_proposal_from_record(record)
 
     async def upsert_registry_item(self, item: RegistryItem) -> RegistryItem:
         record = await self._get_registry_item_record(item.kind, item.key)
@@ -290,6 +354,25 @@ class WorkingMemoryStore:
             payload=record.payload,
             reason=record.reason,
             status=RegistryChangeStatus(record.status),
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+    @staticmethod
+    def _improvement_proposal_from_record(record: ImprovementProposalRecord) -> ImprovementProposal:
+        evidence = record.evidence.get("items", []) if isinstance(record.evidence, dict) else []
+        return ImprovementProposal(
+            id=record.id,
+            run_id=record.run_id,
+            source_run_id=record.source_run_id,
+            proposal_type=record.proposal_type,
+            problem=record.problem,
+            proposed_change=record.proposed_change,
+            risk=record.risk,
+            success_check=record.success_check,
+            evidence=evidence,
+            status=ImprovementProposalStatus(record.status),
+            rejection_reason=record.rejection_reason,
             created_at=record.created_at,
             updated_at=record.updated_at,
         )

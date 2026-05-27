@@ -5,7 +5,18 @@ from uuid import UUID
 import pytest
 
 from l2l3_protocol.config import Settings
-from l2l3_protocol.core.schemas import Artifact, EvalResult, MemoryWrite, ProcessRun, RegistryItem, RegistryKind, RunStatus, TaskStatus, WorkOrder
+from l2l3_protocol.core.schemas import (
+    Artifact,
+    EvalResult,
+    ImprovementProposal,
+    MemoryWrite,
+    ProcessRun,
+    RegistryItem,
+    RegistryKind,
+    RunStatus,
+    TaskStatus,
+    WorkOrder,
+)
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
@@ -18,6 +29,7 @@ class FakeStore:
         self.tasks: list[WorkOrder] = []
         self.artifacts: list[Artifact] = []
         self.evals: list[EvalResult] = []
+        self.improvement_proposals: list[ImprovementProposal] = []
         self.events: list[dict[str, Any]] = []
         self.registry_items = yaml_registry_items(Path("registries"))
 
@@ -50,6 +62,8 @@ class FakeStore:
             ],
             "evals": [item.model_dump(mode="json") for item in self.evals],
             "events": self.events,
+            "diagnosis": next((artifact.payload for artifact in reversed(self.artifacts) if artifact.artifact_type.value == "run_diagnosis"), None),
+            "improvement_proposals": [proposal.model_dump(mode="json") for proposal in self.improvement_proposals],
         }
 
     async def add_task(self, work_order: WorkOrder) -> WorkOrder:
@@ -71,6 +85,10 @@ class FakeStore:
 
     async def add_event(self, run_id: UUID, event_type: str, payload: dict[str, Any], task_id: UUID | None = None) -> None:
         self.events.append({"event_type": event_type, "payload": payload, "task_id": str(task_id) if task_id else None})
+
+    async def add_improvement_proposal(self, proposal: ImprovementProposal) -> ImprovementProposal:
+        self.improvement_proposals.append(proposal)
+        return proposal
 
     async def get_registry_item(self, kind: RegistryKind, key: str) -> RegistryItem | None:
         return next((item for item in self.registry_items if item.kind == kind and item.key == key), None)

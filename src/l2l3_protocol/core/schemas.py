@@ -40,6 +40,7 @@ class ArtifactType(StrEnum):
     MEMORY_CANDIDATES = "memory_candidates"
     REGISTRY_CHANGE_CANDIDATE = "registry_change_candidate"
     PLAYBOOK_PROPOSAL = "playbook_proposal"
+    RUN_DIAGNOSIS = "run_diagnosis"
     DESIGN_REPORT = "design_report"
     GENERIC = "generic"
 
@@ -65,6 +66,12 @@ class RegistryChangeStatus(StrEnum):
     APPROVED = "approved"
     REJECTED = "rejected"
     SUPERSEDED = "superseded"
+
+
+class ImprovementProposalStatus(StrEnum):
+    PROPOSED = "proposed"
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 class ProcessRunCreate(BaseModel):
@@ -205,5 +212,21 @@ class RegistryChangeCandidate(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None
     status: RegistryChangeStatus = RegistryChangeStatus.PROPOSED
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class ImprovementProposal(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    run_id: UUID
+    source_run_id: str
+    proposal_type: str
+    problem: str
+    proposed_change: str
+    risk: str
+    success_check: str
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    status: ImprovementProposalStatus = ImprovementProposalStatus.PROPOSED
+    rejection_reason: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

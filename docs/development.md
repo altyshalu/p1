@@ -190,3 +190,24 @@ Do not add:
 - compatibility layers that keep old names alive
 
 Tests may use fixtures and fakes only when they are clearly test-only.
+
+## Self-Improvement Proof Rules
+
+Run diagnosis and improvement proposals are production behavior, not demo output.
+
+Fast unit tests may cover the analyzer and API contracts, but release proof for these features must use a real end-to-end run:
+
+```sh
+docker compose up -d postgres qdrant agentmemory
+uv run alembic upgrade head
+uv run l2l3-protocol
+curl -X POST http://localhost:8080/hub/sync/yaml
+uv run l2l3-live start trend-radar \
+  --query "AI agent evals runtime observability memory" \
+  --provider github \
+  --provider arxiv \
+  --provider huggingface \
+  --channel x
+```
+
+The proof is valid only when the run uses real Postgres, real Hermes/model credentials, real source APIs, and real runtime workers. If any required service or credential is missing, the proof must fail explicitly. Do not replace it with mocks, fakes, simulations, embedded example responses, or synthetic provider data.

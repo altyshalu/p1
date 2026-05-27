@@ -13,7 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from l2l3_protocol.api.state import app_state, build_memory_router
 from l2l3_protocol.config import get_settings
-from l2l3_protocol.core.schemas import ProcessRun, ProcessRunCreate, RegistryChangeCandidateCreate, RegistryKind, RunControlCreate, RunMessageCreate, RunStatus
+from l2l3_protocol.core.schemas import (
+    ImprovementProposalStatus,
+    ProcessRun,
+    ProcessRunCreate,
+    RegistryChangeCandidateCreate,
+    RegistryKind,
+    RunControlCreate,
+    RunMessageCreate,
+    RunStatus,
+)
 from l2l3_protocol.core.terminology import normalize_hub_kind
 from l2l3_protocol.db.migrations import run_upgrade_head
 from l2l3_protocol.db.session import get_session, make_engine, make_session_factory
@@ -23,6 +32,7 @@ from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
+from l2l3_protocol.runtime.diagnostics import analyze_run
 
 
 @asynccontextmanager
@@ -102,6 +112,14 @@ async def execute_run(run_id: UUID) -> None:
         except Exception as exc:
             await store.set_run_status(run_id, RunStatus.FAILED, output={"error_type": type(exc).__name__, "error": str(exc)})
             await store.add_event(run_id, "run_failed", {"error_type": type(exc).__name__, "error": str(exc)})
+            failed_state = await store.get_run(run_id)
+            if failed_state is not None and failed_state.get("diagnosis") is None:
+                diagnosis, proposals = analyze_run(failed_state)
+                await store.add_artifact(diagnosis)
+                await store.add_event(run_id, "run_diagnosis_created", diagnosis.payload)
+                for proposal in proposals:
+                    await store.add_improvement_proposal(proposal)
+                    await store.add_event(run_id, "improvement_proposal_created", proposal.model_dump(mode="json"))
             get_logger("protocol.events").exception("background_run_failed", run_id=str(run_id), error_type=type(exc).__name__)
 
 
@@ -156,6 +174,41 @@ async def stream_run_events(run_id: UUID) -> StreamingResponse:
                 yield f"event: run_status\ndata: {json.dumps({'status': run.get('status')}, ensure_ascii=True)}\n\n"
                 return
             await asyncio.sleep(1)
+
+
+@app.get("/improvement-proposals")
+async def list_improvement_proposals(
+    status: ImprovementProposalStatus | None = None,
+    run_id: UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    proposals = await WorkingMemoryStore(session).list_improvement_proposals(status=status, run_id=run_id)
+    return [proposal.model_dump(mode="json") for proposal in proposals]
+
+
+@app.post("/improvement-proposals/{proposal_id}/approve")
+async def approve_improvement_proposal(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    try:
+        proposal = await store.approve_improvement_proposal(proposal_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="improvement proposal not found") from None
+    await session.commit()
+    return proposal.model_dump(mode="json")
+
+
+@app.post("/improvement-proposals/{proposal_id}/reject")
+async def reject_improvement_proposal(proposal_id: UUID, payload: dict[str, str], session: AsyncSession = Depends(get_session)) -> dict:
+    reason = payload.get("reason")
+    if not reason:
+        raise HTTPException(status_code=400, detail="reject requires reason")
+    store = WorkingMemoryStore(session)
+    try:
+        proposal = await store.reject_improvement_proposal(proposal_id, reason)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="improvement proposal not found") from None
+    await session.commit()
+    return proposal.model_dump(mode="json")
 
 
 async def list_hub_items(kind: RegistryKind, session: AsyncSession) -> list[dict]:

@@ -465,6 +465,27 @@ def _run_verdict_markdown(run: dict[str, Any]) -> str:
         lines.append("**Running:** L2/L3 pipeline is still active.")
     else:
         lines.append(f"**Status:** `{status}`")
+    diagnosis = run.get("diagnosis")
+    if isinstance(diagnosis, dict):
+        lines.extend(
+            [
+                "",
+                "## What the system learned",
+                f"Root cause: `{diagnosis.get('root_cause', 'unknown')}`",
+                "",
+                str(diagnosis.get("summary", "No diagnosis summary found.")),
+            ]
+        )
+    proposals = run.get("improvement_proposals", [])
+    if isinstance(proposals, list) and proposals:
+        lines.extend(["", "## Improvement proposals"])
+        for proposal in proposals[:3]:
+            if not isinstance(proposal, dict):
+                continue
+            lines.append(
+                f"- `{proposal.get('proposal_type', 'unknown')}` · `{proposal.get('status', 'unknown')}`: "
+                f"{proposal.get('proposed_change', 'No proposed change recorded.')}"
+            )
     lines.extend(
         [
             "",

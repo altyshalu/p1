@@ -113,3 +113,21 @@ class RegistryChangeCandidateRecord(Base):
     reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ImprovementProposalRecord(Base):
+    __tablename__ = "improvement_proposals"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("process_runs.id"), index=True)
+    source_run_id: Mapped[str] = mapped_column(String(80), index=True)
+    proposal_type: Mapped[str] = mapped_column(String(80), index=True)
+    problem: Mapped[str] = mapped_column(String)
+    proposed_change: Mapped[str] = mapped_column(String)
+    risk: Mapped[str] = mapped_column(String)
+    success_check: Mapped[str] = mapped_column(String)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
