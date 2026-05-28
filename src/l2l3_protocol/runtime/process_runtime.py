@@ -81,8 +81,11 @@ class ProcessRuntime:
                     await self._execute_task(run_id, task.model_dump(mode="json"), worker_profiles[task.worker_profile])
                 continue
             if action.action == "message_user":
-                await self.store.set_run_status(run_id, RunStatus.WAITING_USER)
-                await self.store.add_event(run_id, "l2_message_user", {"message": action.message})
+                output = {"message": action.message}
+                if action.interaction is not None:
+                    output["interaction"] = action.interaction.model_dump(mode="json")
+                await self.store.set_run_status(run_id, RunStatus.WAITING_USER, output)
+                await self.store.add_event(run_id, "l2_message_user", output)
                 break
             if action.action == "finish":
                 await self._persist_learnings(run_id, action.output.get("memory_writes", []))

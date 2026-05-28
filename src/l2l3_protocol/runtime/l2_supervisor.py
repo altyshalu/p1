@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from l2l3_protocol.core.schemas import L2SupervisorAction
+from l2l3_protocol.core.schemas import ArtifactType, L2SupervisorAction
 from l2l3_protocol.core.terminology import INCIDENT_BRIEF_EVENT
 from l2l3_protocol.runtime.hermes import HermesRuntime
 
@@ -91,19 +91,33 @@ class L2Supervisor:
                     "If work is complete, use finish with final output.",
                     "If the run cannot continue, use fail with a reason.",
                 ],
+                "protocol_guidance": _protocol_guidance(playbook, state),
                 "required_output_schema": {
                     "action": "spawn_tasks | message_user | finish | fail | propose_registry_change | propose_playbook",
                     "message": "optional user-facing message",
+                    "interaction": {
+                        "kind": "optional; use goal_clarification for structured unclear-goal prompts",
+                        "question": "short explicit question for the user",
+                        "options": [
+                            {
+                                "id": "stable option id",
+                                "label": "short option label",
+                                "description": "what selecting this option means",
+                            }
+                        ],
+                        "why_this_question": "optional explanation",
+                        "resolution_hint": "optional answer format hint",
+                    },
                     "tasks": [
                         {
                             "task_type": "short stable task key",
                             "worker_profile": "registered worker key",
                             "goal": "bounded worker goal",
                             "inputs": {"key": "value"},
-                        "artifact_type": "generic",
-                        "allowed_tools": ["optional registered tool ids"],
-                    }
-                ],
+                            "artifact_type": "generic",
+                            "allowed_tools": ["optional registered tool ids"],
+                        }
+                    ],
                     "output": {"final": "object when action=finish"},
                     "reason": "required when action=fail",
                     "registry_change_candidate": {"optional": "candidate only"},
@@ -145,6 +159,7 @@ class L2Supervisor:
                 "allowed_workers": playbook.get("allowed_workers", []),
                 "max_tasks_per_turn": playbook.get("max_tasks_per_turn", 3),
                 "worker_keys": sorted(worker_profiles),
+                "protocol_guidance": _protocol_guidance(playbook, state),
                 "state": state,
                 "turn": turn,
             },
@@ -192,6 +207,8 @@ class L2Supervisor:
             raise ValueError("spawn_tasks action requires at least one task")
         if action.action != "spawn_tasks" and action.tasks:
             raise ValueError(f"{action.action} action must not include tasks")
+        if action.action != "message_user" and action.interaction is not None:
+            raise ValueError("interaction is only allowed for message_user")
         if action.action == "propose_playbook" and action.playbook_proposal is None:
             raise ValueError("propose_playbook action requires playbook_proposal")
         if action.action == "finish" and not _required_evals_passed(playbook, state):
@@ -204,6 +221,8 @@ class L2Supervisor:
             )
         if action.action == "fail" and not action.reason:
             raise ValueError("fail action requires reason")
+        if _goal_discovery_protocol_enabled(playbook):
+            _validate_goal_discovery_action(action, state)
         for task in action.tasks:
             if task.worker_profile not in allowed_workers:
                 raise ValueError(f"worker is not allowed by Playbook: {task.worker_profile}")
@@ -216,6 +235,56 @@ class L2Supervisor:
                 )
             if task.worker_profile == "approval-adapter" and not _required_evals_passed(playbook, state):
                 raise ValueError("approval-adapter is not allowed until required evals pass")
+
+
+def _protocol_guidance(playbook: dict[str, Any], state: dict[str, Any]) -> list[str]:
+    if not _goal_discovery_protocol_enabled(playbook):
+        return []
+    guidance = [
+        "This playbook is for unclear goals. Reduce uncertainty before any downstream execution.",
+        "First generate goal_hypotheses, then ask the user a structured clarification question with 2-4 options, then compile a goal_brief after the user replies.",
+        "Do not finish this playbook until a goal_brief artifact exists.",
+    ]
+    if not _has_artifact(state, ArtifactType.GOAL_HYPOTHESES.value):
+        guidance.append("No goal_hypotheses artifact exists yet; prefer spawning goal-hypothesis-generator.")
+    elif not _has_user_message(state):
+        guidance.append("Goal hypotheses exist, but the user has not answered yet; prefer message_user with structured options.")
+    elif not _has_artifact(state, ArtifactType.GOAL_BRIEF.value):
+        guidance.append("A user reply exists; prefer spawning goal-brief-compiler.")
+    return guidance
+
+
+def _goal_discovery_protocol_enabled(playbook: dict[str, Any]) -> bool:
+    return str(playbook.get("goal_protocol") or "") == "unclear_goal"
+
+
+def _validate_goal_discovery_action(action: L2SupervisorAction, state: dict[str, Any]) -> None:
+    if action.action == "message_user":
+        if not _has_artifact(state, ArtifactType.GOAL_HYPOTHESES.value):
+            raise ValueError("goal-discovery protocol requires goal_hypotheses before asking the user")
+        interaction = action.interaction
+        if interaction is None:
+            raise ValueError("goal-discovery protocol requires structured interaction for message_user")
+        if interaction.kind != "goal_clarification":
+            raise ValueError("goal-discovery interaction.kind must be goal_clarification")
+        if len(interaction.options) < 2 or len(interaction.options) > 4:
+            raise ValueError("goal-discovery interaction must include 2-4 options")
+    if action.action == "finish" and not _has_artifact(state, ArtifactType.GOAL_BRIEF.value):
+        raise ValueError("goal-discovery protocol cannot finish before goal_brief exists")
+    for task in action.tasks:
+        if task.worker_profile == "goal-brief-compiler" and not _has_user_message(state):
+            raise ValueError("goal-brief-compiler requires a user reply before execution")
+
+
+def _has_artifact(state: dict[str, Any], artifact_type: str) -> bool:
+    for artifact in state.get("artifacts", []):
+        if isinstance(artifact, dict) and artifact.get("artifact_type") == artifact_type:
+            return True
+    return False
+
+
+def _has_user_message(state: dict[str, Any]) -> bool:
+    return any(event.get("event_type") == "user_message" for event in state.get("events", []))
 
 
 def _message_user_allowed(state: dict[str, Any]) -> bool:
@@ -269,4 +338,4 @@ def _equivalent_task_already_exists(state: dict[str, Any], task: dict[str, Any])
 
 
 def _stable_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return json.dumps(value, sort_keys=True, ensure_ascii=True)

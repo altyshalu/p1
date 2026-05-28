@@ -35,6 +35,8 @@ class ArtifactType(StrEnum):
     SIGNALS = "signals"
     CONTENT_ATOMS = "content_atoms"
     CHANNEL_DRAFTS = "channel_drafts"
+    GOAL_HYPOTHESES = "goal_hypotheses"
+    GOAL_BRIEF = "goal_brief"
     EVAL_REPORT = "eval_report"
     APPROVAL_DECISION = "approval_decision"
     MEMORY_CANDIDATES = "memory_candidates"
@@ -143,9 +145,24 @@ class L2SpawnWorkOrder(BaseModel):
     allowed_tools: list[str] = Field(default_factory=list)
 
 
+class UserChoiceOption(BaseModel):
+    id: str
+    label: str
+    description: str
+
+
+class UserInteractionContract(BaseModel):
+    kind: str
+    question: str
+    options: list[UserChoiceOption] = Field(default_factory=list)
+    why_this_question: str | None = None
+    resolution_hint: str | None = None
+
+
 class L2SupervisorAction(BaseModel):
     action: str
     message: str | None = None
+    interaction: UserInteractionContract | None = None
     tasks: list[L2SpawnWorkOrder] = Field(default_factory=list)
     output: dict[str, Any] = Field(default_factory=dict)
     reason: str | None = None

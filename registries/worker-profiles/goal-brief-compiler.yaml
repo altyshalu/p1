@@ -1,0 +1,25 @@
+key: goal-brief-compiler
+description: Compile a clarified execution brief from the original goal, prior hypotheses, and the latest user reply.
+worker_type: hermes_agent
+agent_prompt: >-
+  Use the original goal, optional context, prior goal_hypotheses, and the latest user reply
+  to compile a strict JSON goal_brief. goal_brief must include objective, clarified_outcome,
+  success_criteria, constraints, assumptions, next_playbook_key, recommended_inputs, and
+  ready_for_execution. Keep it concrete and evidence-backed from the conversation only.
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 120
+  max_iterations: 8
+input_schema:
+  type: object
+  required: [goal, goal_hypotheses, user_reply]
+output_schema:
+  type: object
+  required: [goal_brief]
+stop_conditions:
+  - goal_brief_created
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

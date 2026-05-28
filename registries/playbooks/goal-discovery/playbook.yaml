@@ -1,0 +1,27 @@
+key: goal-discovery
+name: Goal Discovery Protocol
+version: 0.1.0
+purpose: Turn an unclear human goal into structured hypotheses, a focused clarification turn, and a ready-to-execute goal brief before any downstream process starts.
+max_supervisor_turns: 6
+max_tasks_per_turn: 1
+allowed_workers:
+  - goal-hypothesis-generator
+  - goal-brief-compiler
+  - learning-worker
+allowed_tools: []
+goal_protocol: unclear_goal
+structured_user_interaction: true
+completion_criteria:
+  - goal hypotheses exist
+  - the user receives 2-4 structured choices when intent is ambiguous
+  - a final goal brief exists after the user reply
+required_inputs: []
+external_actions:
+  publish:
+    default: disabled
+    approval_required: true
+memory_policy:
+  l3_direct_writes: false
+  l2_curates_episodic: true
+  l2_curates_semantic: true
+  procedural_changes: candidate_only
