@@ -1,5 +1,5 @@
 from typing import Any
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import desc, select
@@ -324,15 +324,15 @@ class WorkingMemoryStore:
         return self._improvement_proposal_from_record(record)
 
     async def _resolve_matching_failure_learning(self, proposal: ImprovementProposalRecord) -> None:
-        records = (
-            await self.session.execute(
-                select(FailureLearningRecord).where(
-                    FailureLearningRecord.failure_signature == proposal.failure_signature,
-                    FailureLearningRecord.target_component == proposal.target_component,
-                    FailureLearningRecord.status == FailureLearningStatus.ACTIVE.value,
-                )
-            )
-        ).scalars().all()
+        statement = select(FailureLearningRecord).where(
+            FailureLearningRecord.failure_signature == proposal.failure_signature,
+            FailureLearningRecord.target_component == proposal.target_component,
+            FailureLearningRecord.status == FailureLearningStatus.ACTIVE.value,
+        )
+        playbook_key = await self._proposal_playbook_key(proposal)
+        if playbook_key is not None:
+            statement = statement.where(FailureLearningRecord.playbook_key == playbook_key)
+        records = (await self.session.execute(statement)).scalars().all()
         for record in records:
             record.status = FailureLearningStatus.RESOLVED.value
 
@@ -399,12 +399,16 @@ class WorkingMemoryStore:
         self,
         status: FailureLearningStatus | None = None,
         playbook_key: str | None = None,
+        since_hours: int | None = None,
     ) -> list[FailureLearning]:
         statement = select(FailureLearningRecord).order_by(desc(FailureLearningRecord.occurrence_count), desc(FailureLearningRecord.updated_at))
         if status is not None:
             statement = statement.where(FailureLearningRecord.status == status.value)
         if playbook_key is not None:
             statement = statement.where(FailureLearningRecord.playbook_key == playbook_key)
+        if since_hours is not None:
+            cutoff = datetime.now(UTC) - timedelta(hours=since_hours)
+            statement = statement.where(FailureLearningRecord.updated_at >= cutoff)
         records = (await self.session.execute(statement)).scalars().all()
         return [self._failure_learning_from_record(record) for record in records]
 
@@ -414,21 +418,25 @@ class WorkingMemoryStore:
             ImprovementProposalStatus.APPROVED.value,
             ImprovementProposalStatus.IMPLEMENTED.value,
         }
-        record = (
+        records = (
             await self.session.execute(
-                select(ImprovementProposalRecord).where(
+                select(ImprovementProposalRecord.id).where(
                     ImprovementProposalRecord.failure_signature == failure_signature,
                     ImprovementProposalRecord.target_component == target_component,
                     ImprovementProposalRecord.status.in_(open_statuses),
-                )
+                ).limit(1)
             )
-        ).scalar_one_or_none()
-        return record is not None
+        ).scalars().all()
+        return bool(records)
 
-    async def list_recent_runs(self, limit: int = 50, playbook_key: str | None = None) -> list[dict[str, Any]]:
-        statement = select(ProcessRunRecord.id).order_by(desc(ProcessRunRecord.updated_at)).limit(limit)
+    async def list_recent_runs(self, limit: int = 50, playbook_key: str | None = None, since_hours: int | None = None) -> list[dict[str, Any]]:
+        statement = select(ProcessRunRecord.id)
         if playbook_key is not None:
             statement = statement.where(ProcessRunRecord.playbook_key == playbook_key)
+        if since_hours is not None:
+            cutoff = datetime.now(UTC) - timedelta(hours=since_hours)
+            statement = statement.where(ProcessRunRecord.updated_at >= cutoff)
+        statement = statement.order_by(desc(ProcessRunRecord.updated_at)).limit(limit)
         run_ids = (await self.session.execute(statement)).scalars().all()
         runs: list[dict[str, Any]] = []
         for run_id in run_ids:
@@ -459,11 +467,19 @@ class WorkingMemoryStore:
         records = (await self.session.execute(statement)).scalars().all()
         return [self._system_review_from_record(record) for record in records]
 
-    async def list_regression_cases(self) -> list[RegressionCase]:
+    async def list_regression_cases(self, playbook_key: str | None = None) -> list[RegressionCase]:
         records = (
             await self.session.execute(select(RegressionCaseRecord).order_by(desc(RegressionCaseRecord.updated_at), desc(RegressionCaseRecord.created_at)))
         ).scalars().all()
-        return [self._regression_case_from_record(record) for record in records]
+        cases = [self._regression_case_from_record(record) for record in records]
+        if playbook_key is None:
+            return cases
+        filtered: list[RegressionCase] = []
+        for case in cases:
+            comparable = case.comparable_run_input if isinstance(case.comparable_run_input, dict) else {}
+            if comparable.get('playbook_key') == playbook_key:
+                filtered.append(case)
+        return filtered
 
     async def upsert_registry_item(self, item: RegistryItem) -> RegistryItem:
         record = await self._get_registry_item_record(item.kind, item.key)
@@ -561,6 +577,20 @@ class WorkingMemoryStore:
                 )
             )
         ).scalar_one_or_none()
+
+    async def _proposal_playbook_key(self, proposal: ImprovementProposalRecord) -> str | None:
+        proof_spec = proposal.proof_spec if isinstance(proposal.proof_spec, dict) else {}
+        playbook_key = proof_spec.get('playbook_key')
+        if isinstance(playbook_key, str) and playbook_key:
+            return playbook_key
+        try:
+            run = await self.get_run(UUID(proposal.source_run_id))
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(run, dict):
+            return None
+        value = run.get('playbook_key')
+        return str(value) if value else None
 
     async def _sync_regression_case_for_proposal(self, proposal_record: ImprovementProposalRecord, proof_result: dict[str, Any] | None) -> None:
         await self.session.refresh(proposal_record)

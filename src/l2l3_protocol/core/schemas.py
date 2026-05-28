@@ -300,6 +300,7 @@ class RecentSystemReviewCreate(BaseModel):
 
     limit: int = Field(default=50, ge=1, le=250)
     playbook_key: str | None = None
+    since_hours: int | None = Field(default=None, ge=1, le=24 * 30)
 
 
 class RegressionCase(BaseModel):

@@ -172,6 +172,7 @@ Useful endpoints:
 
 ```sh
 curl http://localhost:8080/failure-learnings
+curl http://localhost:8080/runtime/capabilities
 curl http://localhost:8080/improvement-proposals
 curl -X POST http://localhost:8080/system-reviews/recent \
   -H 'content-type: application/json' \
@@ -192,6 +193,8 @@ uv run python scripts/real-before-after-proof.py \
 Known proven milestone:
 
 - Hugging Face provider-no-results in Trend Radar was diagnosed, proposed, approved, implemented, and proven through a real comparable run.
+
+Cross-process real test runbook: `docs/cross-process-testing.md`
 
 ## API Basics
 
