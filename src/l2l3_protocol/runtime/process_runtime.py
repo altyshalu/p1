@@ -396,6 +396,22 @@ class ProcessRuntime:
 
         async def run_task(worker: str, task_type: str, task_inputs: dict[str, Any], artifact_type: ArtifactType) -> bool:
             profile = worker_profiles[worker]
+            if not bool(inputs.get("force_rerun", False)):
+                checkpoint = self._latest_payload(await self._require_run(run_id), artifact_type)
+                if checkpoint:
+                    await self.store.add_event(
+                        run_id,
+                        "p1_checkpoint_reused",
+                        {
+                            "worker_profile": worker,
+                            "task_type": task_type,
+                            "artifact_type": artifact_type.value,
+                            "reason": "Existing real artifact found on this run; skipping worker execution.",
+                        },
+                    )
+                    return True
+            state_before = await self._require_run(run_id)
+            existing_task_ids = {task.get("id") for task in state_before.get("tasks", []) if isinstance(task, dict)}
             await self._execute_task(
                 run_id,
                 {
@@ -412,7 +428,9 @@ class ProcessRuntime:
             failed = [
                 task
                 for task in latest.get("tasks", [])
-                if task.get("worker_profile") == worker and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+                if task.get("id") not in existing_task_ids
+                and task.get("worker_profile") == worker
+                and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
             ]
             return not failed
 
