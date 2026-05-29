@@ -1,0 +1,35 @@
+key: p1-metrics-reporter
+description: Build the P1 funnel metrics report from real runtime artifacts and sync results.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  properties:
+    lead_candidates: {type: array}
+    normalized_leads: {type: array}
+    rejected_leads: {type: array}
+    triage_scores: {type: array}
+    p1_dossiers: {type: array}
+    gateway_evaluations: {type: array}
+    outreach_drafts: {type: array}
+    quality_eval: {type: object}
+    external_sync_results: {type: object}
+output_schema:
+  type: object
+  required: [metrics, summary]
+  properties:
+    metrics: {type: object}
+    summary: {type: string}
+stop_conditions:
+  - p1_metrics_report_created
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

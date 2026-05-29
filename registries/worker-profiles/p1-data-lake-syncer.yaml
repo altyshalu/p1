@@ -1,0 +1,31 @@
+key: p1-data-lake-syncer
+description: Approval-explicit physical Data Lake JSON writer for canonical P1 dossiers.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [p1-dossier-store-tool]
+compatible_tools: [p1-dossier-store-tool]
+budget:
+  max_seconds: 120
+input_schema:
+  type: object
+  required: [allow_data_lake_write, p1_dossiers]
+  properties:
+    allow_data_lake_write: {type: boolean}
+    data_lake_dossier_path: {type: string}
+    dossier_output_path: {type: string}
+    p1_dossiers: {type: array}
+output_schema:
+  type: object
+  required: [sync_result, external_actions]
+  properties:
+    sync_result: {type: object}
+    external_actions: {type: array}
+stop_conditions:
+  - p1_dossiers_written_to_data_lake
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: data_lake_json_write

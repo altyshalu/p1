@@ -90,37 +90,49 @@ async def test_approve_control_marks_non_p1_run_completed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_approve_control_runs_requested_p1_external_sync(monkeypatch) -> None:
+async def test_approve_control_runs_requested_p1_external_syncs(monkeypatch) -> None:
     store = FakeStore()
     store.run.playbook_key = "p1-operator-outreach"
     store.run.output = {
         "approval_package": {"approval_package": {"outreach_drafts": [{"name": "A", "text": "B"}]}},
         "external_sync_requested": True,
+        "outreach_master_sync_requested": True,
         "external_sync_performed": False,
+        "outreach_master_sync_performed": False,
     }
     run_id = uuid4()
     runtime = ProcessRuntime(store, None, None, None)
 
     async def fake_load_playbook(playbook_key):
-        return {"allowed_workers": ["p1-google-sheets-syncer"]}
+        return {"allowed_workers": ["p1-google-sheets-syncer", "p1-outreach-master-syncer", "p1-metrics-reporter"]}
 
     async def fake_allowed_worker_profiles(playbook):
         return {
             "p1-google-sheets-syncer": {
                 "description": "Approval-gated real Google Sheets sync for P1.",
                 "allowed_tools": ["google-sheets-write-tool"],
+            },
+            "p1-outreach-master-syncer": {
+                "description": "Approval-gated real Outreach Drafts Master sync for P1.",
+                "allowed_tools": ["p1-dossier-store-tool"],
+            },
+            "p1-metrics-reporter": {
+                "description": "Build P1 funnel metrics.",
+                "allowed_tools": [],
             }
         }
 
     async def fake_execute_task(run_id, task, profile):
-        store.artifacts.append(
-            {
-                "id": str(uuid4()),
-                "task_id": None,
-                "artifact_type": ArtifactType.P1_EXTERNAL_SYNC_RESULT.value,
-                "payload": {"sync_result": {"row_count": 1}},
-            }
-        )
+        if task["worker_profile"] == "p1-google-sheets-syncer":
+            artifact_type = ArtifactType.P1_EXTERNAL_SYNC_RESULT.value
+            payload = {"sync_result": {"row_count": 1}}
+        elif task["worker_profile"] == "p1-outreach-master-syncer":
+            artifact_type = ArtifactType.P1_OUTREACH_MASTER_SYNC_RESULT.value
+            payload = {"sync_result": {"written_count": 1}}
+        else:
+            artifact_type = ArtifactType.P1_METRICS_REPORT.value
+            payload = {"metrics": {"sheet_written": 1, "outreach_master_written": 1}}
+        store.artifacts.append({"id": str(uuid4()), "task_id": None, "artifact_type": artifact_type, "payload": payload})
 
     monkeypatch.setattr(runtime, "_load_playbook", fake_load_playbook)
     monkeypatch.setattr(runtime, "_allowed_worker_profiles", fake_allowed_worker_profiles)
@@ -131,11 +143,17 @@ async def test_approve_control_runs_requested_p1_external_sync(monkeypatch) -> N
 
     assert result["status"] == "completed"
     assert result["output"]["external_sync_performed"] is True
+    assert result["output"]["outreach_master_sync_performed"] is True
     assert result["output"]["external_sync_result"]["row_count"] == 1
+    assert result["output"]["outreach_master_sync_result"]["written_count"] == 1
+    assert result["output"]["metrics"]["outreach_master_written"] == 1
     assert [event["event_type"] for event in store.events] == [
         "run_control",
         "p1_external_sync_approved",
         "p1_external_sync_completed",
+        "p1_outreach_master_sync_approved",
+        "p1_outreach_master_sync_completed",
+        "p1_metrics_report_created",
         "run_finished",
     ]
 

@@ -44,6 +44,8 @@ class L3SandboxExecutor:
             "GOOGLE_SA_PATH",
             "P1_GOOGLE_SHEET_ID",
             "P1_DOSSIER_SOURCE_PATH",
+            "P1_DOSSIER_OUTPUT_PATH",
+            "P1_OUTREACH_MASTER_PATH",
         ):
             if os.environ.get(key):
                 env[key] = os.environ[key]

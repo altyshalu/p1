@@ -110,6 +110,10 @@ def collect_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict
             items = _apify_crunchbase_search(inputs, min(limit, 5))
             attempts.append({"source": source, "result_count": len(items)})
             candidates.extend(items)
+        elif source == "apify_linkedin":
+            items = _apify_linkedin_search(inputs, min(limit, 100))
+            attempts.append({"source": source, "result_count": len(items)})
+            candidates.extend(items)
         else:
             raise P1WorkerInputError(f"unsupported P1 source: {source}")
     if not candidates:
@@ -385,6 +389,128 @@ def sync_google_sheets(work_order: dict[str, Any], context: dict[str, Any]) -> d
     }
 
 
+def sync_data_lake(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not bool(work_order["inputs"].get("allow_data_lake_write", False)):
+        raise P1WorkerInputError("Data Lake sync requested without allow_data_lake_write=true")
+    output_path = (
+        work_order["inputs"].get("data_lake_dossier_path")
+        or work_order["inputs"].get("dossier_output_path")
+        or os.environ.get("P1_DOSSIER_OUTPUT_PATH")
+        or os.environ.get("P1_DOSSIER_SOURCE_PATH")
+    )
+    root = Path(require_text(output_path, "data_lake_dossier_path"))
+    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise P1WorkerInputError(f"data_lake_dossier_path is not a directory: {root}")
+    dossiers = require_list(work_order["inputs"].get("p1_dossiers"), "p1_dossiers")
+    written = []
+    for dossier in dossiers:
+        canonical = _canonical_dossier({**dossier, "runtime_source": "p1-operator-outreach"})
+        payload = {**canonical, "runtime_source": "p1-operator-outreach", "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        name = payload["identity"]["name"]
+        path = root / f"{_slug(name)}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        written.append({"name": name, "path": str(path)})
+    return {
+        "sync_result": {"target_path": str(root), "written_count": len(written), "files": written},
+        "external_actions": [{"type": "data_lake_json_write", "target_path": str(root), "written_count": len(written)}],
+    }
+
+
+def sync_outreach_master(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not bool(work_order["inputs"].get("allow_outreach_master_write", False)):
+        raise P1WorkerInputError("Outreach Master sync requested without allow_outreach_master_write=true")
+    master_path = Path(require_text(work_order["inputs"].get("outreach_master_path") or os.environ.get("P1_OUTREACH_MASTER_PATH"), "outreach_master_path"))
+    master_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, Any]
+    if master_path.exists():
+        loaded = json.loads(master_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, list):
+            existing = {"drafts": loaded}
+        elif isinstance(loaded, dict):
+            existing = loaded
+        else:
+            raise P1WorkerInputError(f"Outreach Master JSON must be an object or array: {master_path}")
+    else:
+        existing = {"drafts": []}
+    drafts = require_list(
+        work_order["inputs"].get("approval_package", {}).get("outreach_drafts") or work_order["inputs"].get("outreach_drafts"),
+        "outreach_drafts",
+    )
+    existing_drafts = existing.get("drafts")
+    if not isinstance(existing_drafts, list):
+        raise P1WorkerInputError("Outreach Master JSON object must contain a drafts array")
+    additions = []
+    for draft in drafts:
+        if not isinstance(draft, dict):
+            raise P1WorkerInputError("outreach_drafts must contain objects")
+        item = {
+            **draft,
+            "runtime_source": "p1-operator-outreach",
+            "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": draft.get("status") or "draft",
+            "publish": False,
+        }
+        additions.append(item)
+    existing["drafts"] = [*existing_drafts, *additions]
+    master_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {
+        "sync_result": {"path": str(master_path), "written_count": len(additions), "total_drafts": len(existing["drafts"])},
+        "external_actions": [{"type": "outreach_master_json_append", "path": str(master_path), "written_count": len(additions)}],
+    }
+
+
+def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    inputs = work_order["inputs"]
+    lead_candidates = inputs.get("lead_candidates", [])
+    normalized_leads = inputs.get("normalized_leads", [])
+    rejected_leads = inputs.get("rejected_leads", [])
+    triage_scores = inputs.get("triage_scores", [])
+    dossiers = inputs.get("p1_dossiers", [])
+    gateway_evaluations = inputs.get("gateway_evaluations", [])
+    outreach_drafts = inputs.get("outreach_drafts", [])
+    quality_eval = inputs.get("quality_eval", {})
+    sync_results = inputs.get("external_sync_results", {})
+    if not isinstance(sync_results, dict):
+        sync_results = {}
+    triage_qualified = [
+        item
+        for item in triage_scores
+        if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is True
+    ]
+    triage_rejected = [
+        item
+        for item in triage_scores
+        if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is not True
+    ]
+    gateway_approved = [
+        item
+        for item in gateway_evaluations
+        if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") == "awaiting_outreach"
+    ]
+    gateway_rejected = [
+        item
+        for item in gateway_evaluations
+        if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") != "awaiting_outreach"
+    ]
+    metrics = {
+        "raw_leads": len(lead_candidates) if isinstance(lead_candidates, list) else 0,
+        "normalized_leads": len(normalized_leads) if isinstance(normalized_leads, list) else 0,
+        "rejected_leads": len(rejected_leads) if isinstance(rejected_leads, list) else 0,
+        "triage_qualified": len(triage_qualified),
+        "triage_rejected": len(triage_rejected),
+        "dossiers": len(dossiers) if isinstance(dossiers, list) else 0,
+        "gateway_approved": len(gateway_approved),
+        "gateway_rejected": len(gateway_rejected),
+        "drafted": len(outreach_drafts) if isinstance(outreach_drafts, list) else 0,
+        "eval_passed": bool(quality_eval.get("passed")) if isinstance(quality_eval, dict) else False,
+        "sheet_written": int((sync_results.get("google_sheets") or {}).get("row_count") or 0),
+        "data_lake_written": int((sync_results.get("data_lake") or {}).get("written_count") or 0),
+        "outreach_master_written": int((sync_results.get("outreach_master") or {}).get("written_count") or 0),
+    }
+    return {"metrics": metrics, "summary": _metrics_summary(metrics)}
+
+
 def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> dict[str, Any]:
     identity = raw.get("identity", {}) if isinstance(raw.get("identity"), dict) else {}
     historical = raw.get("historical_context", {}) if isinstance(raw.get("historical_context"), dict) else {}
@@ -486,6 +612,51 @@ def _apify_crunchbase_search(inputs: dict[str, Any], limit: int) -> list[dict[st
                 "linkedin_url": row.get("linkedinUrl") or row.get("linkedin_url") or "",
                 "source_url": row.get("crunchbaseUrl") or row.get("url") or row.get("cbUrl") or "",
                 "source": "apify_crunchbase",
+                "evidence": [json.dumps(row, ensure_ascii=False)[:1000]],
+            }
+        )
+    return candidates
+
+
+def _apify_linkedin_search(inputs: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    actor_id = str(inputs.get("linkedin_actor_id") or "riceman/linkedin-sales-navigator-lead-search-scraper")
+    actor_input: dict[str, Any] = {
+        "limit": limit,
+        "keywords": str(inputs.get("linkedin_keywords") or inputs.get("query") or "AI angel investor operator"),
+    }
+    for key in (
+        "current_company_names",
+        "past_company_names",
+        "company_headcounts",
+        "company_type",
+        "functions",
+        "title_keywords",
+        "seniority_levels",
+        "geo_codes",
+        "industry_codes",
+        "years_of_experience",
+    ):
+        if key in inputs:
+            actor_input[key] = inputs[key]
+    if "title_keywords" not in actor_input and "seniority_levels" not in actor_input:
+        actor_input["seniority_levels"] = ["Owner/Partner", "CXO", "Vice President", "Director"]
+    rows = _run_apify_actor(actor_id, actor_input)
+    candidates = []
+    for row in rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("full_name") or row.get("fullName") or row.get("name") or f"{row.get('first_name', '')} {row.get('last_name', '')}").strip()
+        linkedin_url = _clean_url(str(row.get("linkedin_url") or row.get("linkedinUrl") or row.get("profile_url") or row.get("profileUrl") or ""))
+        if not name or not linkedin_url:
+            continue
+        headline = str(row.get("headline") or row.get("job_title") or row.get("jobTitle") or row.get("title") or "LinkedIn operator/investor").strip()
+        candidates.append(
+            {
+                "name": name,
+                "headline": headline,
+                "linkedin_url": linkedin_url,
+                "source_url": linkedin_url,
+                "source": "apify_linkedin",
                 "evidence": [json.dumps(row, ensure_ascii=False)[:1000]],
             }
         )
@@ -595,6 +766,20 @@ def _name_from_title(title: str) -> str:
     return clean[:80] if clean else title[:80]
 
 
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "unknown_p1_dossier"
+
+
+def _metrics_summary(metrics: dict[str, Any]) -> str:
+    return (
+        f"P1 funnel: raw {metrics['raw_leads']} -> normalized {metrics['normalized_leads']} -> "
+        f"triage qualified {metrics['triage_qualified']} -> gateway approved {metrics['gateway_approved']} -> "
+        f"drafted {metrics['drafted']} -> sheet {metrics['sheet_written']} / "
+        f"data lake {metrics['data_lake_written']} / outreach master {metrics['outreach_master_written']}."
+    )
+
+
 def _normalize_claims(value: Any, evidence_urls: list[Any]) -> list[dict[str, Any]]:
     if isinstance(value, list) and value:
         claims = []
@@ -630,7 +815,10 @@ HANDLERS = {
     "p1-forge-queue-builder": build_forge_queue,
     "p1-outreach-draft-writer": write_outreach_drafts,
     "p1-outreach-quality-judge": judge_outreach_quality,
+    "p1-data-lake-syncer": sync_data_lake,
+    "p1-outreach-master-syncer": sync_outreach_master,
     "p1-google-sheets-syncer": sync_google_sheets,
+    "p1-metrics-reporter": build_metrics_report,
     "read_existing_dossiers": read_existing_dossiers,
     "collect_sources": collect_sources,
     "normalize_leads": normalize_leads,
@@ -641,7 +829,10 @@ HANDLERS = {
     "build_forge_queue": build_forge_queue,
     "write_outreach_drafts": write_outreach_drafts,
     "judge_outreach_quality": judge_outreach_quality,
+    "sync_data_lake": sync_data_lake,
+    "sync_outreach_master": sync_outreach_master,
     "sync_google_sheets": sync_google_sheets,
+    "build_metrics_report": build_metrics_report,
 }
 
 

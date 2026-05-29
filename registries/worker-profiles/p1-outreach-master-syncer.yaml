@@ -1,0 +1,31 @@
+key: p1-outreach-master-syncer
+description: Approval-gated physical Outreach_Drafts_Master.json append for P1 drafts.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [p1-dossier-store-tool]
+compatible_tools: [p1-dossier-store-tool]
+budget:
+  max_seconds: 120
+input_schema:
+  type: object
+  required: [allow_outreach_master_write]
+  properties:
+    allow_outreach_master_write: {type: boolean}
+    outreach_master_path: {type: string}
+    approval_package: {type: object}
+    outreach_drafts: {type: array}
+output_schema:
+  type: object
+  required: [sync_result, external_actions]
+  properties:
+    sync_result: {type: object}
+    external_actions: {type: array}
+stop_conditions:
+  - p1_outreach_master_written
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: outreach_master_json_write
