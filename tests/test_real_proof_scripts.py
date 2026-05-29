@@ -216,3 +216,28 @@ def test_p1_readiness_main_returns_nonzero_when_not_ready(monkeypatch, tmp_path:
     monkeypatch.setattr(sys, 'argv', ['real-p1-readiness.py', '--base-url', 'http://api', '--env-file', str(env_path), '--mode', 'source_only'])
 
     assert module.main() == 1
+
+
+def test_p1_proof_pack_classifies_missing_credentials_as_external_config() -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+
+    assert module.classify_failure('missing required environment variable: APIFY_API_TOKEN') == 'fail_external_config'
+
+
+def test_p1_proof_pack_classifies_timeout_as_external_dependency() -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+
+    assert module.classify_failure('HTTP 429 provider timeout') == 'fail_external_dependency'
+
+
+def test_p1_proof_pack_summarizes_internal_failure(monkeypatch) -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+    monkeypatch.setattr(module, 'run_step', lambda name, command: {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''} if name == 'readiness' else {'name': name, 'status': 'fail_internal', 'returncode': 1, 'command': command, 'stdout': '', 'stderr': 'boom'})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--skip-cache', '--skip-idempotency', '--full-inputs-json', '/tmp/in.json'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 1
+    assert 'fail_internal' in stdout.getvalue()
