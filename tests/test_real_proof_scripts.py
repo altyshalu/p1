@@ -230,6 +230,27 @@ def test_p1_proof_pack_classifies_timeout_as_external_dependency() -> None:
     assert module.classify_failure('HTTP 429 provider timeout') == 'fail_external_dependency'
 
 
+def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+    steps = [
+        {
+            'name': 'readiness',
+            'status': 'fail_external_config',
+            'json': {
+                'missing_required_keys': ['APIFY_API_TOKEN'],
+                'path_checks': {'P1_DOSSIER_SOURCE_PATH': False},
+            },
+        },
+        {'name': 'full_proof', 'status': 'skipped', 'reason': 'full_inputs_json not provided'},
+    ]
+
+    items = module.collect_action_items(steps)
+
+    assert 'Set required env key: APIFY_API_TOKEN' in items
+    assert 'Create or mount required path for P1_DOSSIER_SOURCE_PATH' in items
+    assert 'Provide --full-inputs-json for full proof execution' in items
+
+
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     monkeypatch.setattr(module, 'run_step', lambda name, command: {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''} if name == 'readiness' else {'name': name, 'status': 'fail_internal', 'returncode': 1, 'command': command, 'stdout': '', 'stderr': 'boom'})
@@ -241,3 +262,4 @@ def test_p1_proof_pack_summarizes_internal_failure(monkeypatch) -> None:
 
     assert exit_code == 1
     assert 'fail_internal' in stdout.getvalue()
+    assert 'Fix backend/runtime failure in step full_proof' in stdout.getvalue()

@@ -48,7 +48,7 @@ uv run pytest -q
 Result:
 
 ```text
-121 passed in 8.51s
+135 passed in 7.98s
 ```
 
 ### 3. Real Proof Scripts Are Executable

@@ -38,13 +38,24 @@ def classify_failure(output: str) -> str:
     return 'fail_internal'
 
 
+def parse_json_output(output: str) -> dict[str, Any] | None:
+    if not output.strip():
+        return None
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def run_step(name: str, command: list[str]) -> dict[str, Any]:
     completed = subprocess.run(command, capture_output=True, text=True)
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
     combined = '\n'.join(part for part in (stdout, stderr) if part)
     status = 'pass' if completed.returncode == 0 else classify_failure(combined)
-    return {
+    parsed = parse_json_output(stdout)
+    step: dict[str, Any] = {
         'name': name,
         'status': status,
         'returncode': completed.returncode,
@@ -52,21 +63,61 @@ def run_step(name: str, command: list[str]) -> dict[str, Any]:
         'stdout': stdout,
         'stderr': stderr,
     }
+    if parsed is not None:
+        step['json'] = parsed
+    return step
+
+
+SKIPPED_STATUS = 'skipped'
 
 
 def summarize_overall(steps: list[dict[str, Any]]) -> str:
-    statuses = [step['status'] for step in steps if step['status'] != 'skipped']
+    statuses = [str(step['status']) for step in steps if step['status'] != SKIPPED_STATUS]
     if not statuses:
-        return 'skipped'
+        return SKIPPED_STATUS
     for candidate in ('fail_internal', 'fail_external_dependency', 'fail_external_config'):
         if candidate in statuses:
             return candidate
     return 'pass'
 
 
-def add_inputs_arg(command: list[str], flag: str, value: str | None) -> None:
-    if value:
-        command.extend([flag, value])
+def build_skipped_step(name: str, reason: str) -> dict[str, Any]:
+    return {'name': name, 'status': SKIPPED_STATUS, 'reason': reason}
+
+
+def collect_action_items(steps: list[dict[str, Any]]) -> list[str]:
+    items: list[str] = []
+    for step in steps:
+        if step.get('name') == 'readiness':
+            payload = step.get('json') or {}
+            missing = payload.get('missing_required_keys')
+            if isinstance(missing, list) and missing:
+                for key in missing:
+                    items.append(f'Set required env key: {key}')
+            path_checks = payload.get('path_checks')
+            if isinstance(path_checks, dict):
+                for key, ok in path_checks.items():
+                    if not ok:
+                        items.append(f'Create or mount required path for {key}')
+        if step.get('status') == SKIPPED_STATUS:
+            reason = str(step.get('reason') or '')
+            if 'full_inputs_json' in reason:
+                items.append('Provide --full-inputs-json for full proof execution')
+            elif 'cache_inputs_json' in reason:
+                items.append('Provide --cache-inputs-json for cache proof execution')
+            elif 'idempotency_inputs_json' in reason:
+                items.append('Provide --idempotency-inputs-json for idempotency proof execution')
+        if step.get('status') == 'fail_external_dependency':
+            items.append(f'Investigate external dependency instability in step {step.get("name")}')
+        if step.get('status') == 'fail_internal':
+            items.append(f'Fix backend/runtime failure in step {step.get("name")}')
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item not in seen:
+            deduped.append(item)
+            seen.add(item)
+    return deduped
 
 
 def main() -> int:
@@ -114,7 +165,7 @@ def main() -> int:
         ]
         steps.append(run_step('full_proof', full_cmd))
     elif not args.skip_full:
-        steps.append({'name': 'full_proof', 'status': 'skipped', 'reason': 'full_inputs_json not provided'})
+        steps.append(build_skipped_step('full_proof', 'full_inputs_json not provided'))
 
     if not args.skip_cache and args.cache_inputs_json:
         cache_cmd = [
@@ -129,7 +180,7 @@ def main() -> int:
         ]
         steps.append(run_step('cache_proof', cache_cmd))
     elif not args.skip_cache:
-        steps.append({'name': 'cache_proof', 'status': 'skipped', 'reason': 'cache_inputs_json not provided'})
+        steps.append(build_skipped_step('cache_proof', 'cache_inputs_json not provided'))
 
     if not args.skip_idempotency and args.idempotency_inputs_json:
         idempotency_cmd = [
@@ -144,7 +195,7 @@ def main() -> int:
         ]
         steps.append(run_step('idempotency_proof', idempotency_cmd))
     elif not args.skip_idempotency:
-        steps.append({'name': 'idempotency_proof', 'status': 'skipped', 'reason': 'idempotency_inputs_json not provided'})
+        steps.append(build_skipped_step('idempotency_proof', 'idempotency_inputs_json not provided'))
 
     overall = summarize_overall(steps)
     report = {
@@ -152,6 +203,7 @@ def main() -> int:
         'base_url': args.base_url,
         'env_file': args.env_file,
         'mode': args.mode,
+        'action_items': collect_action_items(steps),
         'steps': steps,
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))
