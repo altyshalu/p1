@@ -54,7 +54,10 @@ class ArtifactType(StrEnum):
     P1_FORGE_QUEUE = "p1_forge_queue"
     P1_OUTREACH_DRAFTS = "p1_outreach_drafts"
     P1_OUTREACH_APPROVAL_PACKAGE = "p1_outreach_approval_package"
+    P1_DATA_LAKE_SYNC_RESULT = "p1_data_lake_sync_result"
+    P1_OUTREACH_MASTER_SYNC_RESULT = "p1_outreach_master_sync_result"
     P1_EXTERNAL_SYNC_RESULT = "p1_external_sync_result"
+    P1_METRICS_REPORT = "p1_metrics_report"
     GENERIC = "generic"
 
 

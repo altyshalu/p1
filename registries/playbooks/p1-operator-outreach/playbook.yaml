@@ -16,7 +16,10 @@ allowed_workers:
   - p1-forge-queue-builder
   - p1-outreach-draft-writer
   - p1-outreach-quality-judge
+  - p1-data-lake-syncer
+  - p1-outreach-master-syncer
   - p1-google-sheets-syncer
+  - p1-metrics-reporter
   - approval-adapter
   - learning-worker
 allowed_tools:
@@ -33,13 +36,20 @@ completion_criteria:
   - outreach drafts are grounded in real evidence
   - draft quality evaluation passes
   - Google Sheets writes and outreach sending remain approval-gated
+  - legacy Data Lake and Outreach Master writes are explicit and metrics are reported
 required_eval_keys:
   - p1-outreach-draft-quality
 required_inputs:
   - mode
   - limit
 external_actions:
+  data_lake_json_write:
+    default: disabled
+    approval_required: false
   google_sheets_write:
+    default: disabled
+    approval_required: true
+  outreach_master_json_write:
     default: disabled
     approval_required: true
   outreach_send:

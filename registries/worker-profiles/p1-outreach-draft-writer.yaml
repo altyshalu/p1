@@ -5,7 +5,7 @@ entrypoint: l2l3_protocol.workers.p1_operator_worker
 allowed_tools: []
 compatible_tools: []
 budget:
-  max_seconds: 240
+  max_seconds: 2400
 input_schema:
   type: object
   required: [forge_queue]

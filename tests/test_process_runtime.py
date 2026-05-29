@@ -7,6 +7,7 @@ import pytest
 from l2l3_protocol.config import Settings
 from l2l3_protocol.core.schemas import (
     Artifact,
+    ArtifactType,
     EvalResult,
     FailureLearning,
     ImprovementProposal,
@@ -351,6 +352,113 @@ async def test_execution_mode_fails_when_playbook_is_missing() -> None:
 
     with pytest.raises(KeyError, match="Taskforce Hub playbook is not seeded"):
         await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([])).run_until_blocked_or_done(run.id)
+
+
+@pytest.mark.asyncio
+async def test_p1_workflow_reuses_existing_real_artifact_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = ProcessRun(
+        playbook_key="p1-operator-outreach",
+        goal="Resume P1 proof without repeating completed source collection",
+        status=RunStatus.RUNNING,
+        input={
+            "playbook_key": "p1-operator-outreach",
+            "l2_mode": "execution",
+            "goal": "Resume P1 proof without repeating completed source collection",
+            "inputs": {"mode": "full_pipeline", "sources": ["apify_linkedin"], "require_human_approval": False},
+            "require_human_approval": False,
+        },
+    )
+    store = FakeStore(run)
+    stale_failed_task = WorkOrder(
+        run_id=run.id,
+        task_type="collect_sources",
+        worker_profile="p1-source-collector",
+        goal="old failed source collection task",
+        status=TaskStatus.FAILED,
+    )
+    store.tasks.append(stale_failed_task)
+    await store.add_artifact(
+        Artifact(
+            run_id=run.id,
+            task_id=stale_failed_task.id,
+            artifact_type=ArtifactType.P1_LEAD_CANDIDATES,
+            payload={"lead_candidates": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
+        )
+    )
+    runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
+    executed_workers: list[str] = []
+
+    async def fake_execute_task(run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
+        executed_workers.append(task["worker_profile"])
+        artifact_type = ArtifactType(task["artifact_type"])
+        payloads = {
+            ArtifactType.P1_NORMALIZED_LEADS: {"normalized_leads": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
+            ArtifactType.P1_TRIAGE_SCORES: {"triage_scores": [{"lead_id": "lead-1", "score": 91, "qualified": True}]},
+            ArtifactType.P1_DOSSIERS: {"p1_dossiers": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
+            ArtifactType.P1_LIVE_INTELLIGENCE: {"p1_dossiers": [{"lead_id": "lead-1", "name": "Ava Operator", "live_context": []}]},
+            ArtifactType.P1_GATEWAY_EVALUATIONS: {"gateway_evaluations": [{"lead_id": "lead-1", "decision": "approved"}]},
+            ArtifactType.P1_FORGE_QUEUE: {"forge_queue": [{"lead_id": "lead-1", "operator_name": "Ava Operator"}]},
+            ArtifactType.P1_OUTREACH_DRAFTS: {"outreach_drafts": [{"lead_id": "lead-1", "body": "ABRT hello"}]},
+            ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE: {"outreach_drafts": [{"lead_id": "lead-1", "body": "ABRT hello"}]},
+            ArtifactType.P1_METRICS_REPORT: {"metrics": {"raw_leads": 1, "drafted": 1}},
+        }
+        await store.add_artifact(Artifact(run_id=run_id, artifact_type=artifact_type, payload=payloads[artifact_type]))
+
+    monkeypatch.setattr(runtime, "_execute_task", fake_execute_task)
+
+    output = await runtime.run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "completed"
+    assert "p1-source-collector" not in executed_workers
+    assert any(event["event_type"] == "p1_checkpoint_reused" for event in store.events)
+    checkpoint_event = next(event for event in store.events if event["event_type"] == "p1_checkpoint_reused")
+    assert checkpoint_event["payload"]["artifact_type"] == ArtifactType.P1_LEAD_CANDIDATES.value
+
+
+@pytest.mark.asyncio
+async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = ProcessRun(
+        playbook_key="p1-operator-outreach",
+        goal="Force a P1 source rerun",
+        status=RunStatus.RUNNING,
+        input={
+            "playbook_key": "p1-operator-outreach",
+            "l2_mode": "execution",
+            "goal": "Force a P1 source rerun",
+            "inputs": {"mode": "source_only", "sources": ["apify_linkedin"], "force_rerun": True, "require_human_approval": False},
+            "require_human_approval": False,
+        },
+    )
+    store = FakeStore(run)
+    await store.add_artifact(
+        Artifact(
+            run_id=run.id,
+            artifact_type=ArtifactType.P1_LEAD_CANDIDATES,
+            payload={"lead_candidates": [{"lead_id": "old-lead", "name": "Old Lead"}]},
+        )
+    )
+    runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
+    executed_workers: list[str] = []
+
+    async def fake_execute_task(run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
+        executed_workers.append(task["worker_profile"])
+        artifact_type = ArtifactType(task["artifact_type"])
+        payloads = {
+            ArtifactType.P1_LEAD_CANDIDATES: {"lead_candidates": [{"lead_id": "new-lead", "name": "New Lead"}]},
+            ArtifactType.P1_NORMALIZED_LEADS: {"normalized_leads": [{"lead_id": "new-lead", "name": "New Lead"}]},
+            ArtifactType.P1_TRIAGE_SCORES: {"triage_scores": [{"lead_id": "new-lead", "score": 88, "qualified": True}]},
+            ArtifactType.P1_DOSSIERS: {"p1_dossiers": [{"lead_id": "new-lead", "name": "New Lead"}]},
+            ArtifactType.P1_METRICS_REPORT: {"metrics": {"raw_leads": 1, "dossiers": 1}},
+        }
+        await store.add_artifact(Artifact(run_id=run_id, artifact_type=artifact_type, payload=payloads[artifact_type]))
+
+    monkeypatch.setattr(runtime, "_execute_task", fake_execute_task)
+
+    output = await runtime.run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "completed"
+    assert executed_workers[0] == "p1-source-collector"
+    assert not any(event["event_type"] == "p1_checkpoint_reused" for event in store.events)
 
 
 def test_worker_error_classification_preserves_real_provider_failures() -> None:

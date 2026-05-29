@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -15,7 +16,10 @@ from google import genai
 
 
 HTTP_TIMEOUT_SECONDS = 30
+HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
+P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
+P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 class P1WorkerInputError(ValueError):
@@ -99,16 +103,24 @@ def collect_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict
     attempts: list[dict[str, Any]] = []
     for source in sources:
         if source == "exa":
-            items = _exa_people_search(query, min(limit, 10))
-            attempts.append({"source": source, "query": query, "result_count": len(items)})
+            source_limit = min(limit, 10)
+            items, cache = _with_provider_cache(inputs, source, {"query": query, "limit": source_limit}, lambda: _exa_people_search(query, source_limit))
+            attempts.append({"source": source, "query": query, "result_count": len(items), **cache})
             candidates.extend(items)
         elif source == "apify_funding":
-            items = _apify_funding_search(inputs, min(limit, 10))
-            attempts.append({"source": source, "result_count": len(items)})
+            source_limit = min(limit, 10)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_funding_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
             candidates.extend(items)
         elif source == "apify_crunchbase":
-            items = _apify_crunchbase_search(inputs, min(limit, 5))
-            attempts.append({"source": source, "result_count": len(items)})
+            source_limit = min(limit, 5)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_crunchbase_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
+            candidates.extend(items)
+        elif source == "apify_linkedin":
+            source_limit = min(limit, 100)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_linkedin_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
             candidates.extend(items)
         else:
             raise P1WorkerInputError(f"unsupported P1 source: {source}")
@@ -321,7 +333,7 @@ Constraints:
             "linkedin_url": dossier["identity"].get("linkedin_url", ""),
             "current_role": gateway.get("current_role_verified", ""),
             "archetype": response.get("archetype"),
-            "text": require_text(response.get("draft"), "draft"),
+            "text": _ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft")),
             "evidence_urls": evidence_urls,
             "claims": _normalize_claims(response.get("claims"), evidence_urls),
             "status": "draft",
@@ -385,6 +397,128 @@ def sync_google_sheets(work_order: dict[str, Any], context: dict[str, Any]) -> d
     }
 
 
+def sync_data_lake(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not bool(work_order["inputs"].get("allow_data_lake_write", False)):
+        raise P1WorkerInputError("Data Lake sync requested without allow_data_lake_write=true")
+    output_path = (
+        work_order["inputs"].get("data_lake_dossier_path")
+        or work_order["inputs"].get("dossier_output_path")
+        or os.environ.get("P1_DOSSIER_OUTPUT_PATH")
+        or os.environ.get("P1_DOSSIER_SOURCE_PATH")
+    )
+    root = Path(require_text(output_path, "data_lake_dossier_path"))
+    root.mkdir(parents=True, exist_ok=True)
+    if not root.is_dir():
+        raise P1WorkerInputError(f"data_lake_dossier_path is not a directory: {root}")
+    dossiers = require_list(work_order["inputs"].get("p1_dossiers"), "p1_dossiers")
+    written = []
+    for dossier in dossiers:
+        canonical = _canonical_dossier({**dossier, "runtime_source": "p1-operator-outreach"})
+        payload = {**canonical, "runtime_source": "p1-operator-outreach", "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
+        name = payload["identity"]["name"]
+        path = root / f"{_slug(name)}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        written.append({"name": name, "path": str(path)})
+    return {
+        "sync_result": {"target_path": str(root), "written_count": len(written), "files": written},
+        "external_actions": [{"type": "data_lake_json_write", "target_path": str(root), "written_count": len(written)}],
+    }
+
+
+def sync_outreach_master(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    if not bool(work_order["inputs"].get("allow_outreach_master_write", False)):
+        raise P1WorkerInputError("Outreach Master sync requested without allow_outreach_master_write=true")
+    master_path = Path(require_text(work_order["inputs"].get("outreach_master_path") or os.environ.get("P1_OUTREACH_MASTER_PATH"), "outreach_master_path"))
+    master_path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, Any]
+    if master_path.exists():
+        loaded = json.loads(master_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, list):
+            existing = {"drafts": loaded}
+        elif isinstance(loaded, dict):
+            existing = loaded
+        else:
+            raise P1WorkerInputError(f"Outreach Master JSON must be an object or array: {master_path}")
+    else:
+        existing = {"drafts": []}
+    drafts = require_list(
+        work_order["inputs"].get("approval_package", {}).get("outreach_drafts") or work_order["inputs"].get("outreach_drafts"),
+        "outreach_drafts",
+    )
+    existing_drafts = existing.get("drafts")
+    if not isinstance(existing_drafts, list):
+        raise P1WorkerInputError("Outreach Master JSON object must contain a drafts array")
+    additions = []
+    for draft in drafts:
+        if not isinstance(draft, dict):
+            raise P1WorkerInputError("outreach_drafts must contain objects")
+        item = {
+            **draft,
+            "runtime_source": "p1-operator-outreach",
+            "synced_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "status": draft.get("status") or "draft",
+            "publish": False,
+        }
+        additions.append(item)
+    existing["drafts"] = [*existing_drafts, *additions]
+    master_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return {
+        "sync_result": {"path": str(master_path), "written_count": len(additions), "total_drafts": len(existing["drafts"])},
+        "external_actions": [{"type": "outreach_master_json_append", "path": str(master_path), "written_count": len(additions)}],
+    }
+
+
+def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    inputs = work_order["inputs"]
+    lead_candidates = inputs.get("lead_candidates", [])
+    normalized_leads = inputs.get("normalized_leads", [])
+    rejected_leads = inputs.get("rejected_leads", [])
+    triage_scores = inputs.get("triage_scores", [])
+    dossiers = inputs.get("p1_dossiers", [])
+    gateway_evaluations = inputs.get("gateway_evaluations", [])
+    outreach_drafts = inputs.get("outreach_drafts", [])
+    quality_eval = inputs.get("quality_eval", {})
+    sync_results = inputs.get("external_sync_results", {})
+    if not isinstance(sync_results, dict):
+        sync_results = {}
+    triage_qualified = [
+        item
+        for item in triage_scores
+        if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is True
+    ]
+    triage_rejected = [
+        item
+        for item in triage_scores
+        if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is not True
+    ]
+    gateway_approved = [
+        item
+        for item in gateway_evaluations
+        if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") == "awaiting_outreach"
+    ]
+    gateway_rejected = [
+        item
+        for item in gateway_evaluations
+        if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") != "awaiting_outreach"
+    ]
+    metrics = {
+        "raw_leads": len(lead_candidates) if isinstance(lead_candidates, list) else 0,
+        "normalized_leads": len(normalized_leads) if isinstance(normalized_leads, list) else 0,
+        "rejected_leads": len(rejected_leads) if isinstance(rejected_leads, list) else 0,
+        "triage_qualified": len(triage_qualified),
+        "triage_rejected": len(triage_rejected),
+        "dossiers": len(dossiers) if isinstance(dossiers, list) else 0,
+        "gateway_approved": len(gateway_approved),
+        "gateway_rejected": len(gateway_rejected),
+        "drafted": len(outreach_drafts) if isinstance(outreach_drafts, list) else 0,
+        "eval_passed": bool(quality_eval.get("passed")) if isinstance(quality_eval, dict) else False,
+        "sheet_written": int((sync_results.get("google_sheets") or {}).get("row_count") or 0),
+        "data_lake_written": int((sync_results.get("data_lake") or {}).get("written_count") or 0),
+        "outreach_master_written": int((sync_results.get("outreach_master") or {}).get("written_count") or 0),
+    }
+    return {"metrics": metrics, "summary": _metrics_summary(metrics)}
+
+
 def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> dict[str, Any]:
     identity = raw.get("identity", {}) if isinstance(raw.get("identity"), dict) else {}
     historical = raw.get("historical_context", {}) if isinstance(raw.get("historical_context"), dict) else {}
@@ -434,6 +568,104 @@ def _exa_people_search(query: str, limit: int) -> list[dict[str, Any]]:
     return items
 
 
+def _with_provider_cache(inputs: dict[str, Any], source: str, request: dict[str, Any], fetch: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if _disable_provider_cache(inputs):
+        items = fetch()
+        return items, {"cache_enabled": False, "cache_hit": False}
+    cache_dir = _provider_cache_dir(inputs)
+    ttl_seconds = _provider_cache_ttl_seconds(inputs)
+    key = _provider_cache_key(source, request)
+    path = cache_dir / f"{key}.json"
+    if path.exists():
+        cached = _read_provider_cache(path, ttl_seconds)
+        if cached is not None:
+            return cached["items"], {
+                "cache_enabled": True,
+                "cache_hit": True,
+                "cache_key": key,
+                "cached_at": cached["cached_at"],
+                "cache_path": str(path),
+            }
+    items = fetch()
+    _write_provider_cache(path, source, request, items)
+    return items, {"cache_enabled": True, "cache_hit": False, "cache_key": key, "cache_path": str(path)}
+
+
+def _disable_provider_cache(inputs: dict[str, Any]) -> bool:
+    value = inputs.get("use_provider_cache")
+    if value is None:
+        value = os.environ.get("P1_USE_PROVIDER_CACHE", "true")
+    if isinstance(value, bool):
+        return not value
+    return str(value).strip().lower() in {"0", "false", "no", "off"}
+
+
+def _provider_cache_dir(inputs: dict[str, Any]) -> Path:
+    path = inputs.get("provider_cache_dir") or os.environ.get("P1_PROVIDER_CACHE_DIR") or ".cache/p1_provider_cache"
+    return Path(require_text(str(path), "provider_cache_dir"))
+
+
+def _provider_cache_ttl_seconds(inputs: dict[str, Any]) -> int:
+    raw = inputs.get("provider_cache_ttl_seconds") or os.environ.get("P1_PROVIDER_CACHE_TTL_SECONDS") or P1_PROVIDER_CACHE_TTL_SECONDS
+    ttl_seconds = int(raw)
+    if ttl_seconds < 1:
+        raise P1WorkerInputError("provider_cache_ttl_seconds must be >= 1")
+    return ttl_seconds
+
+
+def _provider_cache_key(source: str, request: dict[str, Any]) -> str:
+    payload = json.dumps({"version": P1_PROVIDER_CACHE_VERSION, "source": source, "request": request}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _provider_cache_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    excluded = {
+        "allow_data_lake_write",
+        "allow_google_sheet_write",
+        "allow_outreach_master_write",
+        "data_lake_dossier_path",
+        "dossier_output_path",
+        "outreach_master_path",
+        "provider_cache_dir",
+        "provider_cache_ttl_seconds",
+        "require_human_approval",
+        "use_provider_cache",
+    }
+    return {key: value for key, value in sorted(inputs.items()) if key not in excluded}
+
+
+def _read_provider_cache(path: Path, ttl_seconds: int) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise P1WorkerInputError(f"P1 provider cache is corrupt: {path}") from exc
+    if not isinstance(payload, dict) or payload.get("version") != P1_PROVIDER_CACHE_VERSION:
+        raise P1WorkerInputError(f"P1 provider cache has invalid schema: {path}")
+    cached_at = payload.get("cached_at")
+    items = payload.get("items")
+    if not isinstance(cached_at, (int, float)) or not isinstance(items, list):
+        raise P1WorkerInputError(f"P1 provider cache has invalid payload: {path}")
+    if time.time() - float(cached_at) > ttl_seconds:
+        return None
+    if not all(isinstance(item, dict) for item in items):
+        raise P1WorkerInputError(f"P1 provider cache contains non-object items: {path}")
+    return {"cached_at": cached_at, "items": items}
+
+
+def _write_provider_cache(path: Path, source: str, request: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": P1_PROVIDER_CACHE_VERSION,
+        "source": source,
+        "request": request,
+        "cached_at": time.time(),
+        "items": items,
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
+
+
 def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     actor_input = {
         "mode": "all_sources",
@@ -455,9 +687,27 @@ def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, 
             continue
         for investor in investors:
             name = str(investor).strip()
-            if not name or _looks_like_company(name):
+            if not name or _looks_like_company(name) or _is_institutional_investor(name):
                 continue
             candidates.append({"name": name, "headline": f"Angel investor in {company} ({amount} round)", "source_url": source_url, "source": "apify_funding", "evidence": [json.dumps(row, ensure_ascii=False)[:1000]]})
+            if len(candidates) >= limit:
+                return candidates[:limit]
+        if company and len(candidates) < limit:
+            for founder in _exa_people_search(f"{company} founder LinkedIn {row.get('industry', '')}", 2):
+                founder_url = _clean_url(str(founder.get("source_url") or founder.get("linkedin_url") or ""))
+                if "linkedin.com/in/" not in founder_url:
+                    continue
+                candidate = {
+                    **founder,
+                    "headline": founder.get("headline") or f"Founder at {company}",
+                    "source_url": founder_url,
+                    "linkedin_url": founder_url,
+                    "source": "apify_funding",
+                    "evidence": [json.dumps(row, ensure_ascii=False)[:1000], *founder.get("evidence", [])],
+                }
+                candidates.append(candidate)
+                if len(candidates) >= limit:
+                    return candidates[:limit]
     return candidates[:limit]
 
 
@@ -486,6 +736,51 @@ def _apify_crunchbase_search(inputs: dict[str, Any], limit: int) -> list[dict[st
                 "linkedin_url": row.get("linkedinUrl") or row.get("linkedin_url") or "",
                 "source_url": row.get("crunchbaseUrl") or row.get("url") or row.get("cbUrl") or "",
                 "source": "apify_crunchbase",
+                "evidence": [json.dumps(row, ensure_ascii=False)[:1000]],
+            }
+        )
+    return candidates
+
+
+def _apify_linkedin_search(inputs: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    actor_id = str(inputs.get("linkedin_actor_id") or "riceman/linkedin-sales-navigator-lead-search-scraper")
+    actor_input: dict[str, Any] = {
+        "limit": limit,
+        "keywords": str(inputs.get("linkedin_keywords") or inputs.get("query") or "AI angel investor operator"),
+    }
+    for key in (
+        "current_company_names",
+        "past_company_names",
+        "company_headcounts",
+        "company_type",
+        "functions",
+        "title_keywords",
+        "seniority_levels",
+        "geo_codes",
+        "industry_codes",
+        "years_of_experience",
+    ):
+        if key in inputs:
+            actor_input[key] = inputs[key]
+    if "title_keywords" not in actor_input and "seniority_levels" not in actor_input:
+        actor_input["seniority_levels"] = ["Owner/Partner", "CXO", "Vice President", "Director"]
+    rows = _run_apify_actor(actor_id, actor_input)
+    candidates = []
+    for row in rows[:limit]:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("full_name") or row.get("fullName") or row.get("name") or f"{row.get('first_name', '')} {row.get('last_name', '')}").strip()
+        linkedin_url = _clean_url(str(row.get("linkedin_url") or row.get("linkedinUrl") or row.get("profile_url") or row.get("profileUrl") or ""))
+        if not name or not linkedin_url:
+            continue
+        headline = str(row.get("headline") or row.get("job_title") or row.get("jobTitle") or row.get("title") or "LinkedIn operator/investor").strip()
+        candidates.append(
+            {
+                "name": name,
+                "headline": headline,
+                "linkedin_url": linkedin_url,
+                "source_url": linkedin_url,
+                "source": "apify_linkedin",
                 "evidence": [json.dumps(row, ensure_ascii=False)[:1000]],
             }
         )
@@ -562,16 +857,25 @@ def _request_json(
     if token:
         request_headers["authorization"] = f"Bearer {token}"
     request = Request(url, data=data, headers=request_headers, method=method)
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        error_body = _redact_secrets(exc.read().decode("utf-8", errors="replace")[:1000])
-        safe_url = _redact_secrets(url)
-        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.code}: {error_body}") from exc
-    except URLError as exc:
-        safe_url = _redact_secrets(url)
-        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.reason}") from exc
+    attempts = len(HTTP_GET_RETRY_DELAYS_SECONDS) + 1 if method == "GET" else 1
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if method == "GET" and exc.code in {429, 502, 503, 504} and attempt < attempts - 1:
+                time.sleep(HTTP_GET_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            error_body = _redact_secrets(exc.read().decode("utf-8", errors="replace")[:1000])
+            safe_url = _redact_secrets(url)
+            raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.code}: {error_body}") from exc
+        except URLError as exc:
+            if method == "GET" and attempt < attempts - 1:
+                time.sleep(HTTP_GET_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            safe_url = _redact_secrets(url)
+            raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.reason}") from exc
+    raise P1WorkerInputError(f"real HTTP request failed {method} {_redact_secrets(url)} after retries")
 
 
 def _redact_secrets(value: str) -> str:
@@ -590,9 +894,29 @@ def _looks_like_company(name: str) -> bool:
     return any(token in lowered for token in tokens)
 
 
+def _is_institutional_investor(name: str) -> bool:
+    lowered = name.lower()
+    institutions = {"y combinator", "techstars", "sequoia", "a16z", "andreessen horowitz", "accel", "index ventures"}
+    return lowered in institutions
+
+
 def _name_from_title(title: str) -> str:
     clean = re.split(r"[-|–—]", title)[0].strip()
     return clean[:80] if clean else title[:80]
+
+
+def _slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    return slug or "unknown_p1_dossier"
+
+
+def _metrics_summary(metrics: dict[str, Any]) -> str:
+    return (
+        f"P1 funnel: raw {metrics['raw_leads']} -> normalized {metrics['normalized_leads']} -> "
+        f"triage qualified {metrics['triage_qualified']} -> gateway approved {metrics['gateway_approved']} -> "
+        f"drafted {metrics['drafted']} -> sheet {metrics['sheet_written']} / "
+        f"data lake {metrics['data_lake_written']} / outreach master {metrics['outreach_master_written']}."
+    )
 
 
 def _normalize_claims(value: Any, evidence_urls: list[Any]) -> list[dict[str, Any]]:
@@ -607,6 +931,13 @@ def _normalize_claims(value: Any, evidence_urls: list[Any]) -> list[dict[str, An
         if claims:
             return claims
     return [{"text": "Outreach draft is based on the dossier and live intelligence evidence.", "source_url": str(evidence_urls[0]), "evidence_urls": evidence_urls}] if evidence_urls else []
+
+
+def _ensure_abrt_or_limpid_mention(text: str) -> str:
+    lowered = text.lower()
+    if "abrt" in lowered or "limpid" in lowered:
+        return text
+    return f"{text.rstrip()} At ABRT, we're comparing notes with operators building this kind of AI-native edge."
 
 
 def _claims_have_sources(draft: dict[str, Any]) -> bool:
@@ -630,7 +961,10 @@ HANDLERS = {
     "p1-forge-queue-builder": build_forge_queue,
     "p1-outreach-draft-writer": write_outreach_drafts,
     "p1-outreach-quality-judge": judge_outreach_quality,
+    "p1-data-lake-syncer": sync_data_lake,
+    "p1-outreach-master-syncer": sync_outreach_master,
     "p1-google-sheets-syncer": sync_google_sheets,
+    "p1-metrics-reporter": build_metrics_report,
     "read_existing_dossiers": read_existing_dossiers,
     "collect_sources": collect_sources,
     "normalize_leads": normalize_leads,
@@ -641,7 +975,10 @@ HANDLERS = {
     "build_forge_queue": build_forge_queue,
     "write_outreach_drafts": write_outreach_drafts,
     "judge_outreach_quality": judge_outreach_quality,
+    "sync_data_lake": sync_data_lake,
+    "sync_outreach_master": sync_outreach_master,
     "sync_google_sheets": sync_google_sheets,
+    "build_metrics_report": build_metrics_report,
 }
 
 
