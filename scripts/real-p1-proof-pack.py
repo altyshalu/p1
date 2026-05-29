@@ -14,6 +14,7 @@ CONFIG_MARKERS = (
     'missing required environment variable',
     'missing required input',
     'missing_required_keys',
+    'missing_runtime_inputs',
     'env file not found',
     'verify-sheet requires spreadsheet_id',
     'verify-sheet requested but preview did not include any lead_ids',
@@ -90,15 +91,19 @@ def collect_action_items(steps: list[dict[str, Any]]) -> list[str]:
     for step in steps:
         if step.get('name') == 'readiness':
             payload = step.get('json') or {}
-            missing = payload.get('missing_required_keys')
-            if isinstance(missing, list) and missing:
-                for key in missing:
+            missing_keys = payload.get('missing_required_keys')
+            if isinstance(missing_keys, list) and missing_keys:
+                for key in missing_keys:
                     items.append(f'Set required env key: {key}')
+            missing_inputs = payload.get('missing_runtime_inputs')
+            if isinstance(missing_inputs, list) and missing_inputs:
+                for key in missing_inputs:
+                    items.append(f'Provide required runtime input: {key}')
             path_checks = payload.get('path_checks')
             if isinstance(path_checks, dict):
                 for key, ok in path_checks.items():
                     if not ok:
-                        items.append(f'Create or mount required path for {key}')
+                        items.append(f'Create, mount, or fix required path: {key}')
         if step.get('status') == SKIPPED_STATUS:
             reason = str(step.get('reason') or '')
             if 'full_inputs_json' in reason:
@@ -132,6 +137,7 @@ def main() -> int:
     parser.add_argument('--skip-cache', action='store_true')
     parser.add_argument('--skip-idempotency', action='store_true')
     parser.add_argument('--skip-full', action='store_true')
+    parser.add_argument('--force-after-readiness-failure', action='store_true')
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -150,52 +156,61 @@ def main() -> int:
     ]
     if args.full_inputs_json:
         readiness_cmd.extend(['--inputs-json', args.full_inputs_json])
-    steps.append(run_step('readiness', readiness_cmd))
+    readiness_step = run_step('readiness', readiness_cmd)
+    steps.append(readiness_step)
 
-    if not args.skip_full and args.full_inputs_json:
-        full_cmd = [
-            python_bin,
-            str(script_dir / 'real-p1-full-proof.py'),
-            '--base-url',
-            args.base_url,
-            '--inputs-json',
-            args.full_inputs_json,
-            '--timeout-seconds',
-            str(args.timeout_seconds),
-        ]
-        steps.append(run_step('full_proof', full_cmd))
-    elif not args.skip_full:
-        steps.append(build_skipped_step('full_proof', 'full_inputs_json not provided'))
+    if readiness_step['status'] != 'pass' and not args.force_after_readiness_failure:
+        if not args.skip_full:
+            steps.append(build_skipped_step('full_proof', 'readiness failed'))
+        if not args.skip_cache:
+            steps.append(build_skipped_step('cache_proof', 'readiness failed'))
+        if not args.skip_idempotency:
+            steps.append(build_skipped_step('idempotency_proof', 'readiness failed'))
+    else:
+        if not args.skip_full and args.full_inputs_json:
+            full_cmd = [
+                python_bin,
+                str(script_dir / 'real-p1-full-proof.py'),
+                '--base-url',
+                args.base_url,
+                '--inputs-json',
+                args.full_inputs_json,
+                '--timeout-seconds',
+                str(args.timeout_seconds),
+            ]
+            steps.append(run_step('full_proof', full_cmd))
+        elif not args.skip_full:
+            steps.append(build_skipped_step('full_proof', 'full_inputs_json not provided'))
 
-    if not args.skip_cache and args.cache_inputs_json:
-        cache_cmd = [
-            python_bin,
-            str(script_dir / 'real-p1-cache-proof.py'),
-            '--base-url',
-            args.base_url,
-            '--inputs-json',
-            args.cache_inputs_json,
-            '--timeout-seconds',
-            str(args.timeout_seconds),
-        ]
-        steps.append(run_step('cache_proof', cache_cmd))
-    elif not args.skip_cache:
-        steps.append(build_skipped_step('cache_proof', 'cache_inputs_json not provided'))
+        if not args.skip_cache and args.cache_inputs_json:
+            cache_cmd = [
+                python_bin,
+                str(script_dir / 'real-p1-cache-proof.py'),
+                '--base-url',
+                args.base_url,
+                '--inputs-json',
+                args.cache_inputs_json,
+                '--timeout-seconds',
+                str(args.timeout_seconds),
+            ]
+            steps.append(run_step('cache_proof', cache_cmd))
+        elif not args.skip_cache:
+            steps.append(build_skipped_step('cache_proof', 'cache_inputs_json not provided'))
 
-    if not args.skip_idempotency and args.idempotency_inputs_json:
-        idempotency_cmd = [
-            python_bin,
-            str(script_dir / 'real-p1-idempotency-proof.py'),
-            '--base-url',
-            args.base_url,
-            '--inputs-json',
-            args.idempotency_inputs_json,
-            '--timeout-seconds',
-            str(args.timeout_seconds),
-        ]
-        steps.append(run_step('idempotency_proof', idempotency_cmd))
-    elif not args.skip_idempotency:
-        steps.append(build_skipped_step('idempotency_proof', 'idempotency_inputs_json not provided'))
+        if not args.skip_idempotency and args.idempotency_inputs_json:
+            idempotency_cmd = [
+                python_bin,
+                str(script_dir / 'real-p1-idempotency-proof.py'),
+                '--base-url',
+                args.base_url,
+                '--inputs-json',
+                args.idempotency_inputs_json,
+                '--timeout-seconds',
+                str(args.timeout_seconds),
+            ]
+            steps.append(run_step('idempotency_proof', idempotency_cmd))
+        elif not args.skip_idempotency:
+            steps.append(build_skipped_step('idempotency_proof', 'idempotency_inputs_json not provided'))
 
     overall = summarize_overall(steps)
     report = {

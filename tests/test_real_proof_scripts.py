@@ -183,10 +183,24 @@ def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
     monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
 
-    report = module.readiness_report('http://api', str(env_path), 'source_only', {}, True)
+    report = module.readiness_report('http://api', str(env_path), 'source_only', {'sources': ['exa']}, True)
 
     assert report['ready'] is False
     assert 'APIFY_API_TOKEN' in report['missing_required_keys']
+
+
+def test_p1_readiness_reports_missing_runtime_inputs(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    env_path.write_text('GEMINI_API_KEY=test\nAPIFY_API_TOKEN=test\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report('http://api', str(env_path), 'source_only', {}, True, explicit_inputs_supplied=True)
+
+    assert report['ready'] is False
+    assert report['missing_runtime_inputs'] == ['mode', 'sources']
 
 
 def test_p1_readiness_reports_ready_when_required_keys_exist(monkeypatch, tmp_path: Path) -> None:
@@ -203,7 +217,8 @@ def test_p1_readiness_reports_ready_when_required_keys_exist(monkeypatch, tmp_pa
 
     assert report['ready'] is True
     assert report['missing_required_keys'] == []
-    assert report['path_checks']['P1_DOSSIER_SOURCE_PATH'] is True
+    assert report['missing_runtime_inputs'] == []
+    assert report['path_checks']['dossier_source_path'] is True
 
 
 def test_p1_readiness_main_returns_nonzero_when_not_ready(monkeypatch, tmp_path: Path) -> None:
@@ -238,7 +253,8 @@ def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
             'status': 'fail_external_config',
             'json': {
                 'missing_required_keys': ['APIFY_API_TOKEN'],
-                'path_checks': {'P1_DOSSIER_SOURCE_PATH': False},
+                'missing_runtime_inputs': ['mode', 'sources'],
+                'path_checks': {'dossier_source_path': False},
             },
         },
         {'name': 'full_proof', 'status': 'skipped', 'reason': 'full_inputs_json not provided'},
@@ -247,8 +263,31 @@ def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
     items = module.collect_action_items(steps)
 
     assert 'Set required env key: APIFY_API_TOKEN' in items
-    assert 'Create or mount required path for P1_DOSSIER_SOURCE_PATH' in items
+    assert 'Provide required runtime input: mode' in items
+    assert 'Provide required runtime input: sources' in items
+    assert 'Create, mount, or fix required path: dossier_source_path' in items
     assert 'Provide --full-inputs-json for full proof execution' in items
+
+
+def test_p1_proof_pack_skips_downstream_steps_when_readiness_fails(monkeypatch) -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+
+    def fake_run_step(name, command):
+        if name == 'readiness':
+            return {'name': 'readiness', 'status': 'fail_external_config', 'returncode': 1, 'command': command, 'stdout': '{}', 'stderr': '', 'json': {'missing_required_keys': ['APIFY_API_TOKEN'], 'missing_runtime_inputs': ['mode']}}
+        raise AssertionError('downstream run_step should not be called after readiness failure')
+
+    monkeypatch.setattr(module, 'run_step', fake_run_step)
+    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--full-inputs-json', '/tmp/in.json'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 1
+    rendered = stdout.getvalue()
+    assert 'readiness failed' in rendered
+    assert 'Provide required runtime input: mode' in rendered
 
 
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch) -> None:

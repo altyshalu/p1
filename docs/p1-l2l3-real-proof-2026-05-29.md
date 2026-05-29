@@ -48,7 +48,7 @@ uv run pytest -q
 Result:
 
 ```text
-135 passed in 7.98s
+138 passed in 8.87s
 ```
 
 ### 3. Real Proof Scripts Are Executable
@@ -116,6 +116,23 @@ Observed outcome:
 - Readiness step reported the real blocker `APIFY_API_TOKEN`
 - Downstream proof steps were skipped because operator inputs were not supplied
 - The pack makes the current proof matrix explicit instead of hiding missing prerequisites
+- If readiness fails, downstream proof steps are skipped by default instead of launching a knowingly bad run
+
+### Proof-Pack With Empty Inputs JSON
+
+Command used:
+
+```sh
+python3 scripts/real-p1-proof-pack.py   --base-url http://127.0.0.1:8000   --env-file .env   --mode full_pipeline   --full-inputs-json /tmp/p1_empty_inputs.json
+```
+
+Observed outcome:
+
+- Overall status: `fail_external_config`
+- Action items included the real missing env key `APIFY_API_TOKEN`
+- Action items also included the real missing runtime inputs `mode` and `sources`
+- `full_proof`, `cache_proof`, and `idempotency_proof` were skipped with reason `readiness failed`
+- This prevents wasting a real run on inputs that are already known to be invalid
 
 ### Source-Only Proof Without Apify Credential
 

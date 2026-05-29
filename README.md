@@ -188,7 +188,7 @@ Required real credentials depend on the scenario:
 - `GOOGLE_SA_PATH` and `P1_GOOGLE_SHEET_ID` when Google Sheets sync is enabled.
 - `P1_OUTREACH_MASTER_PATH` and `P1_DOSSIER_OUTPUT_PATH` when those external writes are enabled.
 
-Missing credentials, missing paths, or missing provider permissions fail explicitly. The runtime and proof scripts must not fall back to demo leads, legacy scripts, or best-effort writes.
+Missing credentials, missing runtime inputs, missing paths, or missing provider permissions fail explicitly. The runtime and proof scripts must not fall back to demo leads, legacy scripts, or best-effort writes.
 
 Latest real proof notes: [docs/p1-l2l3-real-proof-2026-05-29.md](docs/p1-l2l3-real-proof-2026-05-29.md).
 
