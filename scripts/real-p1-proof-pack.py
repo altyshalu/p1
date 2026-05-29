@@ -18,6 +18,8 @@ CONFIG_MARKERS = (
     'env file not found',
     'verify-sheet requires spreadsheet_id',
     'verify-sheet requested but preview did not include any lead_ids',
+    'verify-outreach-master requires outreach_master_path',
+    'verify-data-lake requires data_lake_dossier_path or dossier_output_path',
     'HTTP 401',
     'HTTP 403',
 )
@@ -178,6 +180,19 @@ def should_skip_proof(preflight_step: dict[str, Any], *, force: bool) -> str | N
     return None
 
 
+def append_full_verify_flags(command: list[str], args: argparse.Namespace) -> None:
+    if args.verify_sheet:
+        command.append('--verify-sheet')
+    if args.verify_outreach_master:
+        command.append('--verify-outreach-master')
+    if args.verify_data_lake:
+        command.append('--verify-data-lake')
+    if args.google_service_account_path:
+        command.extend(['--google-service-account-path', args.google_service_account_path])
+    if args.approve:
+        command.append('--approve')
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run the real P1 proof matrix as one operator proof-pack.')
     parser.add_argument('--base-url', default='http://127.0.0.1:8000')
@@ -191,6 +206,11 @@ def main() -> int:
     parser.add_argument('--skip-idempotency', action='store_true')
     parser.add_argument('--skip-full', action='store_true')
     parser.add_argument('--force-after-readiness-failure', action='store_true')
+    parser.add_argument('--approve', action='store_true')
+    parser.add_argument('--verify-sheet', action='store_true')
+    parser.add_argument('--verify-outreach-master', action='store_true')
+    parser.add_argument('--verify-data-lake', action='store_true')
+    parser.add_argument('--google-service-account-path')
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -264,6 +284,7 @@ def main() -> int:
                     '--timeout-seconds',
                     str(args.timeout_seconds),
                 ]
+                append_full_verify_flags(full_cmd, args)
                 steps.append(run_step('full_proof', full_cmd))
             else:
                 steps.append(build_skipped_step('full_proof', full_skip or 'full_inputs_json not provided'))

@@ -362,6 +362,49 @@ def test_p1_proof_pack_skips_downstream_steps_when_scenario_preflight_fails(monk
     assert 'Provide required runtime input: sources' in rendered
 
 
+
+
+def test_p1_proof_pack_passes_verify_flags_to_full_proof(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+    full_inputs = tmp_path / 'full.json'
+    full_inputs.write_text('{"mode": "full_pipeline", "sources": ["exa"]}')
+    captured = {}
+
+    def fake_run_step(name, command):
+        if name in {'readiness', 'full_preflight'}:
+            return {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''}
+        if name == 'full_proof':
+            captured['command'] = command
+            return {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''}
+        return {'name': name, 'status': 'skipped', 'reason': 'disabled'}
+
+    monkeypatch.setattr(module, 'run_step', fake_run_step)
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'real-p1-proof-pack.py',
+            '--full-inputs-json', str(full_inputs),
+            '--skip-cache',
+            '--skip-idempotency',
+            '--approve',
+            '--verify-sheet',
+            '--verify-outreach-master',
+            '--verify-data-lake',
+            '--google-service-account-path', '/tmp/service-account.json',
+        ],
+    )
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    command = captured['command']
+    assert '--approve' in command
+    assert '--verify-sheet' in command
+    assert '--verify-outreach-master' in command
+    assert '--verify-data-lake' in command
+    assert '/tmp/service-account.json' in command
+
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     full_inputs = tmp_path / 'full.json'

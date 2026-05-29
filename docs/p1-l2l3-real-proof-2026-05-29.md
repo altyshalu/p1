@@ -48,7 +48,7 @@ uv run pytest -q
 Result:
 
 ```text
-141 passed in 8.91s
+142 passed in 8.72s
 ```
 
 ### 3. Real Proof Scripts Are Executable
@@ -133,7 +133,7 @@ Observed outcome:
 - Action items also included the real missing runtime inputs `mode` and `sources`
 - `full_proof`, `cache_proof`, and `idempotency_proof` were skipped with reason `readiness failed`
 - This prevents wasting a real run on inputs that are already known to be invalid
-- The report now includes scenario-specific preflights such as `full_preflight`, `cache_preflight`, and `idempotency_preflight`
+- The report now includes scenario-specific preflights such as `full_preflight`, `cache_preflight`, and `idempotency_preflight`, and proof-pack can pass verify flags through to full proof
 
 ### Source-Only Proof Without Apify Credential
 
