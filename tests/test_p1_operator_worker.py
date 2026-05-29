@@ -124,6 +124,13 @@ def test_p1_funding_source_enriches_company_rows_into_founder_leads(monkeypatch)
         assert "Pixley AI founder LinkedIn" in query
         return [
             {
+                "name": "Pixley AI",
+                "headline": "Pixley AI | LinkedIn",
+                "source_url": "https://www.linkedin.com/company/pixley-ai",
+                "source": "exa",
+                "evidence": ["Pixley AI company page"],
+            },
+            {
                 "name": "Maya Chen",
                 "headline": "Founder at Pixley AI",
                 "source_url": "https://www.linkedin.com/in/mayachen",

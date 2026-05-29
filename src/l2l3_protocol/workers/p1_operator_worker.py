@@ -588,9 +588,14 @@ def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, 
                 return candidates[:limit]
         if company and len(candidates) < limit:
             for founder in _exa_people_search(f"{company} founder LinkedIn {row.get('industry', '')}", 2):
+                founder_url = _clean_url(str(founder.get("source_url") or founder.get("linkedin_url") or ""))
+                if "linkedin.com/in/" not in founder_url:
+                    continue
                 candidate = {
                     **founder,
                     "headline": founder.get("headline") or f"Founder at {company}",
+                    "source_url": founder_url,
+                    "linkedin_url": founder_url,
                     "source": "apify_funding",
                     "evidence": [json.dumps(row, ensure_ascii=False)[:1000], *founder.get("evidence", [])],
                 }
