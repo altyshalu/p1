@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
+from urllib.error import HTTPError
 
 from l2l3_protocol.workers.p1_operator_worker import (
     _apify_crunchbase_search,
     _apify_funding_search,
     _apify_linkedin_search,
+    _request_json,
     _redact_secrets,
     build_metrics_report,
     judge_outreach_quality,
@@ -75,6 +77,32 @@ def test_p1_http_error_redaction_removes_provider_tokens() -> None:
     assert "MsDummySecretWithS123" not in redacted
     assert "token=[REDACTED]" in redacted
     assert "apify_api_[REDACTED]" in redacted
+
+
+def test_p1_request_json_retries_transient_get_http_errors(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(request.full_url, 502, "Bad Gateway", hdrs=None, fp=None)
+        return Response()
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker.urlopen", fake_urlopen)
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker.time.sleep", lambda _seconds: None)
+
+    assert _request_json("https://api.apify.com/v2/actor-runs/run-id?token=secret") == {"ok": True}
+    assert calls["count"] == 2
 
 
 def test_p1_crunchbase_source_normalizes_parseforge_person_rows(monkeypatch) -> None:

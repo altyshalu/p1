@@ -15,6 +15,7 @@ from google import genai
 
 
 HTTP_TIMEOUT_SECONDS = 30
+HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
 
 
@@ -751,16 +752,25 @@ def _request_json(
     if token:
         request_headers["authorization"] = f"Bearer {token}"
     request = Request(url, data=data, headers=request_headers, method=method)
-    try:
-        with urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        error_body = _redact_secrets(exc.read().decode("utf-8", errors="replace")[:1000])
-        safe_url = _redact_secrets(url)
-        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.code}: {error_body}") from exc
-    except URLError as exc:
-        safe_url = _redact_secrets(url)
-        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.reason}") from exc
+    attempts = len(HTTP_GET_RETRY_DELAYS_SECONDS) + 1 if method == "GET" else 1
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            if method == "GET" and exc.code in {429, 502, 503, 504} and attempt < attempts - 1:
+                time.sleep(HTTP_GET_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            error_body = _redact_secrets(exc.read().decode("utf-8", errors="replace")[:1000])
+            safe_url = _redact_secrets(url)
+            raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.code}: {error_body}") from exc
+        except URLError as exc:
+            if method == "GET" and attempt < attempts - 1:
+                time.sleep(HTTP_GET_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            safe_url = _redact_secrets(url)
+            raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.reason}") from exc
+    raise P1WorkerInputError(f"real HTTP request failed {method} {_redact_secrets(url)} after retries")
 
 
 def _redact_secrets(value: str) -> str:
