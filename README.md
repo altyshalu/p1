@@ -170,6 +170,8 @@ uv run python scripts/real-playbook-acceptance.py \
 
 Full sourcing proof requires real `EXA_API_KEY`, `APIFY_API_TOKEN`, `GEMINI_API_KEY`, and Google Sheets credentials when sheet sync is enabled. Crunchbase sourcing uses the Apify Store actor `parseforge/crunchbase-scraper` by default; pass `crunchbase_actor_id` only when deliberately switching to another real actor. Missing credentials or actor permissions fail explicitly; the runtime must not substitute demo leads or old scripts.
 
+Latest real proof notes: [docs/p1-l2l3-real-proof-2026-05-29.md](docs/p1-l2l3-real-proof-2026-05-29.md).
+
 ## Current Self-Improvement Loop
 
 The current hardened dogfood path is `build-in-public-trend-radar`.
