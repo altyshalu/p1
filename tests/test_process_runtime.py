@@ -375,3 +375,19 @@ def test_worker_error_classification_detects_real_provider_no_results() -> None:
     )
 
     assert ProcessRuntime._classify_worker_error(error) == "provider_no_results"
+
+
+def test_worker_error_classification_detects_missing_provider_credential() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"P1WorkerInputError","message":"missing environment variable: EXA_API_KEY"}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "missing_provider_credential"
+
+
+def test_worker_error_classification_detects_no_eligible_candidates() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"P1WorkerInputError","message":"no gateway-approved operators for outreach; bypassed=1"}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "no_eligible_candidates"

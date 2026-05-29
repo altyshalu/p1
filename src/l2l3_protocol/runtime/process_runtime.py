@@ -674,6 +674,10 @@ class ProcessRuntime:
             return "timeout"
         if "invalid json" in message:
             return "invalid_json"
+        if "missing environment variable" in message or "missing provider credential" in message:
+            return "missing_provider_credential"
+        if "no gateway-approved" in message or "no eligible" in message or "empty forge queue" in message:
+            return "no_eligible_candidates"
         if "no results" in message or "no lead candidates" in message or "returned no" in message:
             return "provider_no_results"
         if "missing required" in message:

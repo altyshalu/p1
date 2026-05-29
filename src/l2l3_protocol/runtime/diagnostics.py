@@ -19,6 +19,8 @@ INTERNAL_FAILURE_TO_ROOT_CAUSE = {
     "work_order_validation": "bad_or_missing_input",
     "provider_no_results": "tool_or_provider_failure",
     "provider_request_failed": "tool_or_provider_failure",
+    "missing_provider_credential": "missing_runtime_dependency",
+    "no_eligible_candidates": "no_actionable_candidates",
 }
 
 
@@ -278,6 +280,8 @@ def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quali
         return "trend-radar/input.providers"
     if root_cause in {"missing_capability_or_registry_item", "missing_runtime_dependency"}:
         return f"runtime:{root_cause}"
+    if root_cause == "no_actionable_candidates":
+        return worker if worker != "unknown-worker" else "p1-gateway-to-forge"
     return worker
 
 
@@ -341,6 +345,8 @@ def _proposal_type(root_cause: str) -> str:
         return "improve_observability"
     if root_cause == "repeated_repair":
         return "improve_playbook"
+    if root_cause == "no_actionable_candidates":
+        return "improve_playbook"
     return "fix_code"
 
 
@@ -376,4 +382,6 @@ def _proposed_change(root_cause: str, target_component: str, evidence: list[dict
         return "Fix the missing runtime dependency or deployment configuration required by the real path."
     if root_cause == "repeated_repair":
         return "Tighten repair limits and L2 escalation rules so repeated failed repairs become an explicit approval, policy, or worker fix decision."
+    if root_cause == "no_actionable_candidates":
+        return "Improve the P1 source query, gateway criteria, or forge queue policy so a repeated real run either produces approved operators or exits as an explicit no-op with evidence."
     return "Investigate and implement a code fix tied to the recorded evidence."
