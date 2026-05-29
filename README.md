@@ -168,7 +168,7 @@ uv run python scripts/real-playbook-acceptance.py \
   --inputs-json '{"mode":"existing_dossiers","limit":1,"dossier_source_path":"/root/sovereign-os/OS_Core/Data_Lake/Dossiers","only_awaiting_outreach":true,"allow_google_sheet_write":false,"require_human_approval":true}'
 ```
 
-Full sourcing proof requires real `EXA_API_KEY`, `APIFY_API_TOKEN`, `GEMINI_API_KEY`, and Google Sheets credentials when sheet sync is enabled. Missing credentials fail explicitly; the runtime must not substitute demo leads or old scripts.
+Full sourcing proof requires real `EXA_API_KEY`, `APIFY_API_TOKEN`, `GEMINI_API_KEY`, and Google Sheets credentials when sheet sync is enabled. Crunchbase sourcing uses the Apify Store actor `parseforge/crunchbase-scraper` by default; pass `crunchbase_actor_id` only when deliberately switching to another real actor. Missing credentials or actor permissions fail explicitly; the runtime must not substitute demo leads or old scripts.
 
 ## Current Self-Improvement Loop
 

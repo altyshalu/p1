@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from l2l3_protocol.workers.p1_operator_worker import _redact_secrets, judge_outreach_quality, read_existing_dossiers
+from l2l3_protocol.workers.p1_operator_worker import _apify_crunchbase_search, _redact_secrets, judge_outreach_quality, read_existing_dossiers
 
 
 def test_p1_dossier_reader_surfaces_real_state_drift(tmp_path: Path) -> None:
@@ -65,3 +65,32 @@ def test_p1_http_error_redaction_removes_provider_tokens() -> None:
     assert "MsDummySecretWithS123" not in redacted
     assert "token=[REDACTED]" in redacted
     assert "apify_api_[REDACTED]" in redacted
+
+
+def test_p1_crunchbase_source_normalizes_parseforge_person_rows(monkeypatch) -> None:
+    def fake_run(actor_id, actor_input):
+        assert actor_id == "parseforge/crunchbase-scraper"
+        assert actor_input["startUrls"][0]["url"] == "https://www.crunchbase.com/person/naval-ravikant"
+        return [
+            {
+                "name": "Naval Ravikant",
+                "primaryJobTitle": "Founder",
+                "primaryOrganization": "AngelList",
+                "crunchbaseUrl": "https://www.crunchbase.com/person/naval-ravikant",
+                "twitterUrl": "https://x.com/naval",
+            }
+        ]
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._run_apify_actor", fake_run)
+
+    result = _apify_crunchbase_search(
+        {"crunchbase_start_urls": ["https://www.crunchbase.com/person/naval-ravikant"]},
+        1,
+    )
+
+    assert result[0]["name"] == "Naval Ravikant"
+    assert result[0]["headline"] == "Founder at AngelList"
+    assert result[0]["linkedin_url"] == ""
+    assert result[0]["source_url"] == "https://www.crunchbase.com/person/naval-ravikant"
+    assert result[0]["source"] == "apify_crunchbase"
+    assert "Naval Ravikant" in result[0]["evidence"][0]

@@ -5,7 +5,7 @@ entrypoint: l2l3_protocol.workers.p1_operator_worker
 allowed_tools: [exa-search-tool, apify-actor-tool]
 compatible_tools: [exa-search-tool, apify-actor-tool]
 budget:
-  max_seconds: 360
+  max_seconds: 600
 input_schema:
   type: object
   required: [mode, sources, limit]

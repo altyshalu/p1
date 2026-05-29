@@ -467,18 +467,28 @@ def _apify_crunchbase_search(inputs: dict[str, Any], limit: int) -> list[dict[st
         "https://www.crunchbase.com/person/elad-gil",
         "https://www.crunchbase.com/person/lachy-groom",
     ]
-    actor_input = {"startUrls": [{"url": str(url)} for url in urls[:limit]], "maxDepth": 1, "useResidentialProxy": True}
-    rows = _run_apify_actor("curious_coder/crunchbase-scraper", actor_input)
+    actor_input = {"startUrls": [{"url": str(url)} for url in urls[:limit]], "maxItems": limit}
+    actor_id = str(inputs.get("crunchbase_actor_id") or "parseforge/crunchbase-scraper")
+    rows = _run_apify_actor(actor_id, actor_input)
     candidates = []
     for row in rows[:limit]:
         name = str(row.get("name") or f"{row.get('first_name', '')} {row.get('last_name', '')}").strip()
         if not name:
             continue
-        headline = str(row.get("primary_job_title") or "Angel Investor")
-        org = str(row.get("primary_organization") or "").strip()
+        headline = str(row.get("primaryJobTitle") or row.get("primary_job_title") or "Angel Investor")
+        org = str(row.get("primaryOrganization") or row.get("primary_organization") or "").strip()
         if org:
             headline = f"{headline} at {org}"
-        candidates.append({"name": name, "headline": headline, "linkedin_url": row.get("linkedin_url", ""), "source_url": row.get("url", ""), "source": "apify_crunchbase", "evidence": [json.dumps(row, ensure_ascii=False)[:1000]]})
+        candidates.append(
+            {
+                "name": name,
+                "headline": headline,
+                "linkedin_url": row.get("linkedinUrl") or row.get("linkedin_url") or "",
+                "source_url": row.get("crunchbaseUrl") or row.get("url") or row.get("cbUrl") or "",
+                "source": "apify_crunchbase",
+                "evidence": [json.dumps(row, ensure_ascii=False)[:1000]],
+            }
+        )
     return candidates
 
 
@@ -489,7 +499,7 @@ def _run_apify_actor(actor_id: str, actor_input: dict[str, Any]) -> list[dict[st
     run_id = run.get("data", {}).get("id")
     if not run_id:
         raise P1WorkerInputError(f"Apify actor did not return run id: {actor_id}")
-    deadline = time.monotonic() + 240
+    deadline = time.monotonic() + int(actor_input.get("timeoutSeconds") or 420)
     latest = {}
     while time.monotonic() < deadline:
         latest = _request_json(f"https://api.apify.com/v2/actor-runs/{run_id}?token={quote(token)}", timeout=30).get("data", {})
