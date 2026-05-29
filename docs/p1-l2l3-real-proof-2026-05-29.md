@@ -12,7 +12,7 @@ The P1 backend now includes these production-facing hardening changes:
 - duplicate-skipped events for external syncs
 - compact backend summary endpoint `GET /runs/{id}/summary`
 - task timing fields `started_at`, `completed_at`, and `duration_ms`
-- operator proof scripts for full flow, cache proof, and idempotency proof
+- operator readiness and proof scripts for preflight, full flow, cache proof, and idempotency proof
 
 ## Verified On The Server
 
@@ -56,12 +56,13 @@ Result:
 Validated on the server:
 
 ```sh
+python3 scripts/real-p1-readiness.py --help
 python3 scripts/real-p1-full-proof.py --help
 python3 scripts/real-p1-cache-proof.py --help
 python3 scripts/real-p1-idempotency-proof.py --help
 ```
 
-All three scripts compiled and exposed the expected operator flags.
+All four scripts compiled and exposed the expected operator flags.
 
 ## Current Real-World Blocker
 
@@ -83,6 +84,22 @@ Because of that, full external real proof cannot be claimed yet.
 ## Explicit Failure Proof
 
 The new proof scripts and hardened runtime were exercised against the live API to confirm explicit failure behavior instead of silent fallback.
+
+### Readiness Preflight Against Live API
+
+Command used:
+
+```sh
+python3 scripts/real-p1-readiness.py   --base-url http://127.0.0.1:8000   --env-file .env   --mode full_pipeline
+```
+
+Observed outcome:
+
+- Health check passed
+- Runtime capabilities request passed
+- Hub sync and required registry keys were present
+- Readiness failed explicitly with `missing_required_keys=["APIFY_API_TOKEN"]`
+- No fallback sourcing or silent downgrade path was used
 
 ### Source-Only Proof Without Apify Credential
 

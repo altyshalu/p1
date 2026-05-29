@@ -161,6 +161,8 @@ The TUI shows run status, Work Orders, evals, Incident Briefs, approval prompts,
 Useful real proof commands:
 
 ```sh
+uv run python scripts/real-p1-readiness.py   --base-url http://127.0.0.1:8000   --env-file .env   --mode full_pipeline
+
 uv run python scripts/real-p1-full-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-inputs.json
 
 uv run python scripts/real-p1-cache-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-source-only-inputs.json

@@ -173,3 +173,46 @@ def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatc
         assert 'no duplicate-skip evidence found' in str(exc)
     else:
         raise AssertionError('expected SystemExit')
+
+
+def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    env_path.write_text('GEMINI_API_KEY=test\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report('http://api', str(env_path), 'source_only', {}, True)
+
+    assert report['ready'] is False
+    assert 'APIFY_API_TOKEN' in report['missing_required_keys']
+
+
+def test_p1_readiness_reports_ready_when_required_keys_exist(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    dossier_dir = tmp_path / 'dossiers'
+    dossier_dir.mkdir()
+    env_path.write_text(f'GEMINI_API_KEY=test\nEXA_API_KEY=test\nP1_DOSSIER_SOURCE_PATH={dossier_dir}\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report('http://api', str(env_path), 'existing_dossiers', {}, True)
+
+    assert report['ready'] is True
+    assert report['missing_required_keys'] == []
+    assert report['path_checks']['P1_DOSSIER_SOURCE_PATH'] is True
+
+
+def test_p1_readiness_main_returns_nonzero_when_not_ready(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    env_path.write_text('GEMINI_API_KEY=test\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-readiness.py', '--base-url', 'http://api', '--env-file', str(env_path), '--mode', 'source_only'])
+
+    assert module.main() == 1
