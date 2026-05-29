@@ -1,0 +1,8 @@
+key: p1-dossier-store-tool
+version: 0.1.0
+description: Runtime-owned P1 dossier read/write capability for real dossier migration and canonical artifact creation.
+runtime_type: filesystem
+toolset: p1_dossier_store
+external_action_class: read
+auth_required: false
+tags: [p1, dossier, datalake]

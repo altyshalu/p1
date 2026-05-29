@@ -1,0 +1,9 @@
+key: exa-search-tool
+version: 0.1.0
+description: Real read-only Exa search for P1 operator intelligence and sourcing.
+runtime_type: http_api
+toolset: exa_search
+external_action_class: read
+auth_required: true
+required_env: [EXA_API_KEY]
+tags: [p1, exa, sourcing, intelligence]

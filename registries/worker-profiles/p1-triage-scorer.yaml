@@ -1,0 +1,25 @@
+key: p1-triage-scorer
+description: Score normalized P1 leads with the real B2C/PLG, investor, and systematic triage rubric.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 180
+input_schema:
+  type: object
+  required: [normalized_leads]
+  properties:
+    normalized_leads: {type: array}
+output_schema:
+  type: object
+  required: [triage_scores]
+  properties:
+    triage_scores: {type: array}
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [worker_exception, timeout, invalid_json]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

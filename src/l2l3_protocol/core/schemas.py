@@ -45,6 +45,16 @@ class ArtifactType(StrEnum):
     RUN_DIAGNOSIS = "run_diagnosis"
     SYSTEM_REVIEW = "system_review"
     DESIGN_REPORT = "design_report"
+    P1_LEAD_CANDIDATES = "p1_lead_candidates"
+    P1_NORMALIZED_LEADS = "p1_normalized_leads"
+    P1_TRIAGE_SCORES = "p1_triage_scores"
+    P1_DOSSIERS = "p1_dossiers"
+    P1_LIVE_INTELLIGENCE = "p1_live_intelligence"
+    P1_GATEWAY_EVALUATIONS = "p1_gateway_evaluations"
+    P1_FORGE_QUEUE = "p1_forge_queue"
+    P1_OUTREACH_DRAFTS = "p1_outreach_drafts"
+    P1_OUTREACH_APPROVAL_PACKAGE = "p1_outreach_approval_package"
+    P1_EXTERNAL_SYNC_RESULT = "p1_external_sync_result"
     GENERIC = "generic"
 
 

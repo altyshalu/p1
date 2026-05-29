@@ -1,0 +1,8 @@
+key: url-verification-tool
+version: 0.1.0
+description: Read-only URL verification and evidence URL normalization for P1 identity checks.
+runtime_type: http_api
+toolset: url_verification
+external_action_class: read
+auth_required: false
+tags: [p1, identity, urls]

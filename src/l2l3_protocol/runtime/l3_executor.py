@@ -35,6 +35,18 @@ class L3SandboxExecutor:
             "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
             "L2L3_SANDBOX": "1",
         }
+        for key in (
+            "GEMINI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "DEEPSEEK_BASE_URL",
+            "EXA_API_KEY",
+            "APIFY_API_TOKEN",
+            "GOOGLE_SA_PATH",
+            "P1_GOOGLE_SHEET_ID",
+            "P1_DOSSIER_SOURCE_PATH",
+        ):
+            if os.environ.get(key):
+                env[key] = os.environ[key]
         process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",

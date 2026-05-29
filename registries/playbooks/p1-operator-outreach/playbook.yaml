@@ -1,0 +1,52 @@
+key: p1-operator-outreach
+name: P1 Operator Outreach
+version: 0.1.0
+purpose: Run the ABRT/Limpid operator and angel sourcing pipeline through L2/L3 Work Orders, real providers, eval gates, diagnosis, proposals, and approval-gated external sync.
+execution_strategy: deterministic_p1_operator_outreach
+max_supervisor_turns: 16
+max_tasks_per_turn: 2
+allowed_workers:
+  - p1-dossier-reader
+  - p1-source-collector
+  - p1-lead-normalizer
+  - p1-triage-scorer
+  - p1-dossier-writer
+  - p1-live-intel-gatherer
+  - p1-gateway-evaluator
+  - p1-forge-queue-builder
+  - p1-outreach-draft-writer
+  - p1-outreach-quality-judge
+  - p1-google-sheets-syncer
+  - approval-adapter
+  - learning-worker
+allowed_tools:
+  - exa-search-tool
+  - apify-actor-tool
+  - google-sheets-read-tool
+  - google-sheets-write-tool
+  - p1-dossier-store-tool
+  - url-verification-tool
+completion_criteria:
+  - real leads or real existing dossiers are loaded
+  - dossier state drift is surfaced instead of hidden
+  - gateway-approved operators are queued
+  - outreach drafts are grounded in real evidence
+  - draft quality evaluation passes
+  - Google Sheets writes and outreach sending remain approval-gated
+required_eval_keys:
+  - p1-outreach-draft-quality
+required_inputs:
+  - mode
+  - limit
+external_actions:
+  google_sheets_write:
+    default: disabled
+    approval_required: true
+  outreach_send:
+    default: disabled
+    approval_required: true
+memory_policy:
+  l3_direct_writes: false
+  l2_curates_episodic: true
+  l2_curates_semantic: true
+  procedural_changes: candidate_only

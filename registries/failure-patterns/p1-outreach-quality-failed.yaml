@@ -1,0 +1,5 @@
+key: p1-outreach-quality-failed
+worker_id: p1-outreach-quality-judge
+failure_type: eval_failed
+description: P1 outreach draft failed grounding, evidence, external-action, or content quality checks.
+mitigation: Create an improvement proposal and rerun a comparable real P1 case after approval.

@@ -1,0 +1,31 @@
+key: p1-outreach-quality-judge
+description: Evaluate P1 outreach drafts for evidence grounding, CTA, word count, and no external action.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [outreach_drafts]
+  properties:
+    outreach_drafts: {type: array}
+output_schema:
+  type: object
+  required: [passed, score, checks, approval_package]
+  properties:
+    passed: {type: boolean}
+    score: {type: number}
+    checks: {type: object}
+    reasons: {type: array}
+    approval_package: {type: object}
+grader_spec:
+  eval_key: p1-outreach-draft-quality
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [eval_failed]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

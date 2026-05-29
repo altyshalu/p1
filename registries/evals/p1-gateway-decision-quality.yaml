@@ -1,0 +1,10 @@
+key: p1-gateway-decision-quality
+version: 0.1.0
+eval_type: unit
+checks:
+  - identity_confidence_present
+  - bandwidth_signal_present
+  - liquidity_signal_present
+  - outreach_requires_high_bandwidth
+  - identity_mismatch_blocks_outreach
+minimum_score: 0.8

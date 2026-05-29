@@ -1,0 +1,29 @@
+key: p1-source-collector
+description: Collect real P1 operator/angel leads from Exa and Apify-backed sources.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [exa-search-tool, apify-actor-tool]
+compatible_tools: [exa-search-tool, apify-actor-tool]
+budget:
+  max_seconds: 360
+input_schema:
+  type: object
+  required: [mode, sources, limit]
+  properties:
+    mode: {type: string}
+    sources: {type: array}
+    limit: {type: integer}
+    query: {type: string}
+output_schema:
+  type: object
+  required: [lead_candidates]
+  properties:
+    lead_candidates: {type: array}
+    source_attempts: {type: array}
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [worker_exception, timeout, provider_no_results, provider_request_failed]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

@@ -1,0 +1,8 @@
+key: p1-state-consistency
+version: 0.1.0
+eval_type: unit
+checks:
+  - legacy_state_drift_reported
+  - runtime_artifact_is_canonical
+  - external_sync_explicit
+minimum_score: 1.0
