@@ -48,7 +48,7 @@ uv run pytest -q
 Result:
 
 ```text
-138 passed in 8.87s
+139 passed in 8.76s
 ```
 
 ### 3. Real Proof Scripts Are Executable
@@ -116,7 +116,7 @@ Observed outcome:
 - Readiness step reported the real blocker `APIFY_API_TOKEN`
 - Downstream proof steps were skipped because operator inputs were not supplied
 - The pack makes the current proof matrix explicit instead of hiding missing prerequisites
-- If readiness fails, downstream proof steps are skipped by default instead of launching a knowingly bad run
+- If readiness or a scenario preflight fails, downstream proof steps are skipped by default instead of launching a knowingly bad run
 
 ### Proof-Pack With Empty Inputs JSON
 
@@ -133,6 +133,7 @@ Observed outcome:
 - Action items also included the real missing runtime inputs `mode` and `sources`
 - `full_proof`, `cache_proof`, and `idempotency_proof` were skipped with reason `readiness failed`
 - This prevents wasting a real run on inputs that are already known to be invalid
+- The report now includes scenario-specific preflights such as `full_preflight`, `cache_preflight`, and `idempotency_preflight`
 
 ### Source-Only Proof Without Apify Credential
 

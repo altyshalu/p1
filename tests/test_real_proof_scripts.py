@@ -245,11 +245,19 @@ def test_p1_proof_pack_classifies_timeout_as_external_dependency() -> None:
     assert module.classify_failure('HTTP 429 provider timeout') == 'fail_external_dependency'
 
 
-def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
+def test_p1_proof_pack_uses_scenario_mode_from_inputs(tmp_path: Path) -> None:
+    module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+    path = tmp_path / 'inputs.json'
+    path.write_text('{"mode": "source_only"}')
+
+    assert module.scenario_mode(str(path), 'full_pipeline') == 'source_only'
+
+
+def test_p1_proof_pack_collects_action_items_from_preflights() -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     steps = [
         {
-            'name': 'readiness',
+            'name': 'full_preflight',
             'status': 'fail_external_config',
             'json': {
                 'missing_required_keys': ['APIFY_API_TOKEN'],
@@ -257,7 +265,7 @@ def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
                 'path_checks': {'dossier_source_path': False},
             },
         },
-        {'name': 'full_proof', 'status': 'skipped', 'reason': 'full_inputs_json not provided'},
+        {'name': 'cache_preflight', 'status': 'skipped', 'reason': 'cache_inputs_json not provided'},
     ]
 
     items = module.collect_action_items(steps)
@@ -266,19 +274,23 @@ def test_p1_proof_pack_collects_action_items_from_readiness_json() -> None:
     assert 'Provide required runtime input: mode' in items
     assert 'Provide required runtime input: sources' in items
     assert 'Create, mount, or fix required path: dossier_source_path' in items
-    assert 'Provide --full-inputs-json for full proof execution' in items
+    assert 'Provide --cache-inputs-json for cache proof execution' in items
 
 
-def test_p1_proof_pack_skips_downstream_steps_when_readiness_fails(monkeypatch) -> None:
+def test_p1_proof_pack_skips_downstream_steps_when_scenario_preflight_fails(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
+    full_inputs = tmp_path / 'full.json'
+    full_inputs.write_text('{"mode": "full_pipeline"}')
 
     def fake_run_step(name, command):
         if name == 'readiness':
-            return {'name': 'readiness', 'status': 'fail_external_config', 'returncode': 1, 'command': command, 'stdout': '{}', 'stderr': '', 'json': {'missing_required_keys': ['APIFY_API_TOKEN'], 'missing_runtime_inputs': ['mode']}}
-        raise AssertionError('downstream run_step should not be called after readiness failure')
+            return {'name': 'readiness', 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''}
+        if name == 'full_preflight':
+            return {'name': 'full_preflight', 'status': 'fail_external_config', 'returncode': 1, 'command': command, 'stdout': '{}', 'stderr': '', 'json': {'missing_required_keys': ['APIFY_API_TOKEN'], 'missing_runtime_inputs': ['sources']}}
+        raise AssertionError(f'unexpected run_step call: {name}')
 
     monkeypatch.setattr(module, 'run_step', fake_run_step)
-    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--full-inputs-json', '/tmp/in.json'])
+    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--full-inputs-json', str(full_inputs), '--skip-cache', '--skip-idempotency'])
     stdout = io.StringIO()
     monkeypatch.setattr(sys, 'stdout', stdout)
 
@@ -286,14 +298,22 @@ def test_p1_proof_pack_skips_downstream_steps_when_readiness_fails(monkeypatch) 
 
     assert exit_code == 1
     rendered = stdout.getvalue()
-    assert 'readiness failed' in rendered
-    assert 'Provide required runtime input: mode' in rendered
+    assert 'scenario preflight failed' in rendered
+    assert 'Provide required runtime input: sources' in rendered
 
 
-def test_p1_proof_pack_summarizes_internal_failure(monkeypatch) -> None:
+def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
-    monkeypatch.setattr(module, 'run_step', lambda name, command: {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''} if name == 'readiness' else {'name': name, 'status': 'fail_internal', 'returncode': 1, 'command': command, 'stdout': '', 'stderr': 'boom'})
-    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--skip-cache', '--skip-idempotency', '--full-inputs-json', '/tmp/in.json'])
+    full_inputs = tmp_path / 'full.json'
+    full_inputs.write_text('{"mode": "full_pipeline", "sources": ["exa"]}')
+
+    def fake_run_step(name, command):
+        if name in {'readiness', 'full_preflight'}:
+            return {'name': name, 'status': 'pass', 'returncode': 0, 'command': command, 'stdout': '{}', 'stderr': ''}
+        return {'name': name, 'status': 'fail_internal', 'returncode': 1, 'command': command, 'stdout': '', 'stderr': 'boom'}
+
+    monkeypatch.setattr(module, 'run_step', fake_run_step)
+    monkeypatch.setattr(sys, 'argv', ['real-p1-proof-pack.py', '--skip-cache', '--skip-idempotency', '--full-inputs-json', str(full_inputs)])
     stdout = io.StringIO()
     monkeypatch.setattr(sys, 'stdout', stdout)
 
