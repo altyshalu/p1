@@ -674,7 +674,7 @@ class ProcessRuntime:
             return "timeout"
         if "invalid json" in message:
             return "invalid_json"
-        if "no results" in message:
+        if "no results" in message or "no lead candidates" in message or "returned no" in message:
             return "provider_no_results"
         if "missing required" in message:
             return "output_schema"

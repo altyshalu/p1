@@ -367,3 +367,11 @@ def test_worker_error_classification_does_not_treat_empty_provider_metadata_as_p
     )
 
     assert ProcessRuntime._classify_worker_error(error) == "output_schema"
+
+
+def test_worker_error_classification_detects_real_provider_no_results() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"P1WorkerInputError","message":"real P1 sourcing returned no lead candidates for sources=[\'apify_funding\']"}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "provider_no_results"
