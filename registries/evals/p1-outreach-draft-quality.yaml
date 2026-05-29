@@ -1,0 +1,12 @@
+key: p1-outreach-draft-quality
+version: 0.1.0
+eval_type: unit
+checks:
+  - has_drafts
+  - all_have_text
+  - all_have_evidence_urls
+  - all_claims_have_sources
+  - no_publish_external_action
+  - word_count_under_110
+  - mentions_abrt_or_limpid
+minimum_score: 0.86

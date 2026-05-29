@@ -1,0 +1,26 @@
+key: p1-forge-queue-builder
+description: Build an internal P1 forge queue from gateway-approved operators without external writes.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [gateway_evaluations]
+  properties:
+    gateway_evaluations: {type: array}
+output_schema:
+  type: object
+  required: [forge_queue]
+  properties:
+    forge_queue: {type: array}
+    bypassed: {type: array}
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

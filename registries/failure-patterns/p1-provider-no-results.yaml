@@ -1,0 +1,5 @@
+key: p1-provider-no-results
+worker_id: p1-source-collector
+failure_type: provider_no_results
+description: Real P1 source providers were reachable but returned no usable lead candidates for the requested query or filters.
+mitigation: Fail explicitly, preserve provider evidence, and propose a source-query or source-selection improvement; do not synthesize leads.

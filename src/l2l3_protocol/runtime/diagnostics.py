@@ -19,6 +19,9 @@ INTERNAL_FAILURE_TO_ROOT_CAUSE = {
     "work_order_validation": "bad_or_missing_input",
     "provider_no_results": "tool_or_provider_failure",
     "provider_request_failed": "tool_or_provider_failure",
+    "provider_permission_required": "tool_or_provider_failure",
+    "missing_provider_credential": "missing_runtime_dependency",
+    "no_eligible_candidates": "no_actionable_candidates",
 }
 
 
@@ -263,6 +266,8 @@ def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quali
     failure_type = str(primary.get("failure_type") or "")
     if root_cause == "tool_or_provider_failure":
         provider = _provider_from_evidence(primary)
+        if worker.startswith("p1-"):
+            return f"{worker}/provider:{provider or 'unknown'}"
         return f"trend-source-collector/provider:{provider}" if provider else "trend-source-collector/provider:unknown"
     if root_cause == "quality_gate_failed":
         eval_key = str((low_quality[0] if low_quality else {}).get("eval_key") or "unknown-eval")
@@ -276,6 +281,8 @@ def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quali
         return "trend-radar/input.providers"
     if root_cause in {"missing_capability_or_registry_item", "missing_runtime_dependency"}:
         return f"runtime:{root_cause}"
+    if root_cause == "no_actionable_candidates":
+        return worker if worker != "unknown-worker" else "p1-gateway-to-forge"
     return worker
 
 
@@ -308,13 +315,19 @@ def _provider_from_evidence(item: dict[str, Any]) -> str | None:
         if isinstance(failures, dict) and failures:
             return str(next(iter(failures))).lower()
     haystack = " ".join(str(value).lower() for value in [item.get("error"), item.get("failure_type"), payload])
-    for provider in ("huggingface", "github", "arxiv"):
+    for provider in ("huggingface", "github", "arxiv", "exa", "apify", "google sheets", "gemini"):
         if provider in haystack:
-            return provider
+            return provider.replace(" ", "_")
     return None
 
 
 def _worker_for_eval(eval_key: str) -> str:
+    if eval_key == "p1-outreach-draft-quality":
+        return "p1-outreach-quality-judge"
+    if eval_key == "p1-gateway-decision-quality":
+        return "p1-gateway-evaluator"
+    if eval_key == "p1-state-consistency":
+        return "p1-dossier-reader"
     if eval_key == "trend-claim-grounding":
         return "claim-grounding-judge"
     if eval_key == "trend-draft-quality":
@@ -333,11 +346,15 @@ def _proposal_type(root_cause: str) -> str:
         return "improve_observability"
     if root_cause == "repeated_repair":
         return "improve_playbook"
+    if root_cause == "no_actionable_candidates":
+        return "improve_playbook"
     return "fix_code"
 
 
 def _proposed_change(root_cause: str, target_component: str, evidence: list[dict[str, Any]], low_quality: list[dict[str, Any]]) -> str:
     if root_cause == "tool_or_provider_failure":
+        if "p1-" in target_component:
+            return "Improve the P1 provider/tool path for this real failure without adding synthetic data or hidden fallback behavior."
         if "provider:huggingface" in target_component:
             return "Extend Hugging Face provider repair so the source collector tries approved dataset/space resource types and shorter real queries before exhausting the provider."
         if "provider:github" in target_component:
@@ -345,6 +362,8 @@ def _proposed_change(root_cause: str, target_component: str, evidence: list[dict
         return "Improve provider repair guidance or the registered tool behavior for this real failure mode."
     if root_cause == "quality_gate_failed":
         eval_key = str((low_quality[0] if low_quality else {}).get("eval_key") or "")
+        if eval_key.startswith("p1-"):
+            return "Improve the P1 worker output or P1 eval criteria, then prove the same real operator/outreach case passes without weakening approval or grounding policy."
         if eval_key == "trend-claim-grounding":
             return "Fix the claim-grounding contract between draft writer, schema normalizer, and claim-grounding judge so drafts preserve non-empty claims with source_url evidence."
         return "Improve the worker output or eval criteria so the required quality gate can pass on a repeated real run."
@@ -364,4 +383,6 @@ def _proposed_change(root_cause: str, target_component: str, evidence: list[dict
         return "Fix the missing runtime dependency or deployment configuration required by the real path."
     if root_cause == "repeated_repair":
         return "Tighten repair limits and L2 escalation rules so repeated failed repairs become an explicit approval, policy, or worker fix decision."
+    if root_cause == "no_actionable_candidates":
+        return "Improve the P1 source query, gateway criteria, or forge queue policy so a repeated real run either produces approved operators or exits as an explicit no-op with evidence."
     return "Investigate and implement a code fix tied to the recorded evidence."

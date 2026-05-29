@@ -1,0 +1,5 @@
+key: p1-provider-permission-required
+worker_id: p1-source-collector
+failure_type: provider_permission_required
+description: A real P1 provider integration is reachable, but the provider account or actor requires an explicit permission approval before execution.
+mitigation: Fail explicitly with the provider approval requirement and do not switch to a substitute provider or synthetic data.

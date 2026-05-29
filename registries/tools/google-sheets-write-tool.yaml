@@ -1,0 +1,9 @@
+key: google-sheets-write-tool
+version: 0.1.0
+description: Approval-gated Google Sheets append/update capability for P1 forge and outreach status sync.
+runtime_type: http_api
+toolset: google_sheets_write
+external_action_class: write
+auth_required: true
+required_env: [GOOGLE_SA_PATH, P1_GOOGLE_SHEET_ID]
+tags: [p1, google-sheets, external-action]

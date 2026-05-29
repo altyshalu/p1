@@ -1,0 +1,29 @@
+key: p1-dossier-reader
+description: Read real legacy P1 dossier JSON files, normalize them into runtime artifacts, and surface state drift.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [p1-dossier-store-tool]
+compatible_tools: [p1-dossier-store-tool]
+budget:
+  max_seconds: 120
+input_schema:
+  type: object
+  required: [mode, limit, dossier_source_path]
+  properties:
+    mode: {type: string}
+    limit: {type: integer}
+    dossier_source_path: {type: string}
+    only_awaiting_outreach: {type: boolean}
+output_schema:
+  type: object
+  required: [p1_dossiers, drift_report]
+  properties:
+    p1_dossiers: {type: array}
+    drift_report: {type: object}
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

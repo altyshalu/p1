@@ -60,6 +60,11 @@ class ProcessRuntime:
         if not any(event.get("event_type") == "run_started" for event in state.get("events", [])):
             await self.store.add_event(run_id, "run_started", {"playbook_key": state["playbook_key"], "goal": state["goal"], "l2_mode": mode.value})
 
+        if playbook.get("execution_strategy") == "deterministic_p1_operator_outreach":
+            await self._run_p1_operator_workflow(run_id, playbook, worker_profiles)
+            await self._record_run_diagnosis(run_id)
+            return await self._require_run(run_id)
+
         for turn in range(max_turns):
             current_status = await self.store.get_run_status(run_id)
             if current_status in {RunStatus.PAUSED, RunStatus.CANCELLED, RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.WAITING_USER}:
@@ -134,7 +139,11 @@ class ProcessRuntime:
         elif action == "stop":
             await self.store.set_run_status(run_id, RunStatus.CANCELLED)
         elif action == "approve":
+            await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
+            if await self._run_p1_external_sync_after_approval(run_id, payload):
+                return await self._require_run(run_id)
             await self.store.set_run_status(run_id, RunStatus.COMPLETED)
+            return await self._require_run(run_id)
         elif action == "reject":
             reason = payload["reason"]
             await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
@@ -146,6 +155,81 @@ class ProcessRuntime:
             raise ValueError(f"unknown control action: {action}")
         await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
         return await self._require_run(run_id)
+
+    async def _run_p1_external_sync_after_approval(self, run_id: UUID, payload: dict[str, Any]) -> bool:
+        state = await self._require_run(run_id)
+        if state.get("playbook_key") != "p1-operator-outreach":
+            return False
+        output = state.get("output", {})
+        if not isinstance(output, dict):
+            return False
+        if output.get("external_sync_requested") is not True or output.get("external_sync_performed") is True:
+            return False
+        if self._latest_payload(state, ArtifactType.P1_EXTERNAL_SYNC_RESULT):
+            return False
+        inputs = state.get("input", {}).get("inputs", {})
+        if not isinstance(inputs, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "p1 inputs must be an object for approved external sync"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "p1 inputs must be an object for approved external sync"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        approval_package = output.get("approval_package", {})
+        if not isinstance(approval_package, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "approved P1 external sync requires approval_package output"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "approved P1 external sync requires approval_package output"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        playbook = await self._load_playbook(state["playbook_key"])
+        worker_profiles = await self._allowed_worker_profiles(playbook)
+        worker = "p1-google-sheets-syncer"
+        profile = worker_profiles[worker]
+        sync_inputs = {**inputs, **approval_package, **payload, "allow_google_sheet_write": True}
+        await self.store.add_event(
+            run_id,
+            "p1_external_sync_approved",
+            {"worker_profile": worker, "external_action": "google_sheets_write"},
+        )
+        await self._execute_task(
+            run_id,
+            {
+                "task_type": "sync_google_sheets",
+                "worker_profile": worker,
+                "goal": profile.get("description", "Approval-gated real Google Sheets sync for P1."),
+                "inputs": sync_inputs,
+                "artifact_type": ArtifactType.P1_EXTERNAL_SYNC_RESULT.value,
+                "allowed_tools": profile.get("allowed_tools", []),
+            },
+            profile,
+        )
+        latest = await self._require_run(run_id)
+        failed = [
+            task
+            for task in latest.get("tasks", [])
+            if task.get("worker_profile") == worker and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+        ]
+        if failed:
+            await self.store.set_run_status(
+                run_id,
+                RunStatus.FAILED,
+                {**output, "external_sync_performed": False, "reason": "approved P1 Google Sheets sync failed"},
+            )
+            await self.store.add_event(run_id, "run_failed", {"reason": "approved P1 Google Sheets sync failed"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        sync_result = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_EXTERNAL_SYNC_RESULT)
+        await self.store.set_run_status(
+            run_id,
+            RunStatus.COMPLETED,
+            {
+                **output,
+                "external_sync_performed": True,
+                "external_sync_result": sync_result.get("sync_result", sync_result),
+            },
+        )
+        await self.store.add_event(run_id, "p1_external_sync_completed", sync_result)
+        await self.store.add_event(run_id, "run_finished", {"status": RunStatus.COMPLETED.value})
+        await self._record_run_diagnosis(run_id)
+        return True
 
     async def _execute_task(self, run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
         task_inputs = await self._inputs_with_implemented_improvements(task)
@@ -210,6 +294,136 @@ class ProcessRuntime:
                 await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
                 await self.store.add_event(run_id, "task_eval_failed", eval_result.model_dump(mode="json"), work_order.id)
                 await self._record_failure_context(run_id, work_order.id, work_order, profile, "eval_failed", "eval did not meet threshold", eval_result)
+
+    async def _run_p1_operator_workflow(
+        self,
+        run_id: UUID,
+        playbook: dict[str, Any],
+        worker_profiles: dict[str, dict[str, Any]],
+    ) -> None:
+        state = await self._require_run(run_id)
+        inputs = state.get("input", {}).get("inputs", {})
+        if not isinstance(inputs, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "p1 inputs must be an object"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "p1 inputs must be an object"})
+            return
+        mode = str(inputs.get("mode") or "existing_dossiers")
+        await self.store.add_event(run_id, "p1_workflow_started", {"mode": mode})
+
+        async def run_task(worker: str, task_type: str, task_inputs: dict[str, Any], artifact_type: ArtifactType) -> bool:
+            profile = worker_profiles[worker]
+            await self._execute_task(
+                run_id,
+                {
+                    "task_type": task_type,
+                    "worker_profile": worker,
+                    "goal": profile.get("description", task_type),
+                    "inputs": task_inputs,
+                    "artifact_type": artifact_type.value,
+                    "allowed_tools": profile.get("allowed_tools", []),
+                },
+                profile,
+            )
+            latest = await self._require_run(run_id)
+            failed = [
+                task
+                for task in latest.get("tasks", [])
+                if task.get("worker_profile") == worker and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+            ]
+            return not failed
+
+        if mode in {"existing_dossiers", "outreach_only"}:
+            if not await run_task("p1-dossier-reader", "read_existing_dossiers", inputs, ArtifactType.P1_DOSSIERS):
+                await self._fail_p1_if_needed(run_id, "p1 existing dossier read failed")
+                return
+        elif mode in {"full_pipeline", "source_only"}:
+            if not await run_task("p1-source-collector", "collect_sources", inputs, ArtifactType.P1_LEAD_CANDIDATES):
+                await self._fail_p1_if_needed(run_id, "p1 source collection failed")
+                return
+            candidates = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_LEAD_CANDIDATES)
+            if not await run_task("p1-lead-normalizer", "normalize_leads", {"lead_candidates": candidates.get("lead_candidates", [])}, ArtifactType.P1_NORMALIZED_LEADS):
+                await self._fail_p1_if_needed(run_id, "p1 lead normalization failed")
+                return
+            normalized = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_NORMALIZED_LEADS)
+            if not await run_task("p1-triage-scorer", "score_triage", {"normalized_leads": normalized.get("normalized_leads", [])}, ArtifactType.P1_TRIAGE_SCORES):
+                await self._fail_p1_if_needed(run_id, "p1 triage scoring failed")
+                return
+            scores = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_TRIAGE_SCORES)
+            if not await run_task("p1-dossier-writer", "write_dossiers", {**inputs, "triage_scores": scores.get("triage_scores", [])}, ArtifactType.P1_DOSSIERS):
+                await self._fail_p1_if_needed(run_id, "p1 dossier writing failed")
+                return
+            if mode == "source_only":
+                await self.store.set_run_status(run_id, RunStatus.COMPLETED, {"mode": mode, "message": "P1 source-only workflow completed."})
+                await self.store.add_event(run_id, "run_finished", {"status": RunStatus.COMPLETED.value})
+                return
+        else:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": f"unsupported p1 mode: {mode}"})
+            await self.store.add_event(run_id, "run_failed", {"reason": f"unsupported p1 mode: {mode}"})
+            return
+
+        dossiers = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_DOSSIERS)
+        if not await run_task("p1-live-intel-gatherer", "gather_live_intelligence", {**inputs, "p1_dossiers": dossiers.get("p1_dossiers", [])}, ArtifactType.P1_LIVE_INTELLIGENCE):
+            await self._fail_p1_if_needed(run_id, "p1 live intelligence failed")
+            return
+        live_intel = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_LIVE_INTELLIGENCE)
+        if not await run_task("p1-gateway-evaluator", "evaluate_gateway", {"p1_dossiers": live_intel.get("p1_dossiers", [])}, ArtifactType.P1_GATEWAY_EVALUATIONS):
+            await self._fail_p1_if_needed(run_id, "p1 gateway evaluation failed")
+            return
+        gateway = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_GATEWAY_EVALUATIONS)
+        if not await run_task("p1-forge-queue-builder", "build_forge_queue", {"gateway_evaluations": gateway.get("gateway_evaluations", [])}, ArtifactType.P1_FORGE_QUEUE):
+            await self._fail_p1_if_needed(run_id, "p1 forge queue failed")
+            return
+        queue = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_FORGE_QUEUE)
+        if not await run_task("p1-outreach-draft-writer", "write_outreach_drafts", {"forge_queue": queue.get("forge_queue", []), "channels": inputs.get("channels", ["linkedin"])}, ArtifactType.P1_OUTREACH_DRAFTS):
+            await self._fail_p1_if_needed(run_id, "p1 outreach drafting failed")
+            return
+        drafts = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_DRAFTS)
+        if not await run_task("p1-outreach-quality-judge", "judge_outreach_quality", {"outreach_drafts": drafts.get("outreach_drafts", [])}, ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE):
+            await self._fail_p1_if_needed(run_id, "p1 outreach quality failed")
+            return
+        approval_package = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE)
+        allow_sheet_write = bool(inputs.get("allow_google_sheet_write", False))
+        approval_required = self._requires_approval(await self._require_run(run_id))
+        external_sync_performed = False
+        if allow_sheet_write and approval_required:
+            await self.store.add_event(
+                run_id,
+                "p1_external_sync_waiting_approval",
+                {
+                    "reason": "Google Sheets write is an external action and requires approval before execution.",
+                    "requested_worker": "p1-google-sheets-syncer",
+                },
+            )
+        elif allow_sheet_write:
+            if not await run_task("p1-google-sheets-syncer", "sync_google_sheets", {**inputs, **approval_package}, ArtifactType.P1_EXTERNAL_SYNC_RESULT):
+                await self._fail_p1_if_needed(run_id, "p1 Google Sheets sync failed")
+                return
+            external_sync_performed = True
+        await self.store.set_run_status(
+            run_id,
+            RunStatus.WAITING_APPROVAL if approval_required else RunStatus.COMPLETED,
+            {
+                "mode": mode,
+                "approval_package": approval_package,
+                "external_sync_requested": allow_sheet_write,
+                "external_sync_performed": external_sync_performed,
+            },
+        )
+        await self.store.add_event(run_id, "run_finished", {"status": (await self.store.get_run_status(run_id)).value})
+
+    @staticmethod
+    def _latest_payload(state: dict[str, Any], artifact_type: ArtifactType) -> dict[str, Any]:
+        for artifact in reversed(state.get("artifacts", [])):
+            if artifact.get("artifact_type") == artifact_type.value:
+                payload = artifact.get("payload", {})
+                return payload if isinstance(payload, dict) else {}
+        return {}
+
+    async def _fail_p1_if_needed(self, run_id: UUID, reason: str) -> None:
+        current = await self.store.get_run_status(run_id)
+        if current not in {RunStatus.FAILED, RunStatus.CANCELLED}:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
+            await self.store.add_event(run_id, "run_failed", {"reason": reason})
 
     async def _inputs_with_implemented_improvements(self, task: dict[str, Any]) -> dict[str, Any]:
         inputs = dict(task.get("inputs", {}))
@@ -539,7 +753,13 @@ class ProcessRuntime:
             return "timeout"
         if "invalid json" in message:
             return "invalid_json"
-        if "no results" in message:
+        if "missing environment variable" in message or "missing provider credential" in message:
+            return "missing_provider_credential"
+        if "full-permission-actor-not-approved" in message or "approve its permissions" in message:
+            return "provider_permission_required"
+        if "no gateway-approved" in message or "no eligible" in message or "empty forge queue" in message:
+            return "no_eligible_candidates"
+        if "no results" in message or "no lead candidates" in message or "returned no" in message:
             return "provider_no_results"
         if "missing required" in message:
             return "output_schema"

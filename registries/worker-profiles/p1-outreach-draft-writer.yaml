@@ -1,0 +1,26 @@
+key: p1-outreach-draft-writer
+description: Generate grounded P1 outreach drafts from real approved dossiers and gateway evidence.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 240
+input_schema:
+  type: object
+  required: [forge_queue]
+  properties:
+    forge_queue: {type: array}
+    channels: {type: array}
+output_schema:
+  type: object
+  required: [outreach_drafts]
+  properties:
+    outreach_drafts: {type: array}
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [worker_exception, timeout, invalid_json]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

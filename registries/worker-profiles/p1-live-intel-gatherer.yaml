@@ -1,0 +1,26 @@
+key: p1-live-intel-gatherer
+description: Gather real current professional intelligence for P1 dossiers through Exa.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [exa-search-tool]
+compatible_tools: [exa-search-tool]
+budget:
+  max_seconds: 240
+input_schema:
+  type: object
+  required: [p1_dossiers]
+  properties:
+    p1_dossiers: {type: array}
+    exa_results_per_dossier: {type: integer}
+output_schema:
+  type: object
+  required: [p1_dossiers]
+  properties:
+    p1_dossiers: {type: array}
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [worker_exception, timeout, provider_no_results, provider_request_failed]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

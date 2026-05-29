@@ -1,0 +1,9 @@
+key: google-sheets-read-tool
+version: 0.1.0
+description: Real Google Sheets read capability for P1 operational queues.
+runtime_type: http_api
+toolset: google_sheets_read
+external_action_class: read
+auth_required: true
+required_env: [GOOGLE_SA_PATH]
+tags: [p1, google-sheets]

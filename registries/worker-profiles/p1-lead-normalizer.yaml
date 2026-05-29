@@ -1,0 +1,26 @@
+key: p1-lead-normalizer
+description: Normalize, deduplicate, and reject non-human P1 lead candidates.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 60
+input_schema:
+  type: object
+  required: [lead_candidates]
+  properties:
+    lead_candidates: {type: array}
+output_schema:
+  type: object
+  required: [normalized_leads]
+  properties:
+    normalized_leads: {type: array}
+    rejected_leads: {type: array}
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

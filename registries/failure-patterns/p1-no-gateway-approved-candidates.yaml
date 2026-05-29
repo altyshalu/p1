@@ -1,0 +1,5 @@
+key: p1-no-gateway-approved-candidates
+worker_id: p1-forge-queue-builder
+failure_type: no_eligible_candidates
+description: P1 reached the forge queue step, but every real candidate was rejected or bypassed by the gateway criteria.
+mitigation: Preserve the gateway evidence, propose a source-query, gate-threshold, or playbook no-op handling improvement, and do not fabricate an outreach target.

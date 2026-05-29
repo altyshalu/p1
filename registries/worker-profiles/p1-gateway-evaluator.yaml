@@ -1,0 +1,25 @@
+key: p1-gateway-evaluator
+description: Evaluate identity, bandwidth, liquidity, and systematic fit for real P1 dossiers.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 240
+input_schema:
+  type: object
+  required: [p1_dossiers]
+  properties:
+    p1_dossiers: {type: array}
+output_schema:
+  type: object
+  required: [gateway_evaluations]
+  properties:
+    gateway_evaluations: {type: array}
+retry_policy:
+  max_attempts: 2
+  retryable_failure_types: [worker_exception, timeout, invalid_json]
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

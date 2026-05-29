@@ -1,0 +1,26 @@
+key: p1-dossier-writer
+description: Convert qualified P1 triage scores into canonical runtime dossiers.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: [p1-dossier-store-tool]
+compatible_tools: [p1-dossier-store-tool]
+budget:
+  max_seconds: 90
+input_schema:
+  type: object
+  required: [triage_scores]
+  properties:
+    triage_scores: {type: array}
+output_schema:
+  type: object
+  required: [p1_dossiers]
+  properties:
+    p1_dossiers: {type: array}
+    rejected_after_triage: {type: array}
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

@@ -1,0 +1,5 @@
+key: p1-state-drift
+worker_id: p1-dossier-reader
+failure_type: state_drift
+description: Old P1 Data Lake contains contradictory L2_State/outreach fields.
+mitigation: Surface drift in a P1 diagnosis and keep runtime artifacts as canonical state.

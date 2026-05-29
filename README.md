@@ -154,6 +154,24 @@ uv run l2l3-live watch <run-id>
 
 The TUI shows run status, Work Orders, evals, Incident Briefs, approval prompts, and separate scrollable views for long draft/event content.
 
+## Running P1 Operator Outreach
+
+`p1-operator-outreach` is the migrated ABRT/Limpid operator and angel outreach pipeline. It uses real P1 dossiers or real source providers, creates bounded Work Orders, stores canonical runtime artifacts, evaluates grounded outreach drafts, and stops at approval before external action.
+
+Existing real dossier migration proof:
+
+```sh
+uv run python scripts/real-playbook-acceptance.py \
+  --api-url http://localhost:8080 \
+  --playbook-key p1-operator-outreach \
+  --goal "P1 existing dossier migration proof" \
+  --inputs-json '{"mode":"existing_dossiers","limit":1,"dossier_source_path":"/root/sovereign-os/OS_Core/Data_Lake/Dossiers","only_awaiting_outreach":true,"allow_google_sheet_write":false,"require_human_approval":true}'
+```
+
+Full sourcing proof requires real `EXA_API_KEY`, `APIFY_API_TOKEN`, `GEMINI_API_KEY`, and Google Sheets credentials when sheet sync is enabled. Crunchbase sourcing uses the Apify Store actor `parseforge/crunchbase-scraper` by default; pass `crunchbase_actor_id` only when deliberately switching to another real actor. Missing credentials or actor permissions fail explicitly; the runtime must not substitute demo leads or old scripts.
+
+Latest real proof notes: [docs/p1-l2l3-real-proof-2026-05-29.md](docs/p1-l2l3-real-proof-2026-05-29.md).
+
 ## Current Self-Improvement Loop
 
 The current hardened dogfood path is `build-in-public-trend-radar`.

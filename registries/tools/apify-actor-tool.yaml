@@ -1,0 +1,9 @@
+key: apify-actor-tool
+version: 0.1.0
+description: Real Apify actor execution for funding and Crunchbase-style P1 sourcing.
+runtime_type: http_api
+toolset: apify_actor
+external_action_class: read
+auth_required: true
+required_env: [APIFY_API_TOKEN]
+tags: [p1, apify, crunchbase, funding]
