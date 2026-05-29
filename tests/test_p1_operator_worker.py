@@ -3,6 +3,7 @@ from pathlib import Path
 
 from l2l3_protocol.workers.p1_operator_worker import (
     _apify_crunchbase_search,
+    _apify_funding_search,
     _apify_linkedin_search,
     _redact_secrets,
     build_metrics_report,
@@ -103,6 +104,44 @@ def test_p1_crunchbase_source_normalizes_parseforge_person_rows(monkeypatch) -> 
     assert result[0]["source_url"] == "https://www.crunchbase.com/person/naval-ravikant"
     assert result[0]["source"] == "apify_crunchbase"
     assert "Naval Ravikant" in result[0]["evidence"][0]
+
+
+def test_p1_funding_source_enriches_company_rows_into_founder_leads(monkeypatch) -> None:
+    def fake_run(actor_id, actor_input):
+        assert actor_id == "nexgendata/startup-funding-tracker"
+        return [
+            {
+                "companyName": "Pixley AI",
+                "fundingAmount": 0,
+                "roundType": "YC F25",
+                "investors": "Y Combinator",
+                "industry": "Consumer, Content",
+                "sourceUrl": "https://www.ycombinator.com/companies/pixley-ai",
+            }
+        ]
+
+    def fake_exa(query, limit):
+        assert "Pixley AI founder LinkedIn" in query
+        return [
+            {
+                "name": "Maya Chen",
+                "headline": "Founder at Pixley AI",
+                "source_url": "https://www.linkedin.com/in/mayachen",
+                "source": "exa",
+                "evidence": ["Founder at Pixley AI"],
+            }
+        ]
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._run_apify_actor", fake_run)
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._exa_people_search", fake_exa)
+
+    result = _apify_funding_search({"apify_search_query": "AI consumer startup", "days_back": 60}, 1)
+
+    assert result[0]["name"] == "Maya Chen"
+    assert result[0]["headline"] == "Founder at Pixley AI"
+    assert result[0]["source"] == "apify_funding"
+    assert result[0]["source_url"] == "https://www.linkedin.com/in/mayachen"
+    assert "Pixley AI" in result[0]["evidence"][0]
 
 
 def test_p1_linkedin_source_normalizes_sales_nav_rows(monkeypatch) -> None:

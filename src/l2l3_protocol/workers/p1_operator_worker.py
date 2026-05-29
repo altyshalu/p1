@@ -581,9 +581,22 @@ def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, 
             continue
         for investor in investors:
             name = str(investor).strip()
-            if not name or _looks_like_company(name):
+            if not name or _looks_like_company(name) or _is_institutional_investor(name):
                 continue
             candidates.append({"name": name, "headline": f"Angel investor in {company} ({amount} round)", "source_url": source_url, "source": "apify_funding", "evidence": [json.dumps(row, ensure_ascii=False)[:1000]]})
+            if len(candidates) >= limit:
+                return candidates[:limit]
+        if company and len(candidates) < limit:
+            for founder in _exa_people_search(f"{company} founder LinkedIn {row.get('industry', '')}", 2):
+                candidate = {
+                    **founder,
+                    "headline": founder.get("headline") or f"Founder at {company}",
+                    "source": "apify_funding",
+                    "evidence": [json.dumps(row, ensure_ascii=False)[:1000], *founder.get("evidence", [])],
+                }
+                candidates.append(candidate)
+                if len(candidates) >= limit:
+                    return candidates[:limit]
     return candidates[:limit]
 
 
@@ -759,6 +772,12 @@ def _looks_like_company(name: str) -> bool:
     lowered = name.lower()
     tokens = ["ventures", "capital", "partners", "fund", "group", "inc", "llc", "ltd", "company", "combinator", "labs"]
     return any(token in lowered for token in tokens)
+
+
+def _is_institutional_investor(name: str) -> bool:
+    lowered = name.lower()
+    institutions = {"y combinator", "techstars", "sequoia", "a16z", "andreessen horowitz", "accel", "index ventures"}
+    return lowered in institutions
 
 
 def _name_from_title(title: str) -> str:
