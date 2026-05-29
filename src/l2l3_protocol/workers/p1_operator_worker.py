@@ -556,10 +556,18 @@ def _request_json(
         with urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
-        error_body = exc.read().decode("utf-8", errors="replace")[:1000]
-        raise P1WorkerInputError(f"real HTTP request failed {method} {url}: {exc.code}: {error_body}") from exc
+        error_body = _redact_secrets(exc.read().decode("utf-8", errors="replace")[:1000])
+        safe_url = _redact_secrets(url)
+        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.code}: {error_body}") from exc
     except URLError as exc:
-        raise P1WorkerInputError(f"real HTTP request failed {method} {url}: {exc.reason}") from exc
+        safe_url = _redact_secrets(url)
+        raise P1WorkerInputError(f"real HTTP request failed {method} {safe_url}: {exc.reason}") from exc
+
+
+def _redact_secrets(value: str) -> str:
+    redacted = re.sub(r"(?i)([?&]token=)[^&\s]+", r"\1[REDACTED]", value)
+    redacted = re.sub(r"apify_api_[A-Za-z0-9_-]+", "apify_api_[REDACTED]", redacted)
+    return redacted
 
 
 def _clean_url(value: str) -> str:

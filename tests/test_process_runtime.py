@@ -391,3 +391,11 @@ def test_worker_error_classification_detects_no_eligible_candidates() -> None:
     )
 
     assert ProcessRuntime._classify_worker_error(error) == "no_eligible_candidates"
+
+
+def test_worker_error_classification_detects_provider_permission_required() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"P1WorkerInputError","message":"full-permission-actor-not-approved: approve its permissions"}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "provider_permission_required"

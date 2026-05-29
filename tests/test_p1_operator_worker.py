@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from l2l3_protocol.workers.p1_operator_worker import judge_outreach_quality, read_existing_dossiers
+from l2l3_protocol.workers.p1_operator_worker import _redact_secrets, judge_outreach_quality, read_existing_dossiers
 
 
 def test_p1_dossier_reader_surfaces_real_state_drift(tmp_path: Path) -> None:
@@ -55,3 +55,13 @@ def test_p1_outreach_quality_requires_evidence_and_no_publish() -> None:
     assert result["passed"] is True
     assert result["score"] == 1.0
     assert result["approval_package"]["approval_required"] is True
+
+
+def test_p1_http_error_redaction_removes_provider_tokens() -> None:
+    raw = "https://api.apify.com/v2/acts/a/runs?token=apify_api_MsDummySecretWithS123 apify_api_MsDummySecretWithS123"
+
+    redacted = _redact_secrets(raw)
+
+    assert "MsDummySecretWithS123" not in redacted
+    assert "token=[REDACTED]" in redacted
+    assert "apify_api_[REDACTED]" in redacted

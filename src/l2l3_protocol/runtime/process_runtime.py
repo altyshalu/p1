@@ -755,6 +755,8 @@ class ProcessRuntime:
             return "invalid_json"
         if "missing environment variable" in message or "missing provider credential" in message:
             return "missing_provider_credential"
+        if "full-permission-actor-not-approved" in message or "approve its permissions" in message:
+            return "provider_permission_required"
         if "no gateway-approved" in message or "no eligible" in message or "empty forge queue" in message:
             return "no_eligible_candidates"
         if "no results" in message or "no lead candidates" in message or "returned no" in message:
