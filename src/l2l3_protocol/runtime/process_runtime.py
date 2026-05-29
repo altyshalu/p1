@@ -139,7 +139,11 @@ class ProcessRuntime:
         elif action == "stop":
             await self.store.set_run_status(run_id, RunStatus.CANCELLED)
         elif action == "approve":
+            await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
+            if await self._run_p1_external_sync_after_approval(run_id, payload):
+                return await self._require_run(run_id)
             await self.store.set_run_status(run_id, RunStatus.COMPLETED)
+            return await self._require_run(run_id)
         elif action == "reject":
             reason = payload["reason"]
             await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
@@ -151,6 +155,81 @@ class ProcessRuntime:
             raise ValueError(f"unknown control action: {action}")
         await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
         return await self._require_run(run_id)
+
+    async def _run_p1_external_sync_after_approval(self, run_id: UUID, payload: dict[str, Any]) -> bool:
+        state = await self._require_run(run_id)
+        if state.get("playbook_key") != "p1-operator-outreach":
+            return False
+        output = state.get("output", {})
+        if not isinstance(output, dict):
+            return False
+        if output.get("external_sync_requested") is not True or output.get("external_sync_performed") is True:
+            return False
+        if self._latest_payload(state, ArtifactType.P1_EXTERNAL_SYNC_RESULT):
+            return False
+        inputs = state.get("input", {}).get("inputs", {})
+        if not isinstance(inputs, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "p1 inputs must be an object for approved external sync"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "p1 inputs must be an object for approved external sync"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        approval_package = output.get("approval_package", {})
+        if not isinstance(approval_package, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "approved P1 external sync requires approval_package output"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "approved P1 external sync requires approval_package output"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        playbook = await self._load_playbook(state["playbook_key"])
+        worker_profiles = await self._allowed_worker_profiles(playbook)
+        worker = "p1-google-sheets-syncer"
+        profile = worker_profiles[worker]
+        sync_inputs = {**inputs, **approval_package, **payload, "allow_google_sheet_write": True}
+        await self.store.add_event(
+            run_id,
+            "p1_external_sync_approved",
+            {"worker_profile": worker, "external_action": "google_sheets_write"},
+        )
+        await self._execute_task(
+            run_id,
+            {
+                "task_type": "sync_google_sheets",
+                "worker_profile": worker,
+                "goal": profile.get("description", "Approval-gated real Google Sheets sync for P1."),
+                "inputs": sync_inputs,
+                "artifact_type": ArtifactType.P1_EXTERNAL_SYNC_RESULT.value,
+                "allowed_tools": profile.get("allowed_tools", []),
+            },
+            profile,
+        )
+        latest = await self._require_run(run_id)
+        failed = [
+            task
+            for task in latest.get("tasks", [])
+            if task.get("worker_profile") == worker and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+        ]
+        if failed:
+            await self.store.set_run_status(
+                run_id,
+                RunStatus.FAILED,
+                {**output, "external_sync_performed": False, "reason": "approved P1 Google Sheets sync failed"},
+            )
+            await self.store.add_event(run_id, "run_failed", {"reason": "approved P1 Google Sheets sync failed"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        sync_result = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_EXTERNAL_SYNC_RESULT)
+        await self.store.set_run_status(
+            run_id,
+            RunStatus.COMPLETED,
+            {
+                **output,
+                "external_sync_performed": True,
+                "external_sync_result": sync_result.get("sync_result", sync_result),
+            },
+        )
+        await self.store.add_event(run_id, "p1_external_sync_completed", sync_result)
+        await self.store.add_event(run_id, "run_finished", {"status": RunStatus.COMPLETED.value})
+        await self._record_run_diagnosis(run_id)
+        return True
 
     async def _execute_task(self, run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
         task_inputs = await self._inputs_with_implemented_improvements(task)
