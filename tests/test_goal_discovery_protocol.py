@@ -10,7 +10,7 @@ from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
 from l2l3_protocol.runtime.l2_supervisor import L2Supervisor
-from l2l3_protocol.runtime.process_runtime import ProcessRuntime
+from l2l3_protocol.runtime.process_runtime import ProcessRuntime, _normalize_goal_interaction
 
 
 class FakeStore:
@@ -141,6 +141,25 @@ def goal_workers() -> dict[str, dict[str, Any]]:
     }
 
 
+def test_goal_interaction_normalizer_accepts_real_nested_worker_shape() -> None:
+    interaction = _normalize_goal_interaction(
+        {
+            'goal_clarification': {
+                'prompt': 'Which path should we test next?',
+                'options': [
+                    {'option_id': 'a', 'label': 'Specific feature', 'implies': 'Create a concrete feature test brief.'},
+                    {'option_id': 'b', 'label': 'Process template', 'outcome': 'Create a reusable testing process.'},
+                ],
+            }
+        }
+    )
+
+    assert interaction['kind'] == 'goal_clarification'
+    assert interaction['question'] == 'Which path should we test next?'
+    assert interaction['options'][0]['id'] == 'a'
+    assert interaction['options'][1]['description'] == 'Create a reusable testing process.'
+
+
 @pytest.mark.asyncio
 async def test_goal_discovery_requires_structured_interaction() -> None:
     hermes = FakeHermes(
@@ -188,9 +207,11 @@ async def test_runtime_records_structured_waiting_user_for_goal_discovery() -> N
     )
     hermes = FakeHermes(
         [
-            '{"action":"spawn_tasks","tasks":[{"task_type":"generate_goal_hypotheses","worker_profile":"goal-hypothesis-generator","goal":"Generate goal hypotheses from the vague request.","inputs":{"goal":"We need something useful for ABRT but the final artifact is unclear.","context":["We want a high-signal next step for the team."]},"artifact_type":"goal_hypotheses"}]}',
+            '{"action":"spawn_tasks","tasks":[{"task_type":"generate_goal_hypotheses","worker_profile":"goal-hypothesis-generator","goal":"Generate goal hypotheses from the vague request.","inputs":{"goal":"We need something useful for ABRT but the final artifact is unclear.","context":["We want a high-signal next step for the team."]}}]}',
             '{"goal_hypotheses":[{"option_id":"ops","candidate_goal":"Build a launch-readiness proof pack.","deliverable":"A runnable proof pack script and readiness checklist.","assumptions":["The team wants operational confidence."],"success_signals":["A real run can be launched and verified."]},{"option_id":"product","candidate_goal":"Draft a user-facing goal-discovery flow.","deliverable":"A protocol and CLI flow for ambiguous intent.","assumptions":["The team wants a stronger intake path."],"success_signals":["Ambiguous requests become structured execution briefs."]}],"recommended_interaction":{"kind":"goal_clarification","question":"Which outcome matters more first?","options":[{"id":"ops","label":"Launch readiness","description":"Prioritize proof-pack and operational hardening."},{"id":"product","label":"Goal discovery UX","description":"Prioritize ambiguous-goal intake and clarification."}],"why_this_question":"The request mixes platform hardening and protocol design.","resolution_hint":"Reply with the option id and one sentence of context."},"ambiguity_summary":"The request contains both platform-hardening and product-protocol intent."}',
-            '{"action":"message_user","message":"I mapped the ambiguous request into two concrete paths. Pick the direction that matters first.","interaction":{"kind":"goal_clarification","question":"Which outcome matters more first?","options":[{"id":"ops","label":"Launch readiness","description":"Prioritize proof-pack and operational hardening."},{"id":"product","label":"Goal discovery UX","description":"Prioritize ambiguous-goal intake and clarification."}],"why_this_question":"The request mixes platform hardening and protocol design.","resolution_hint":"Reply with the option id and one sentence of context."}}',
+            '{"action":"spawn_tasks","tasks":[{"task_type":"compile_goal_brief","worker_profile":"goal-brief-compiler","goal":"Compile the clarified execution brief.","inputs":{"goal":"We need something useful for ABRT but the final artifact is unclear.","goal_hypotheses":[{"option_id":"ops","candidate_goal":"Build a launch-readiness proof pack."}],"user_reply":"ops"}}]}',
+            '{"goal_brief":{"objective":"Build a launch-readiness proof pack.","clarified_outcome":"A concrete proof pack for ABRT.","success_criteria":["Real run passes"],"constraints":["Use real services"],"assumptions":["Ops path chosen"],"next_playbook_key":"build-in-public-trend-radar","recommended_inputs":["query"],"ready_for_execution":true}}',
+            '{"action":"finish","output":{"final":{"ready_for_execution":true}}}',
         ]
     )
     store = FakeStore(run)
@@ -203,3 +224,9 @@ async def test_runtime_records_structured_waiting_user_for_goal_discovery() -> N
     assert any(artifact.artifact_type.value == 'goal_hypotheses' for artifact in store.artifacts)
     assert output['diagnosis']['root_cause'] == 'none'
     assert output['improvement_proposals'] == []
+
+    final = await ProcessRuntime(store, ProceduralRegistry(Path('registries')), FakeMemory(), hermes).resume_with_message(run.id, 'ops')
+
+    assert final['status'] == 'completed'
+    assert final['diagnosis']['outcome'] == 'completed'
+    assert any(artifact.artifact_type.value == 'goal_brief' for artifact in store.artifacts)

@@ -5,7 +5,7 @@ entrypoint: l2l3_protocol.workers.build_in_public_worker
 allowed_tools: [github-search-tool, arxiv-search-tool, hf-hub-search-tool]
 compatible_tools: [github-search-tool, arxiv-search-tool, hf-hub-search-tool]
 budget:
-  max_seconds: 60
+  max_seconds: 120
 input_schema:
   type: object
   required: [query, providers]
@@ -30,7 +30,7 @@ stop_conditions:
   - trend_signals_normalized
 retry_policy:
   max_attempts: 3
-  retryable_failure_types: [input_validation, worker_exception, timeout, provider_no_results]
+  retryable_failure_types: [input_validation, worker_exception, timeout, provider_no_results, provider_request_failed]
 provider_repair_policy:
   required_providers: [github, arxiv, huggingface]
   max_repair_attempts_per_provider: 3

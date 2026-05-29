@@ -1,12 +1,16 @@
 import json
 import re
 import sys
+import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 from typing import Any
 
-HTTP_TIMEOUT_SECONDS = 20
+HTTP_TIMEOUT_SECONDS = 8
+HTTP_RETRY_DELAYS_SECONDS = (3,)
+HTTP_RATE_LIMIT_RETRY_SECONDS = 30
 USER_AGENT = "l2l3-protocol/0.1 real-trend-collector"
 
 
@@ -179,7 +183,10 @@ def collect_trend_sources(work_order: dict[str, Any], context: dict[str, Any]) -
             provider_failures[normalized_provider] = str(exc)
 
     if not source_results:
-        raise WorkerInputError(f"all trend providers failed: {provider_failures}")
+        failure = WorkerInputError(f"all trend providers failed: {provider_failures}")
+        failure.provider_failures = provider_failures
+        failure.provider_attempts = provider_attempts
+        raise failure
     if provider_failures:
         failure = WorkerInputError(f"trend providers failed: {provider_failures}")
         failure.provider_failures = provider_failures
@@ -361,21 +368,49 @@ def _require_toolset(allowed_toolsets: set[str], toolset: str, provider: str) ->
 
 
 def _request_json(url: str) -> Any:
-    request = Request(url, headers={"accept": "application/json", "user-agent": USER_AGENT})
-    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        status = getattr(response, "status", 200)
-        if status >= 400:
-            raise WorkerInputError(f"tool request failed with status {status}: {url}")
-        return json.loads(response.read().decode("utf-8"))
+    payload = _request_bytes(url, accept="application/json")
+    return json.loads(payload.decode("utf-8"))
 
 
 def _request_text(url: str) -> str:
-    request = Request(url, headers={"accept": "application/xml", "user-agent": USER_AGENT})
-    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-        status = getattr(response, "status", 200)
-        if status >= 400:
-            raise WorkerInputError(f"tool request failed with status {status}: {url}")
-        return response.read().decode("utf-8")
+    return _request_bytes(url, accept="application/xml").decode("utf-8")
+
+
+def _request_bytes(url: str, *, accept: str) -> bytes:
+    request = Request(url, headers={"accept": accept, "user-agent": USER_AGENT})
+    for attempt in range(len(HTTP_RETRY_DELAYS_SECONDS) + 1):
+        try:
+            with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+                status = getattr(response, "status", 200)
+                if status >= 400:
+                    raise WorkerInputError(f"tool request failed with status {status}: {url}")
+                return response.read()
+        except HTTPError as exc:
+            if exc.code == 429 and attempt < len(HTTP_RETRY_DELAYS_SECONDS):
+                time.sleep(_retry_delay_seconds(exc, attempt))
+                continue
+            body = exc.read().decode("utf-8", errors="replace")[:300]
+            raise WorkerInputError(f"tool request failed with status {exc.code}: {url}: {body}") from exc
+        except TimeoutError as exc:
+            if attempt < len(HTTP_RETRY_DELAYS_SECONDS):
+                time.sleep(HTTP_RETRY_DELAYS_SECONDS[attempt])
+                continue
+            raise WorkerInputError(f"tool request timed out after {HTTP_TIMEOUT_SECONDS}s: {url}") from exc
+        except URLError as exc:
+            raise WorkerInputError(f"tool request failed: {url}: {exc.reason}") from exc
+    raise WorkerInputError(f"tool request failed after retries: {url}")
+
+
+def _retry_delay_seconds(exc: HTTPError, attempt: int) -> int:
+    retry_after = exc.headers.get("Retry-After") if exc.headers is not None else None
+    if retry_after is not None:
+        try:
+            parsed = int(str(retry_after).strip())
+        except ValueError:
+            parsed = 0
+        if parsed > 0:
+            return min(parsed, HTTP_RATE_LIMIT_RETRY_SECONDS)
+    return HTTP_RATE_LIMIT_RETRY_SECONDS
 
 
 def _search_github(query: str, max_results: int) -> list[dict[str, Any]]:
@@ -566,7 +601,7 @@ def _normalize_draft_shape(draft: Any) -> dict[str, Any]:
     else:
         raise WorkerInputError("draft must be an object or non-empty string")
     if not isinstance(normalized.get("text"), str) or not normalized.get("text", "").strip():
-        for text_key in ("body", "content", "message"):
+        for text_key in ("draft_text", "body", "content", "message"):
             value = normalized.get(text_key)
             if isinstance(value, str) and value.strip():
                 normalized["text"] = value.strip()
@@ -634,6 +669,8 @@ def _normalize_claim(claim: dict[str, Any], fallback_text: str) -> dict[str, Any
         claim_text = normalized_claim.get("claim_text")
         if isinstance(claim_text, str) and claim_text.strip():
             normalized_claim["text"] = claim_text.strip()
+        elif isinstance(normalized_claim.get("statement"), str) and normalized_claim["statement"].strip():
+            normalized_claim["text"] = normalized_claim["statement"].strip()
         elif fallback_text.strip():
             normalized_claim["text"] = fallback_text.strip()
     return normalized_claim

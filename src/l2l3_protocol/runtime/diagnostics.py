@@ -18,6 +18,7 @@ INTERNAL_FAILURE_TO_ROOT_CAUSE = {
     "input_validation": "bad_or_missing_input",
     "work_order_validation": "bad_or_missing_input",
     "provider_no_results": "tool_or_provider_failure",
+    "provider_request_failed": "tool_or_provider_failure",
 }
 
 

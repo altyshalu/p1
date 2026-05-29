@@ -22,6 +22,7 @@ from l2l3_protocol.core.schemas import (
 from l2l3_protocol.hub.registry import yaml_registry_items
 from l2l3_protocol.memory.adapters import ProceduralRegistry
 from l2l3_protocol.runtime.hermes import HermesRuntime
+from l2l3_protocol.runtime.l3_executor import L3WorkerExecutionError
 from l2l3_protocol.runtime.process_runtime import ProcessRuntime
 
 
@@ -350,3 +351,19 @@ async def test_execution_mode_fails_when_playbook_is_missing() -> None:
 
     with pytest.raises(KeyError, match="Taskforce Hub playbook is not seeded"):
         await ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([])).run_until_blocked_or_done(run.id)
+
+
+def test_worker_error_classification_preserves_real_provider_failures() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"WorkerInputError","message":"trend providers failed","provider_failures":{"arxiv":"Rate exceeded"}}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "provider_request_failed"
+
+
+def test_worker_error_classification_does_not_treat_empty_provider_metadata_as_provider_failure() -> None:
+    error = L3WorkerExecutionError(
+        '{"error_type":"WorkerInputError","message":"missing required non-empty string: draft.text","provider_failures":{}}'
+    )
+
+    assert ProcessRuntime._classify_worker_error(error) == "output_schema"
