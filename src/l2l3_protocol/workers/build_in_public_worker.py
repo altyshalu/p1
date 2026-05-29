@@ -55,15 +55,47 @@ def adapt(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]
     drafts = []
     for channel in channels:
         for atom in atoms:
+            if isinstance(atom, str) and atom.strip():
+                drafts.append(
+                    {
+                        "channel": channel,
+                        "status": "draft",
+                        "text": atom.strip(),
+                        "source_angle": "generic",
+                    }
+                )
+                continue
+            if not isinstance(atom, dict):
+                raise WorkerInputError("atoms must contain strings or objects")
+            headline = _first_text(atom, "claim", "headline", "title", "source_signal")
+            detail = _first_text(atom, "why_it_matters", "body", "summary", "description")
+            text_value = _first_text(atom, "text")
+            if text_value is None:
+                if headline is None and detail is None:
+                    raise WorkerInputError("atom is missing claim/headline/text fields")
+                if headline is None:
+                    text_value = detail
+                elif detail is None:
+                    text_value = headline
+                else:
+                    text_value = f"{headline}\n\nWhy it matters: {detail}"
             drafts.append(
                 {
                     "channel": channel,
                     "status": "draft",
-                    "text": f"{atom['claim']}\n\nWhy it matters: {atom['why_it_matters']}",
-                    "source_angle": atom["angle"],
+                    "text": text_value,
+                    "source_angle": _first_text(atom, "angle", "type", "kind", default="generic"),
                 }
             )
     return {"drafts": drafts}
+
+
+def _first_text(item: dict[str, Any], *keys: str, default: str | None = None) -> str | None:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return default
 
 
 def evaluate(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
