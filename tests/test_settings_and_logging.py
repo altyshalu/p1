@@ -3,7 +3,7 @@ from l2l3_protocol.logging import configure_logging, get_logger
 
 
 def test_settings_keep_external_memory_enabled_by_default() -> None:
-    settings = Settings()
+    settings = Settings(_env_file=None)
 
     assert settings.agentmemory_enabled is True
     assert settings.mem0_enabled is True
