@@ -326,7 +326,7 @@ Constraints:
             "linkedin_url": dossier["identity"].get("linkedin_url", ""),
             "current_role": gateway.get("current_role_verified", ""),
             "archetype": response.get("archetype"),
-            "text": require_text(response.get("draft"), "draft"),
+            "text": _ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft")),
             "evidence_urls": evidence_urls,
             "claims": _normalize_claims(response.get("claims"), evidence_urls),
             "status": "draft",
@@ -826,6 +826,13 @@ def _normalize_claims(value: Any, evidence_urls: list[Any]) -> list[dict[str, An
         if claims:
             return claims
     return [{"text": "Outreach draft is based on the dossier and live intelligence evidence.", "source_url": str(evidence_urls[0]), "evidence_urls": evidence_urls}] if evidence_urls else []
+
+
+def _ensure_abrt_or_limpid_mention(text: str) -> str:
+    lowered = text.lower()
+    if "abrt" in lowered or "limpid" in lowered:
+        return text
+    return f"{text.rstrip()} At ABRT, we're comparing notes with operators building this kind of AI-native edge."
 
 
 def _claims_have_sources(draft: dict[str, Any]) -> bool:

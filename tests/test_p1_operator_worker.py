@@ -13,6 +13,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     read_existing_dossiers,
     sync_data_lake,
     sync_outreach_master,
+    write_outreach_drafts,
 )
 
 
@@ -67,6 +68,38 @@ def test_p1_outreach_quality_requires_evidence_and_no_publish() -> None:
     assert result["passed"] is True
     assert result["score"] == 1.0
     assert result["approval_package"]["approval_required"] is True
+
+
+def test_p1_outreach_writer_enforces_abrt_or_limpid_mention(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "archetype": "Builder",
+            "draft": "Hi Arianna, your operator-investor pattern is exactly the kind of thinking we wanted to compare notes on next week.",
+            "evidence_urls": ["https://www.linkedin.com/in/ariannasimpson"],
+            "claims": [{"text": "Arianna is an operator-investor.", "source_url": "https://www.linkedin.com/in/ariannasimpson"}],
+        },
+    )
+
+    result = write_outreach_drafts(
+        {
+            "inputs": {
+                "forge_queue": [
+                    {
+                        "dossier": {
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
+                        },
+                        "gateway": {"current_role_verified": "Investor"},
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert "abrt" in result["outreach_drafts"][0]["text"].lower() or "limpid" in result["outreach_drafts"][0]["text"].lower()
 
 
 def test_p1_http_error_redaction_removes_provider_tokens() -> None:
