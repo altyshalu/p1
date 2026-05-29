@@ -165,7 +165,7 @@ uv run python scripts/real-p1-readiness.py   --base-url http://127.0.0.1:8000   
 
 uv run python scripts/real-p1-proof-pack.py   --base-url http://127.0.0.1:8000   --env-file .env   --mode full_pipeline
 
-uv run python scripts/real-p1-full-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-inputs.json
+uv run python scripts/real-p1-full-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-inputs.json   --verify-sheet   --verify-outreach-master   --verify-data-lake
 
 uv run python scripts/real-p1-cache-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-source-only-inputs.json
 

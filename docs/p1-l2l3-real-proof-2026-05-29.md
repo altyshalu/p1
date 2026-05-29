@@ -12,7 +12,7 @@ The P1 backend now includes these production-facing hardening changes:
 - duplicate-skipped events for external syncs
 - compact backend summary endpoint `GET /runs/{id}/summary`
 - task timing fields `started_at`, `completed_at`, and `duration_ms`
-- operator readiness and proof scripts for preflight, proof-pack, full flow, cache proof, and idempotency proof
+- operator readiness and proof scripts for preflight, proof-pack, full flow, cache proof, and idempotency proof, including optional verification of Sheets, Outreach Master, and Data Lake outputs
 
 ## Verified On The Server
 
@@ -48,7 +48,7 @@ uv run pytest -q
 Result:
 
 ```text
-139 passed in 8.76s
+141 passed in 8.91s
 ```
 
 ### 3. Real Proof Scripts Are Executable

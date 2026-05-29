@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import sys
 from pathlib import Path
 
@@ -134,6 +135,65 @@ def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monke
 
     assert exit_code == 0
     assert 'waiting_approval' in stdout.getvalue()
+
+
+def test_p1_full_proof_verify_outreach_master(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    master_path = tmp_path / 'master.json'
+    master_path.write_text(json.dumps({'drafts': [{'run_id': 'run-1', 'lead_id': 'lead-1'}]}), encoding='utf-8')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs: {'id': 'run-1'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'id': 'run-1', 'status': 'completed', 'diagnosis': None})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'proof',
+        'latest_metrics': {'drafted': 1},
+        'artifact_counts': {},
+        'task_status_counts': {},
+        'pending_actions': [],
+        'latest_approval_preview': {'outreach_master': {'path': str(master_path), 'entries': [{'run_id': 'run-1', 'lead_id': 'lead-1'}]}},
+    })
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json', '--verify-outreach-master'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert 'outreach_master_verification' in stdout.getvalue()
+
+
+def test_p1_full_proof_verify_data_lake(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    lake = tmp_path / 'lake'
+    lake.mkdir()
+    (lake / 'lead-1.json').write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs: {'id': 'run-1'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'id': 'run-1', 'status': 'completed', 'diagnosis': None})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'proof',
+        'latest_metrics': {'written_count': 1},
+        'artifact_counts': {},
+        'task_status_counts': {},
+        'pending_actions': [],
+        'latest_approval_preview': {'data_lake': {'path': str(lake), 'files': [{'lead_id': 'lead-1'}]}},
+    })
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json', '--verify-data-lake'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert 'data_lake_verification' in stdout.getvalue()
 
 
 def test_p1_cache_proof_rejects_missing_cache_hits(monkeypatch) -> None:
