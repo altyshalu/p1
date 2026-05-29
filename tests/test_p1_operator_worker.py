@@ -9,6 +9,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _request_json,
     _redact_secrets,
     build_metrics_report,
+    collect_sources,
     judge_outreach_quality,
     read_existing_dossiers,
     sync_data_lake,
@@ -242,6 +243,47 @@ def test_p1_linkedin_source_normalizes_sales_nav_rows(monkeypatch) -> None:
             ],
         }
     ]
+
+
+def test_p1_source_collector_reuses_explicit_provider_cache(tmp_path: Path, monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_run(actor_id, actor_input):
+        calls["count"] += 1
+        assert actor_id == "riceman/linkedin-sales-navigator-lead-search-scraper"
+        return [
+            {
+                "full_name": "Arianna Simpson",
+                "headline": "General Partner at a16z crypto",
+                "linkedin_url": "https://www.linkedin.com/in/ariannasimpson/",
+            }
+        ]
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._run_apify_actor", fake_run)
+    inputs = {
+        "sources": ["apify_linkedin"],
+        "linkedin_keywords": "AI angel investor",
+        "limit": 1,
+        "provider_cache_dir": str(tmp_path / "provider-cache"),
+    }
+
+    first = collect_sources({"inputs": inputs}, {})
+
+    assert calls["count"] == 1
+    assert first["source_attempts"][0]["cache_enabled"] is True
+    assert first["source_attempts"][0]["cache_hit"] is False
+    assert first["lead_candidates"][0]["name"] == "Arianna Simpson"
+
+    def fail_if_called(actor_id, actor_input):
+        raise AssertionError("provider should not be called when explicit real cache is valid")
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._run_apify_actor", fail_if_called)
+
+    second = collect_sources({"inputs": inputs}, {})
+
+    assert second["source_attempts"][0]["cache_hit"] is True
+    assert second["source_attempts"][0]["cache_key"] == first["source_attempts"][0]["cache_key"]
+    assert second["lead_candidates"] == first["lead_candidates"]
 
 
 def test_p1_data_lake_sync_writes_physical_dossier_files(tmp_path: Path) -> None:

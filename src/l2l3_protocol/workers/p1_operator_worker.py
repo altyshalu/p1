@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,8 @@ from google import genai
 HTTP_TIMEOUT_SECONDS = 30
 HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
+P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
+P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
 
 class P1WorkerInputError(ValueError):
@@ -100,20 +103,24 @@ def collect_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict
     attempts: list[dict[str, Any]] = []
     for source in sources:
         if source == "exa":
-            items = _exa_people_search(query, min(limit, 10))
-            attempts.append({"source": source, "query": query, "result_count": len(items)})
+            source_limit = min(limit, 10)
+            items, cache = _with_provider_cache(inputs, source, {"query": query, "limit": source_limit}, lambda: _exa_people_search(query, source_limit))
+            attempts.append({"source": source, "query": query, "result_count": len(items), **cache})
             candidates.extend(items)
         elif source == "apify_funding":
-            items = _apify_funding_search(inputs, min(limit, 10))
-            attempts.append({"source": source, "result_count": len(items)})
+            source_limit = min(limit, 10)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_funding_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
             candidates.extend(items)
         elif source == "apify_crunchbase":
-            items = _apify_crunchbase_search(inputs, min(limit, 5))
-            attempts.append({"source": source, "result_count": len(items)})
+            source_limit = min(limit, 5)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_crunchbase_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
             candidates.extend(items)
         elif source == "apify_linkedin":
-            items = _apify_linkedin_search(inputs, min(limit, 100))
-            attempts.append({"source": source, "result_count": len(items)})
+            source_limit = min(limit, 100)
+            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_linkedin_search(inputs, source_limit))
+            attempts.append({"source": source, "result_count": len(items), **cache})
             candidates.extend(items)
         else:
             raise P1WorkerInputError(f"unsupported P1 source: {source}")
@@ -559,6 +566,104 @@ def _exa_people_search(query: str, limit: int) -> list[dict[str, Any]]:
             continue
         items.append({"name": _name_from_title(title), "headline": title, "source_url": url, "source": "exa", "evidence": [text or title]})
     return items
+
+
+def _with_provider_cache(inputs: dict[str, Any], source: str, request: dict[str, Any], fetch: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if _disable_provider_cache(inputs):
+        items = fetch()
+        return items, {"cache_enabled": False, "cache_hit": False}
+    cache_dir = _provider_cache_dir(inputs)
+    ttl_seconds = _provider_cache_ttl_seconds(inputs)
+    key = _provider_cache_key(source, request)
+    path = cache_dir / f"{key}.json"
+    if path.exists():
+        cached = _read_provider_cache(path, ttl_seconds)
+        if cached is not None:
+            return cached["items"], {
+                "cache_enabled": True,
+                "cache_hit": True,
+                "cache_key": key,
+                "cached_at": cached["cached_at"],
+                "cache_path": str(path),
+            }
+    items = fetch()
+    _write_provider_cache(path, source, request, items)
+    return items, {"cache_enabled": True, "cache_hit": False, "cache_key": key, "cache_path": str(path)}
+
+
+def _disable_provider_cache(inputs: dict[str, Any]) -> bool:
+    value = inputs.get("use_provider_cache")
+    if value is None:
+        value = os.environ.get("P1_USE_PROVIDER_CACHE", "true")
+    if isinstance(value, bool):
+        return not value
+    return str(value).strip().lower() in {"0", "false", "no", "off"}
+
+
+def _provider_cache_dir(inputs: dict[str, Any]) -> Path:
+    path = inputs.get("provider_cache_dir") or os.environ.get("P1_PROVIDER_CACHE_DIR") or ".cache/p1_provider_cache"
+    return Path(require_text(str(path), "provider_cache_dir"))
+
+
+def _provider_cache_ttl_seconds(inputs: dict[str, Any]) -> int:
+    raw = inputs.get("provider_cache_ttl_seconds") or os.environ.get("P1_PROVIDER_CACHE_TTL_SECONDS") or P1_PROVIDER_CACHE_TTL_SECONDS
+    ttl_seconds = int(raw)
+    if ttl_seconds < 1:
+        raise P1WorkerInputError("provider_cache_ttl_seconds must be >= 1")
+    return ttl_seconds
+
+
+def _provider_cache_key(source: str, request: dict[str, Any]) -> str:
+    payload = json.dumps({"version": P1_PROVIDER_CACHE_VERSION, "source": source, "request": request}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _provider_cache_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    excluded = {
+        "allow_data_lake_write",
+        "allow_google_sheet_write",
+        "allow_outreach_master_write",
+        "data_lake_dossier_path",
+        "dossier_output_path",
+        "outreach_master_path",
+        "provider_cache_dir",
+        "provider_cache_ttl_seconds",
+        "require_human_approval",
+        "use_provider_cache",
+    }
+    return {key: value for key, value in sorted(inputs.items()) if key not in excluded}
+
+
+def _read_provider_cache(path: Path, ttl_seconds: int) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise P1WorkerInputError(f"P1 provider cache is corrupt: {path}") from exc
+    if not isinstance(payload, dict) or payload.get("version") != P1_PROVIDER_CACHE_VERSION:
+        raise P1WorkerInputError(f"P1 provider cache has invalid schema: {path}")
+    cached_at = payload.get("cached_at")
+    items = payload.get("items")
+    if not isinstance(cached_at, (int, float)) or not isinstance(items, list):
+        raise P1WorkerInputError(f"P1 provider cache has invalid payload: {path}")
+    if time.time() - float(cached_at) > ttl_seconds:
+        return None
+    if not all(isinstance(item, dict) for item in items):
+        raise P1WorkerInputError(f"P1 provider cache contains non-object items: {path}")
+    return {"cached_at": cached_at, "items": items}
+
+
+def _write_provider_cache(path: Path, source: str, request: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": P1_PROVIDER_CACHE_VERSION,
+        "source": source,
+        "request": request,
+        "cached_at": time.time(),
+        "items": items,
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, Any]]:
