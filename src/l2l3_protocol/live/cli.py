@@ -17,19 +17,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--api-url', default='http://localhost:8080')
     subparsers = parser.add_subparsers(dest='command', required=True)
     start = subparsers.add_parser('start', help='Start a real pipeline run from explicit input data.')
-    start.add_argument('name', choices=['trend-radar'])
-    start.add_argument('--query', required=True, help='Real search query for the trend collector.')
+    start.add_argument('name', choices=['trend-radar', 'goal-discovery'])
+    start.add_argument('--query', help='Real search query for the trend collector.')
     start.add_argument(
         '--provider',
         dest='providers',
         action='append',
         choices=['github', 'arxiv', 'huggingface'],
-        required=True,
         help='Real source provider to query. Repeat for multiple providers.',
     )
-    start.add_argument('--channel', dest='channels', action='append', required=True, help='Target channel. Repeat for multiple channels.')
+    start.add_argument('--channel', dest='channels', action='append', help='Target channel. Repeat for multiple channels.')
     start.add_argument('--max-results', type=int, default=5, help='Maximum real results per provider.')
-    start.add_argument('--goal', default=DEFAULT_TREND_RADAR_GOAL)
+    start.add_argument('--context', dest='context', action='append', default=[], help='Optional context line for goal discovery. Repeat for multiple context items.')
+    start.add_argument('--goal', help='Goal or intent to run.')
     watch = subparsers.add_parser('watch')
     watch.add_argument('run_id')
     review = subparsers.add_parser('review')
@@ -51,15 +51,43 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def start_run(api_url: str, name: str, query: str, providers: list[str], channels: list[str], max_results: int, goal: str) -> None:
-    if name != 'trend-radar':
-        raise ValueError(f'unknown pipeline: {name}')
-    if max_results < 1:
-        raise ValueError('max-results must be >= 1')
+async def start_run(
+    api_url: str,
+    name: str,
+    goal: str | None,
+    query: str | None,
+    providers: list[str] | None,
+    channels: list[str] | None,
+    max_results: int,
+    context: list[str],
+) -> None:
     client = LiveApiClient(api_url)
     await client.sync_registry()
-    run = await client.create_trend_radar_run(goal=goal, query=query, providers=providers, channels=channels, max_results=max_results)
-    await watch_run(api_url, run['id'])
+    if name == 'trend-radar':
+        if max_results < 1:
+            raise ValueError('max-results must be >= 1')
+        if not query:
+            raise ValueError('trend-radar requires --query')
+        if not providers:
+            raise ValueError('trend-radar requires at least one --provider')
+        if not channels:
+            raise ValueError('trend-radar requires at least one --channel')
+        run = await client.create_trend_radar_run(
+            goal=goal or DEFAULT_TREND_RADAR_GOAL,
+            query=query,
+            providers=providers,
+            channels=channels,
+            max_results=max_results,
+        )
+        await watch_run(api_url, run['id'])
+        return
+    if name == 'goal-discovery':
+        if not goal:
+            raise ValueError('goal-discovery requires --goal')
+        run = await client.create_goal_discovery_run(goal=goal, context=context)
+        await watch_run(api_url, run['id'])
+        return
+    raise ValueError(f'unknown pipeline: {name}')
 
 
 async def watch_run(api_url: str, run_id: str) -> None:
@@ -95,7 +123,7 @@ async def list_regressions(api_url: str, playbook_key: str | None) -> None:
 def main() -> None:
     args = parse_args()
     if args.command == 'start':
-        asyncio.run(start_run(args.api_url, args.name, args.query, args.providers, args.channels, args.max_results, args.goal))
+        asyncio.run(start_run(args.api_url, args.name, args.goal, args.query, args.providers, args.channels, args.max_results, args.context))
     elif args.command == 'watch':
         asyncio.run(watch_run(args.api_url, args.run_id))
     elif args.command == 'review':
@@ -104,3 +132,7 @@ def main() -> None:
         asyncio.run(report_learnings(args.api_url, args.playbook_key, args.since_hours, args.format))
     elif args.command == 'report' and args.report_command == 'regressions':
         asyncio.run(list_regressions(args.api_url, args.playbook_key))
+
+
+if __name__ == '__main__':
+    main()

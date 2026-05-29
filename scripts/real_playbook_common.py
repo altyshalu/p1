@@ -137,6 +137,7 @@ def assess_playbook_readiness(bundle: dict[str, Any], *, inputs: dict[str, Any])
         'eval_count': len(required_evals),
         'hermes_required': hermes_required,
         'hermes_available': bool(hermes_capability.get('available')),
+        'goal_protocol': playbook.get('spec', {}).get('goal_protocol'),
     }
     return {
         'summary': summary,
@@ -157,6 +158,7 @@ def render_readiness_markdown(report: dict[str, Any]) -> str:
         '',
         f"- Playbook: `{summary.get('playbook_key', 'unknown')}`",
         f"- Ready: `{summary.get('ready', False)}`",
+        f"- Goal protocol: `{summary.get('goal_protocol')}`",
         f"- Hermes required: `{summary.get('hermes_required', False)}`",
         f"- Hermes available: `{summary.get('hermes_available', False)}`",
         f"- Missing inputs: {summary.get('missing_inputs', [])}",
@@ -182,7 +184,7 @@ def render_readiness_markdown(report: dict[str, Any]) -> str:
     lines.extend(['', '## Evals'])
     for item in report.get('evals', []):
         lines.append(f"- `{item.get('key')}` [{item.get('status')}]")
-    return '\\n'.join(lines)
+    return '\n'.join(lines)
 
 
 def create_run_payload(*, playbook_key: str, goal: str, inputs: dict[str, Any], require_human_approval: bool = True) -> dict[str, Any]:
@@ -231,6 +233,13 @@ def validate_terminal_run(run: dict[str, Any], *, expected_statuses: set[str]) -
     if status == 'waiting_user' and isinstance(diagnosis, dict):
         if diagnosis.get('root_cause') not in {None, 'none'} or diagnosis.get('improvement_needed'):
             raise RuntimeError(f'waiting_user is only accepted for healthy human-gated runs: diagnosis={diagnosis}')
+        if run.get('playbook_key') == 'goal-discovery':
+            interaction = run.get('output', {}).get('interaction') if isinstance(run.get('output'), dict) else None
+            if not isinstance(interaction, dict):
+                raise RuntimeError('goal-discovery waiting_user output must include a structured interaction')
+            options = interaction.get('options')
+            if not isinstance(options, list) or len(options) < 2 or len(options) > 4:
+                raise RuntimeError(f'goal-discovery interaction must include 2-4 options: {interaction}')
     if len(run.get('tasks', [])) < 1:
         raise RuntimeError('run reached terminal state without any real task')
     if len(run.get('events', [])) < 2:

@@ -39,6 +39,24 @@ class LiveApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def create_goal_discovery_run(
+        self,
+        *,
+        goal: str,
+        context: list[str],
+    ) -> dict[str, Any]:
+        payload = {
+            'playbook_key': 'goal-discovery',
+            'l2_mode': 'execution',
+            'goal': goal,
+            'inputs': {'context': context},
+            'require_human_approval': False,
+        }
+        async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
+            response = await client.post(f"{self.api_url}/runs", json=payload)
+            response.raise_for_status()
+            return response.json()
+
     async def get_run(self, run_id: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=API_TIMEOUT_SECONDS) as client:
             response = await client.get(f"{self.api_url}/runs/{run_id}")
