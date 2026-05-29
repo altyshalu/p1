@@ -179,6 +179,13 @@ class WorkingMemoryStore:
         record.work_order = {**record.work_order, "status": status.value}
         await self._persist()
 
+    async def patch_task_work_order(self, task_id: UUID, patch: dict[str, Any]) -> None:
+        record = await self.session.get(WorkOrderRecord, task_id)
+        if record is None:
+            raise KeyError(f"task not found: {task_id}")
+        record.work_order = {**record.work_order, **patch}
+        await self._persist()
+
     async def add_artifact(self, artifact: Artifact) -> Artifact:
         self.session.add(
             ArtifactRecord(

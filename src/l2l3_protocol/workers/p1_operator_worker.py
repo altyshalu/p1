@@ -21,6 +21,28 @@ USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
 P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
 P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 
+GOOGLE_SHEET_DEFAULT_TAB = "P1_L2L3_NEW_LEADS"
+GOOGLE_SHEET_HEADERS = [
+    "run_id",
+    "lead_id",
+    "name",
+    "linkedin_url",
+    "identity_status",
+    "current_role",
+    "gateway_decision",
+    "triage_score",
+    "archetype",
+    "outreach_status",
+    "draft_text",
+    "evidence_urls",
+    "claims_json",
+    "runtime_source",
+    "synced_at",
+]
+LINKEDIN_PERSON_RE = re.compile(r"^https://(?:www\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$")
+IDENTITY_STATUS_VERIFIED = "verified_linkedin"
+IDENTITY_STATUS_REVIEW = "needs_review"
+
 
 class P1WorkerInputError(ValueError):
     pass
@@ -102,31 +124,62 @@ def collect_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict
     candidates: list[dict[str, Any]] = []
     attempts: list[dict[str, Any]] = []
     for source in sources:
+        started_at = time.perf_counter()
         if source == "exa":
             source_limit = min(limit, 10)
-            items, cache = _with_provider_cache(inputs, source, {"query": query, "limit": source_limit}, lambda: _exa_people_search(query, source_limit))
-            attempts.append({"source": source, "query": query, "result_count": len(items), **cache})
+            request = {"query": query, "limit": source_limit}
+            items, cache = _with_provider_cache(inputs, source, request, lambda: _exa_people_search(query, source_limit))
+            attempts.append(_source_attempt_payload(source, request, len(items), cache, query=query))
             candidates.extend(items)
         elif source == "apify_funding":
             source_limit = min(limit, 10)
-            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_funding_search(inputs, source_limit))
-            attempts.append({"source": source, "result_count": len(items), **cache})
+            request = {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}
+            items, cache = _with_provider_cache(inputs, source, request, lambda: _apify_funding_search(inputs, source_limit))
+            attempts.append(_source_attempt_payload(source, request, len(items), cache, actor_id="nexgendata/startup-funding-tracker"))
             candidates.extend(items)
         elif source == "apify_crunchbase":
             source_limit = min(limit, 5)
-            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_crunchbase_search(inputs, source_limit))
-            attempts.append({"source": source, "result_count": len(items), **cache})
+            actor_id = str(inputs.get("crunchbase_actor_id") or "parseforge/crunchbase-scraper")
+            request = {"inputs": _provider_cache_inputs(inputs), "limit": source_limit, "actor_id": actor_id}
+            items, cache = _with_provider_cache(inputs, source, request, lambda: _apify_crunchbase_search(inputs, source_limit))
+            attempts.append(_source_attempt_payload(source, request, len(items), cache, actor_id=actor_id))
             candidates.extend(items)
         elif source == "apify_linkedin":
             source_limit = min(limit, 100)
-            items, cache = _with_provider_cache(inputs, source, {"inputs": _provider_cache_inputs(inputs), "limit": source_limit}, lambda: _apify_linkedin_search(inputs, source_limit))
-            attempts.append({"source": source, "result_count": len(items), **cache})
+            actor_id = str(inputs.get("linkedin_actor_id") or "riceman/linkedin-sales-navigator-lead-search-scraper")
+            request = {"inputs": _provider_cache_inputs(inputs), "limit": source_limit, "actor_id": actor_id}
+            items, cache = _with_provider_cache(inputs, source, request, lambda: _apify_linkedin_search(inputs, source_limit))
+            attempts.append(_source_attempt_payload(source, request, len(items), cache, actor_id=actor_id))
             candidates.extend(items)
         else:
             raise P1WorkerInputError(f"unsupported P1 source: {source}")
+        attempts[-1]["duration_ms"] = max(0, int((time.perf_counter() - started_at) * 1000))
     if not candidates:
         raise P1WorkerInputError(f"real P1 sourcing returned no lead candidates for sources={sources}")
-    return {"lead_candidates": candidates[:limit], "source_attempts": attempts}
+    primary_source = str(inputs.get("source") or (sources[0] if len(sources) == 1 else "merged"))
+    return {"source": primary_source, "lead_candidates": candidates[:limit], "source_attempts": attempts}
+
+
+def merge_source_batches(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    batches = require_list(work_order["inputs"].get("source_batches"), "source_batches")
+    merged_candidates: list[dict[str, Any]] = []
+    merged_attempts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        merged_attempts.extend(batch.get("source_attempts", []) if isinstance(batch.get("source_attempts"), list) else [])
+        for candidate in batch.get("lead_candidates", []) if isinstance(batch.get("lead_candidates"), list) else []:
+            if not isinstance(candidate, dict):
+                continue
+            dedupe_key = str(candidate.get("linkedin_url") or candidate.get("source_url") or candidate.get("name") or "").strip().lower()
+            if not dedupe_key or dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            merged_candidates.append(candidate)
+    if not merged_candidates:
+        raise P1WorkerInputError("source batch merge produced no lead candidates")
+    return {"lead_candidates": merged_candidates, "source_attempts": merged_attempts, "source_batches": batches}
 
 
 def normalize_leads(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -143,18 +196,24 @@ def normalize_leads(work_order: dict[str, Any], context: dict[str, Any]) -> dict
             rejected.append({"reason": "not_a_single_human", "candidate": candidate})
             continue
         url = _clean_url(str(candidate.get("linkedin_url") or candidate.get("source_url") or ""))
-        dedupe_key = (url or name).lower()
+        if url and 'linkedin.com/company/' in url:
+            rejected.append({"reason": "no_person_linkedin", "candidate": candidate})
+            continue
+        person_url = url if LINKEDIN_PERSON_RE.match(url) else ""
+        dedupe_key = (person_url or name).lower()
         if dedupe_key in seen:
             rejected.append({"reason": "duplicate", "candidate": candidate})
             continue
         seen.add(dedupe_key)
         normalized.append(
             {
+                "lead_id": _deterministic_lead_id(name, person_url, _clean_url(str(candidate.get("source_url") or url))),
                 "name": name,
                 "headline": str(candidate.get("headline") or "Angel investor / operator").strip(),
-                "linkedin_url": url if "linkedin.com/in/" in url else "",
+                "linkedin_url": person_url,
                 "source_url": _clean_url(str(candidate.get("source_url") or url)),
                 "source": str(candidate.get("source") or "unknown"),
+                "identity_status": IDENTITY_STATUS_VERIFIED if person_url else IDENTITY_STATUS_REVIEW,
                 "evidence": candidate.get("evidence") if isinstance(candidate.get("evidence"), list) else [],
             }
         )
@@ -205,8 +264,10 @@ def write_dossiers(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
             {
                 "identity": {
                     "name": item["name"],
+                    "lead_id": item.get("lead_id"),
                     "linkedin_url": item.get("linkedin_url", ""),
                     "alternative_urls": [item.get("source_url")] if item.get("source_url") and item.get("source_url") != item.get("linkedin_url") else [],
+                    "identity_status": item.get("identity_status"),
                 },
                 "historical_context": {
                     "sources_found": [item.get("source", "runtime_source")],
@@ -328,10 +389,19 @@ Constraints:
         evidence_urls = response.get("evidence_urls")
         if not isinstance(evidence_urls, list) or not evidence_urls:
             evidence_urls = dossier.get("live_intelligence", {}).get("exa_raw_urls", [])[:3]
+        lead_id = dossier.get("identity", {}).get("lead_id") or _deterministic_lead_id(dossier["identity"]["name"], dossier["identity"].get("linkedin_url", ""), evidence_urls[0] if evidence_urls else "")
+        run_id = str(work_order.get("run_id") or "")
         draft = {
+            "run_id": run_id,
+            "lead_id": lead_id,
+            "idempotency_key": _draft_idempotency_key(run_id, lead_id),
+            "runtime_source": "p1-operator-outreach",
             "name": dossier["identity"]["name"],
             "linkedin_url": dossier["identity"].get("linkedin_url", ""),
-            "current_role": gateway.get("current_role_verified", ""),
+            "identity_status": dossier["identity"].get("identity_status", IDENTITY_STATUS_REVIEW),
+            "current_role": _normalize_current_role(gateway.get("current_role_verified", "")),
+            "gateway_decision": gateway.get("decision", "awaiting_outreach"),
+            "triage_score": dossier.get("historical_context", {}).get("v2_triage_score"),
             "archetype": response.get("archetype"),
             "text": _ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft")),
             "evidence_urls": evidence_urls,
@@ -354,12 +424,15 @@ def judge_outreach_quality(work_order: dict[str, Any], context: dict[str, Any]) 
         "no_publish_external_action": all(item.get("publish") is not True and item.get("status") == "draft" for item in drafts),
         "word_count_under_110": all(len(str(item.get("text", "")).split()) <= 110 for item in drafts),
         "mentions_abrt_or_limpid": all(("abrt" in str(item.get("text", "")).lower()) or ("limpid" in str(item.get("text", "")).lower()) for item in drafts),
+        "has_clear_cta": all(_has_clear_cta(str(item.get("text", ""))) for item in drafts),
+        "no_placeholder_signoff": all(not _has_placeholder_signoff(str(item.get("text", ""))) for item in drafts),
+        "all_have_idempotency_key": all(str(item.get("idempotency_key") or "").strip() for item in drafts),
     }
     for key, passed in checks.items():
         if not passed:
             reasons.append(key)
     score = sum(1 for passed in checks.values() if passed) / len(checks)
-    return {"passed": all(checks.values()), "score": score, "reasons": reasons, "checks": checks, "approval_package": {"outreach_drafts": drafts, "approval_required": True}}
+    return {"passed": all(checks.values()), "score": score, "reasons": reasons, "checks": checks, "approval_package": {"outreach_drafts": drafts, "approval_required": True, "idempotency_keys": [item.get("idempotency_key") for item in drafts], "rows": len(drafts)}}
 
 
 def sync_google_sheets(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -368,32 +441,74 @@ def sync_google_sheets(work_order: dict[str, Any], context: dict[str, Any]) -> d
     spreadsheet_id = str(work_order["inputs"].get("spreadsheet_id") or os.environ.get("P1_GOOGLE_SHEET_ID") or "").strip()
     if not spreadsheet_id:
         raise P1WorkerInputError("missing required spreadsheet_id or P1_GOOGLE_SHEET_ID")
+    tab_name = str(work_order["inputs"].get("google_sheet_tab") or GOOGLE_SHEET_DEFAULT_TAB).strip()
+    if not tab_name:
+        raise P1WorkerInputError("google_sheet_tab must be a non-empty string")
     service_account_path = str(work_order["inputs"].get("google_service_account_path") or os.environ.get("GOOGLE_SA_PATH") or "").strip()
     if not service_account_path:
         raise P1WorkerInputError("missing required google_service_account_path or GOOGLE_SA_PATH")
     drafts = require_list(work_order["inputs"].get("approval_package", {}).get("outreach_drafts") or work_order["inputs"].get("outreach_drafts"), "outreach_drafts")
     token = _google_access_token(service_account_path)
-    range_name = quote("04_THE_FORGE_FINAL!A:J", safe="")
-    values = [
-        [
+    created_tab = _ensure_google_sheet_tab(spreadsheet_id, tab_name, token)
+    _ensure_google_sheet_headers(spreadsheet_id, tab_name, token)
+    existing_rows = _read_google_sheet_values(spreadsheet_id, f"{tab_name}!A:O", token)
+    header = existing_rows[0] if existing_rows else GOOGLE_SHEET_HEADERS
+    run_idx = header.index("run_id") if "run_id" in header else 0
+    lead_idx = header.index("lead_id") if "lead_id" in header else 1
+    existing_pairs = {
+        (str(row[run_idx]).strip(), str(row[lead_idx]).strip())
+        for row in existing_rows[1:]
+        if len(row) > max(run_idx, lead_idx)
+    }
+    values = []
+    skipped = 0
+    synced_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    for draft in drafts:
+        run_id = str(draft.get("run_id") or work_order.get("run_id") or "").strip()
+        lead_id = str(draft.get("lead_id") or "").strip()
+        if not run_id or not lead_id:
+            raise P1WorkerInputError("every outreach draft must include run_id and lead_id for idempotent sheet sync")
+        pair = (run_id, lead_id)
+        if pair in existing_pairs:
+            skipped += 1
+            continue
+        values.append([
+            run_id,
+            lead_id,
             draft.get("name", ""),
             draft.get("linkedin_url", ""),
-            "RUNTIME_CONFIRMED",
-            draft.get("current_role", ""),
+            draft.get("identity_status", IDENTITY_STATUS_REVIEW),
+            draft.get("current_role", "unknown"),
+            draft.get("gateway_decision", "awaiting_outreach"),
+            draft.get("triage_score", ""),
+            draft.get("archetype", ""),
+            draft.get("status", "draft"),
             draft.get("text", ""),
-            "",
-            "",
-            "",
-            "Drafted",
             "\n".join(str(url) for url in draft.get("evidence_urls", [])),
-        ]
-        for draft in drafts
-    ]
-    url = f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range_name}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS"
-    payload = _request_json(url, method="POST", token=token, body={"values": values})
+            json.dumps(draft.get("claims", []), ensure_ascii=False),
+            draft.get("runtime_source", "p1-operator-outreach"),
+            synced_at,
+        ])
+        existing_pairs.add(pair)
+    updated_range = None
+    if values:
+        payload = _request_json(
+            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{quote(f'{tab_name}!A:O', safe='')}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+            method="POST",
+            token=token,
+            body={"values": values},
+        )
+        updated_range = payload.get("updates", {}).get("updatedRange")
     return {
-        "sync_result": {"spreadsheet_id": spreadsheet_id, "updated_range": payload.get("updates", {}).get("updatedRange"), "row_count": len(values)},
-        "external_actions": [{"type": "google_sheets_append", "spreadsheet_id": spreadsheet_id, "row_count": len(values)}],
+        "sync_result": {
+            "spreadsheet_id": spreadsheet_id,
+            "tab_name": tab_name,
+            "updated_range": updated_range,
+            "row_count": len(values),
+            "skipped_duplicate_count": skipped,
+            "created_tab": created_tab,
+        },
+        "external_actions": [{"type": "google_sheets_append", "spreadsheet_id": spreadsheet_id, "tab_name": tab_name, "row_count": len(values)}],
     }
 
 
@@ -412,15 +527,26 @@ def sync_data_lake(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
         raise P1WorkerInputError(f"data_lake_dossier_path is not a directory: {root}")
     dossiers = require_list(work_order["inputs"].get("p1_dossiers"), "p1_dossiers")
     written = []
+    skipped = 0
+    updated = 0
     for dossier in dossiers:
         canonical = _canonical_dossier({**dossier, "runtime_source": "p1-operator-outreach"})
         payload = {**canonical, "runtime_source": "p1-operator-outreach", "updated_at": time.strftime("%Y-%m-%d %H:%M:%S")}
-        name = payload["identity"]["name"]
-        path = root / f"{_slug(name)}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        written.append({"name": name, "path": str(path)})
+        identity = payload["identity"]
+        lead_id = str(identity.get("lead_id") or _deterministic_lead_id(identity["name"], identity.get("linkedin_url", ""), ""))
+        path = root / f"{lead_id}.json"
+        body = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            if existing == body:
+                skipped += 1
+                written.append({"name": identity["name"], "path": str(path), "status": "skipped"})
+                continue
+            updated += 1
+        path.write_text(body, encoding="utf-8")
+        written.append({"name": identity["name"], "lead_id": lead_id, "path": str(path), "status": "written"})
     return {
-        "sync_result": {"target_path": str(root), "written_count": len(written), "files": written},
+        "sync_result": {"target_path": str(root), "written_count": len([item for item in written if item["status"] == "written"]), "updated_count": updated, "skipped_duplicate_count": skipped, "files": written},
         "external_actions": [{"type": "data_lake_json_write", "target_path": str(root), "written_count": len(written)}],
     }
 
@@ -448,10 +574,18 @@ def sync_outreach_master(work_order: dict[str, Any], context: dict[str, Any]) ->
     existing_drafts = existing.get("drafts")
     if not isinstance(existing_drafts, list):
         raise P1WorkerInputError("Outreach Master JSON object must contain a drafts array")
+    existing_pairs = {(str(item.get("run_id") or ""), str(item.get("lead_id") or "")) for item in existing_drafts if isinstance(item, dict)}
     additions = []
+    skipped = 0
     for draft in drafts:
         if not isinstance(draft, dict):
             raise P1WorkerInputError("outreach_drafts must contain objects")
+        pair = (str(draft.get("run_id") or ""), str(draft.get("lead_id") or ""))
+        if not pair[0] or not pair[1]:
+            raise P1WorkerInputError("Outreach Master sync requires run_id and lead_id on each draft")
+        if pair in existing_pairs:
+            skipped += 1
+            continue
         item = {
             **draft,
             "runtime_source": "p1-operator-outreach",
@@ -460,16 +594,18 @@ def sync_outreach_master(work_order: dict[str, Any], context: dict[str, Any]) ->
             "publish": False,
         }
         additions.append(item)
+        existing_pairs.add(pair)
     existing["drafts"] = [*existing_drafts, *additions]
     master_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return {
-        "sync_result": {"path": str(master_path), "written_count": len(additions), "total_drafts": len(existing["drafts"])},
+        "sync_result": {"path": str(master_path), "written_count": len(additions), "total_drafts": len(existing["drafts"]), "skipped_duplicate_count": skipped},
         "external_actions": [{"type": "outreach_master_json_append", "path": str(master_path), "written_count": len(additions)}],
     }
 
 
 def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     inputs = work_order["inputs"]
+    source_batches = inputs.get("source_batches", [])
     lead_candidates = inputs.get("lead_candidates", [])
     normalized_leads = inputs.get("normalized_leads", [])
     rejected_leads = inputs.get("rejected_leads", [])
@@ -479,28 +615,51 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
     outreach_drafts = inputs.get("outreach_drafts", [])
     quality_eval = inputs.get("quality_eval", {})
     sync_results = inputs.get("external_sync_results", {})
+    task_timings = inputs.get("task_timings", [])
     if not isinstance(sync_results, dict):
         sync_results = {}
     triage_qualified = [
-        item
-        for item in triage_scores
+        item for item in triage_scores
         if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is True
     ]
     triage_rejected = [
-        item
-        for item in triage_scores
+        item for item in triage_scores
         if isinstance(item, dict) and isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is not True
     ]
     gateway_approved = [
-        item
-        for item in gateway_evaluations
+        item for item in gateway_evaluations
         if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") == "awaiting_outreach"
     ]
     gateway_rejected = [
-        item
-        for item in gateway_evaluations
+        item for item in gateway_evaluations
         if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") != "awaiting_outreach"
     ]
+    rejection_buckets: dict[str, int] = {}
+    for item in rejected_leads if isinstance(rejected_leads, list) else []:
+        if isinstance(item, dict):
+            reason = str(item.get("reason") or "unknown")
+            rejection_buckets[reason] = rejection_buckets.get(reason, 0) + 1
+    source_counts: dict[str, int] = {}
+    cache_hits = 0
+    for batch in source_batches if isinstance(source_batches, list) else []:
+        if not isinstance(batch, dict):
+            continue
+        source = str(batch.get("source") or "unknown")
+        source_counts[source] = len(batch.get("lead_candidates", []) if isinstance(batch.get("lead_candidates"), list) else [])
+        for attempt in batch.get("source_attempts", []) if isinstance(batch.get("source_attempts"), list) else []:
+            if isinstance(attempt, dict) and attempt.get("cache_hit") is True:
+                cache_hits += 1
+    duration_by_worker: dict[str, int] = {}
+    for item in task_timings if isinstance(task_timings, list) else []:
+        if not isinstance(item, dict):
+            continue
+        worker = str(item.get("worker_profile") or item.get("task_type") or "unknown")
+        duration_by_worker[worker] = duration_by_worker.get(worker, 0) + int(item.get("duration_ms") or 0)
+    source_duration_ms = sum(duration_by_worker.get(worker, 0) for worker in ("p1-source-collector", "p1-source-merger", "p1-lead-normalizer"))
+    triage_duration_ms = sum(duration_by_worker.get(worker, 0) for worker in ("p1-triage-scorer", "p1-dossier-writer"))
+    gateway_duration_ms = sum(duration_by_worker.get(worker, 0) for worker in ("p1-live-intel-gatherer", "p1-gateway-evaluator", "p1-forge-queue-builder"))
+    drafting_duration_ms = sum(duration_by_worker.get(worker, 0) for worker in ("p1-outreach-draft-writer", "p1-outreach-quality-judge"))
+    sync_duration_ms = sum(duration_by_worker.get(worker, 0) for worker in ("p1-data-lake-syncer", "p1-google-sheets-syncer", "p1-outreach-master-syncer"))
     metrics = {
         "raw_leads": len(lead_candidates) if isinstance(lead_candidates, list) else 0,
         "normalized_leads": len(normalized_leads) if isinstance(normalized_leads, list) else 0,
@@ -513,11 +672,80 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
         "drafted": len(outreach_drafts) if isinstance(outreach_drafts, list) else 0,
         "eval_passed": bool(quality_eval.get("passed")) if isinstance(quality_eval, dict) else False,
         "sheet_written": int((sync_results.get("google_sheets") or {}).get("row_count") or 0),
+        "sheet_duplicate_skipped": int((sync_results.get("google_sheets") or {}).get("skipped_duplicate_count") or 0),
         "data_lake_written": int((sync_results.get("data_lake") or {}).get("written_count") or 0),
+        "data_lake_duplicate_skipped": int((sync_results.get("data_lake") or {}).get("skipped_duplicate_count") or 0),
         "outreach_master_written": int((sync_results.get("outreach_master") or {}).get("written_count") or 0),
+        "outreach_master_duplicate_skipped": int((sync_results.get("outreach_master") or {}).get("skipped_duplicate_count") or 0),
+        "rejection_buckets": rejection_buckets,
+        "source_counts": source_counts,
+        "provider_cache_hits": cache_hits,
+        "duration_by_worker_ms": duration_by_worker,
+        "total_duration_ms": sum(duration_by_worker.values()),
+        "source_duration_ms": source_duration_ms,
+        "triage_duration_ms": triage_duration_ms,
+        "gateway_duration_ms": gateway_duration_ms,
+        "drafting_duration_ms": drafting_duration_ms,
+        "sync_duration_ms": sync_duration_ms,
     }
     return {"metrics": metrics, "summary": _metrics_summary(metrics)}
 
+
+
+def _deterministic_lead_id(name: str, linkedin_url: str, source_url: str) -> str:
+    raw = "|".join(part.strip().lower() for part in [name, linkedin_url, source_url] if part)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _draft_idempotency_key(run_id: str, lead_id: str) -> str:
+    return f"{run_id}:{lead_id}"
+
+
+def _normalize_current_role(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "unknown"
+    if text in {"true", "yes", "current", "verified"}:
+        return "yes"
+    if text in {"false", "no", "former"}:
+        return "no"
+    return text
+
+
+def _ensure_google_sheet_tab(spreadsheet_id: str, tab_name: str, token: str) -> bool:
+    metadata = _request_json(f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets.properties", token=token)
+    sheets = metadata.get("sheets", []) if isinstance(metadata, dict) else []
+    existing = {str(item.get("properties", {}).get("title") or "") for item in sheets if isinstance(item, dict)}
+    if tab_name in existing:
+        return False
+    _request_json(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate",
+        method="POST",
+        token=token,
+        body={"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+    )
+    return True
+
+
+def _read_google_sheet_values(spreadsheet_id: str, range_name: str, token: str) -> list[list[str]]:
+    payload = _request_json(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{quote(range_name, safe='')}",
+        token=token,
+    )
+    values = payload.get("values", []) if isinstance(payload, dict) else []
+    return values if isinstance(values, list) else []
+
+
+def _ensure_google_sheet_headers(spreadsheet_id: str, tab_name: str, token: str) -> None:
+    existing = _read_google_sheet_values(spreadsheet_id, f"{tab_name}!1:1", token)
+    if existing and existing[0] == GOOGLE_SHEET_HEADERS:
+        return
+    _request_json(
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{quote(f'{tab_name}!1:1', safe='')}:update?valueInputOption=RAW",
+        method="PUT",
+        token=token,
+        body={"values": [GOOGLE_SHEET_HEADERS]},
+    )
 
 def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> dict[str, Any]:
     identity = raw.get("identity", {}) if isinstance(raw.get("identity"), dict) else {}
@@ -527,6 +755,7 @@ def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> d
     return {
         "identity": {
             "name": require_text(identity.get("name"), "identity.name"),
+            "lead_id": identity.get("lead_id"),
             "linkedin_url": _clean_url(str(identity.get("linkedin_url") or "")),
             "alternative_urls": identity.get("alternative_urls") if isinstance(identity.get("alternative_urls"), list) else [],
             "identity_status": identity.get("identity_status"),
@@ -566,6 +795,22 @@ def _exa_people_search(query: str, limit: int) -> list[dict[str, Any]]:
             continue
         items.append({"name": _name_from_title(title), "headline": title, "source_url": url, "source": "exa", "evidence": [text or title]})
     return items
+
+
+def _source_attempt_payload(source: str, request: dict[str, Any], result_count: int, cache: dict[str, Any], *, query: str | None = None, actor_id: str | None = None) -> dict[str, Any]:
+    payload = {
+        "source": source,
+        "provider": source,
+        "result_count": result_count,
+        "attempt_count": 1,
+        "retry_count": 0,
+        "query_hash": _query_hash(request),
+        "safe_query_summary": _safe_query_summary(query or request),
+        **cache,
+    }
+    if actor_id:
+        payload["actor_id"] = actor_id
+    return payload
 
 
 def _with_provider_cache(inputs: dict[str, Any], source: str, request: dict[str, Any], fetch: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -616,6 +861,21 @@ def _provider_cache_ttl_seconds(inputs: dict[str, Any]) -> int:
 def _provider_cache_key(source: str, request: dict[str, Any]) -> str:
     payload = json.dumps({"version": P1_PROVIDER_CACHE_VERSION, "source": source, "request": request}, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _query_hash(payload: dict[str, Any] | str) -> str:
+    raw = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def _safe_query_summary(payload: dict[str, Any] | str) -> str:
+    if isinstance(payload, str):
+        return payload[:120]
+    if "query" in payload:
+        return str(payload.get("query") or "")[:120]
+    if "actor_id" in payload:
+        return f"actor={payload.get('actor_id')} limit={payload.get('limit')}"
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)[:120]
 
 
 def _provider_cache_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
@@ -940,6 +1200,25 @@ def _ensure_abrt_or_limpid_mention(text: str) -> str:
     return f"{text.rstrip()} At ABRT, we're comparing notes with operators building this kind of AI-native edge."
 
 
+def _has_clear_cta(text: str) -> bool:
+    lowered = text.lower()
+    cta_markers = (
+        'call next week',
+        '30-minute call',
+        '30 minute call',
+        'quick call',
+        'resonates',
+        'compare notes',
+        'chat next week',
+    )
+    return any(marker in lowered for marker in cta_markers)
+
+
+def _has_placeholder_signoff(text: str) -> bool:
+    stripped = text.strip().lower()
+    return stripped.endswith('best,') or stripped.endswith('thanks,') or stripped.endswith('regards,')
+
+
 def _claims_have_sources(draft: dict[str, Any]) -> bool:
     claims = draft.get("claims")
     if not isinstance(claims, list) or not claims:
@@ -954,6 +1233,7 @@ HANDLERS = {
     "p1-dossier-reader": read_existing_dossiers,
     "p1-source-collector": collect_sources,
     "p1-lead-normalizer": normalize_leads,
+    "p1-source-merger": merge_source_batches,
     "p1-triage-scorer": score_triage,
     "p1-dossier-writer": write_dossiers,
     "p1-live-intel-gatherer": gather_live_intelligence,
@@ -968,6 +1248,7 @@ HANDLERS = {
     "read_existing_dossiers": read_existing_dossiers,
     "collect_sources": collect_sources,
     "normalize_leads": normalize_leads,
+    "merge_source_batches": merge_source_batches,
     "score_triage": score_triage,
     "write_dossiers": write_dossiers,
     "gather_live_intelligence": gather_live_intelligence,

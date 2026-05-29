@@ -12,6 +12,7 @@ import structlog
 import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from l2l3_protocol.api.state import app_state, build_memory_router
@@ -69,6 +70,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="L2-L3 Active Inference Runtime", version="0.1.0", lifespan=lifespan)
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.middleware("http")
 async def request_logging(request: Request, call_next) -> Response:
@@ -115,6 +124,55 @@ async def runtime_capabilities() -> dict[str, Any]:
             'mem0_enabled': settings.mem0_enabled,
             'mem0_vector_provider': settings.mem0_vector_provider,
         },
+    }
+
+
+def _build_run_summary(run: dict[str, Any]) -> dict[str, Any]:
+    artifacts = run.get("artifacts", []) if isinstance(run.get("artifacts"), list) else []
+    tasks = run.get("tasks", []) if isinstance(run.get("tasks"), list) else []
+    evals = run.get("evals", []) if isinstance(run.get("evals"), list) else []
+    artifact_counts: dict[str, int] = {}
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("artifact_type") or "unknown")
+        artifact_counts[artifact_type] = artifact_counts.get(artifact_type, 0) + 1
+    task_status_counts: dict[str, int] = {}
+    for task in tasks:
+        status = str(task.get("status") or "unknown")
+        task_status_counts[status] = task_status_counts.get(status, 0) + 1
+    output = run.get("output", {}) if isinstance(run.get("output"), dict) else {}
+    latest_approval_preview = next(
+        (item.get("payload", {}) for item in reversed(artifacts) if item.get("artifact_type") == "p1_external_action_preview"),
+        output.get("approval_preview", {}),
+    )
+    latest_eval_results: dict[str, Any] = {}
+    for item in evals:
+        eval_key = str(item.get("eval_key") or item.get("id") or "latest")
+        latest_eval_results[eval_key] = item
+    pending_actions: list[dict[str, Any]] = []
+    if run.get("status") == RunStatus.WAITING_APPROVAL.value:
+        pending_actions.append({"type": "approval", "summary": "Run is waiting for human approval before external actions."})
+    if run.get("status") == RunStatus.WAITING_USER.value:
+        pending_actions.append({"type": "user_input", "summary": "Run is waiting for user input."})
+    return {
+        "id": run.get("id"),
+        "status": run.get("status"),
+        "playbook_key": run.get("playbook_key"),
+        "goal": run.get("goal"),
+        "latest_metrics": output.get("metrics", {}),
+        "latest_diagnosis": run.get("diagnosis"),
+        "latest_approval_preview": latest_approval_preview,
+        "external_sync_status": {
+            "google_sheets": output.get("external_sync_result"),
+            "outreach_master": output.get("outreach_master_sync_result"),
+            "requested": {
+                "google_sheets": bool(output.get("external_sync_requested")),
+                "outreach_master": bool(output.get("outreach_master_sync_requested")),
+            },
+        },
+        "artifact_counts": artifact_counts,
+        "task_status_counts": task_status_counts,
+        "latest_eval_results": latest_eval_results,
+        "pending_actions": pending_actions,
     }
 
 
@@ -165,6 +223,14 @@ async def get_run(run_id: UUID, session: AsyncSession = Depends(get_session)) ->
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
     return run
+
+
+@app.get("/runs/{run_id}/summary")
+async def get_run_summary(run_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    run = await WorkingMemoryStore(session).get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return _build_run_summary(run)
 
 
 @app.post("/runs/{run_id}/messages")

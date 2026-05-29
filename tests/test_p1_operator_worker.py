@@ -53,6 +53,9 @@ def test_p1_outreach_quality_requires_evidence_and_no_publish() -> None:
             "inputs": {
                 "outreach_drafts": [
                     {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
                         "name": "Adeline Lee",
                         "text": "ABRT is building Limpid around operator product DNA. Curious whether this resonates for a quick 30-minute call next week?",
                         "evidence_urls": ["https://de.linkedin.com/in/adelineleecs"],
@@ -272,6 +275,9 @@ def test_p1_source_collector_reuses_explicit_provider_cache(tmp_path: Path, monk
     assert calls["count"] == 1
     assert first["source_attempts"][0]["cache_enabled"] is True
     assert first["source_attempts"][0]["cache_hit"] is False
+    assert first["source_attempts"][0]["query_hash"]
+    assert first["source_attempts"][0]["safe_query_summary"]
+    assert first["source_attempts"][0]["attempt_count"] == 1
     assert first["lead_candidates"][0]["name"] == "Arianna Simpson"
 
     def fail_if_called(actor_id, actor_input):
@@ -307,7 +313,7 @@ def test_p1_data_lake_sync_writes_physical_dossier_files(tmp_path: Path) -> None
     )
 
     assert result["sync_result"]["written_count"] == 1
-    written = tmp_path / "arianna_simpson.json"
+    written = Path(result["sync_result"]["files"][0]["path"])
     assert written.exists()
     payload = json.loads(written.read_text(encoding="utf-8"))
     assert payload["identity"]["name"] == "Arianna Simpson"
@@ -326,6 +332,9 @@ def test_p1_outreach_master_sync_appends_drafts(tmp_path: Path) -> None:
                 "approval_package": {
                     "outreach_drafts": [
                         {
+                            "run_id": "run-1",
+                            "lead_id": "lead-1",
+                            "idempotency_key": "run-1:lead-1",
                             "name": "Arianna Simpson",
                             "linkedin_url": "https://www.linkedin.com/in/ariannasimpson",
                             "text": "Hi Arianna, ABRT is building an operator-led AI-native VC model.",
@@ -369,6 +378,21 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
                     "data_lake": {"written_count": 1},
                     "outreach_master": {"written_count": 1},
                 },
+                "task_timings": [
+                    {"worker_profile": "p1-source-collector", "duration_ms": 10},
+                    {"worker_profile": "p1-source-merger", "duration_ms": 5},
+                    {"worker_profile": "p1-lead-normalizer", "duration_ms": 7},
+                    {"worker_profile": "p1-triage-scorer", "duration_ms": 11},
+                    {"worker_profile": "p1-dossier-writer", "duration_ms": 13},
+                    {"worker_profile": "p1-live-intel-gatherer", "duration_ms": 17},
+                    {"worker_profile": "p1-gateway-evaluator", "duration_ms": 19},
+                    {"worker_profile": "p1-forge-queue-builder", "duration_ms": 23},
+                    {"worker_profile": "p1-outreach-draft-writer", "duration_ms": 29},
+                    {"worker_profile": "p1-outreach-quality-judge", "duration_ms": 31},
+                    {"worker_profile": "p1-data-lake-syncer", "duration_ms": 37},
+                    {"worker_profile": "p1-google-sheets-syncer", "duration_ms": 41},
+                    {"worker_profile": "p1-outreach-master-syncer", "duration_ms": 43},
+                ],
             }
         },
         {},
@@ -386,6 +410,60 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
         "drafted": 1,
         "eval_passed": True,
         "sheet_written": 1,
+        "sheet_duplicate_skipped": 0,
         "data_lake_written": 1,
+        "data_lake_duplicate_skipped": 0,
         "outreach_master_written": 1,
+        "outreach_master_duplicate_skipped": 0,
+        "rejection_buckets": {"unknown": 1},
+        "source_counts": {},
+        "provider_cache_hits": 0,
+        "duration_by_worker_ms": {
+            "p1-source-collector": 10,
+            "p1-source-merger": 5,
+            "p1-lead-normalizer": 7,
+            "p1-triage-scorer": 11,
+            "p1-dossier-writer": 13,
+            "p1-live-intel-gatherer": 17,
+            "p1-gateway-evaluator": 19,
+            "p1-forge-queue-builder": 23,
+            "p1-outreach-draft-writer": 29,
+            "p1-outreach-quality-judge": 31,
+            "p1-data-lake-syncer": 37,
+            "p1-google-sheets-syncer": 41,
+            "p1-outreach-master-syncer": 43,
+        },
+        "total_duration_ms": 286,
+        "source_duration_ms": 22,
+        "triage_duration_ms": 24,
+        "gateway_duration_ms": 59,
+        "drafting_duration_ms": 60,
+        "sync_duration_ms": 121,
     }
+
+
+def test_p1_outreach_quality_rejects_missing_cta_and_placeholder_signoff() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-2",
+                        "lead_id": "lead-2",
+                        "idempotency_key": "run-2:lead-2",
+                        "name": "Arianna Simpson",
+                        "text": "ABRT is building Limpid around operator product DNA. Best,",
+                        "evidence_urls": ["https://www.linkedin.com/in/ariannasimpson"],
+                        "claims": [{"text": "Arianna is an investor.", "source_url": "https://www.linkedin.com/in/ariannasimpson"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "has_clear_cta" in result["reasons"]
+    assert "no_placeholder_signoff" in result["reasons"]

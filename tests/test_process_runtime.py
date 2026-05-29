@@ -381,8 +381,8 @@ async def test_p1_workflow_reuses_existing_real_artifact_checkpoint(monkeypatch:
         Artifact(
             run_id=run.id,
             task_id=stale_failed_task.id,
-            artifact_type=ArtifactType.P1_LEAD_CANDIDATES,
-            payload={"lead_candidates": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
+            artifact_type=ArtifactType.P1_SOURCE_BATCH,
+            payload={"source": "apify_linkedin", "lead_candidates": [{"lead_id": "lead-1", "name": "Ava Operator"}], "source_attempts": [{"source": "apify_linkedin", "result_count": 1}]},
         )
     )
     runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
@@ -392,6 +392,8 @@ async def test_p1_workflow_reuses_existing_real_artifact_checkpoint(monkeypatch:
         executed_workers.append(task["worker_profile"])
         artifact_type = ArtifactType(task["artifact_type"])
         payloads = {
+            ArtifactType.P1_SOURCE_BATCH: {"source": "apify_linkedin", "lead_candidates": [{"lead_id": "lead-1", "name": "Ava Operator"}], "source_attempts": [{"source": "apify_linkedin", "result_count": 1}]},
+            ArtifactType.P1_LEAD_CANDIDATES: {"lead_candidates": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
             ArtifactType.P1_NORMALIZED_LEADS: {"normalized_leads": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
             ArtifactType.P1_TRIAGE_SCORES: {"triage_scores": [{"lead_id": "lead-1", "score": 91, "qualified": True}]},
             ArtifactType.P1_DOSSIERS: {"p1_dossiers": [{"lead_id": "lead-1", "name": "Ava Operator"}]},
@@ -410,9 +412,9 @@ async def test_p1_workflow_reuses_existing_real_artifact_checkpoint(monkeypatch:
 
     assert output["status"] == "completed"
     assert "p1-source-collector" not in executed_workers
-    assert any(event["event_type"] == "p1_checkpoint_reused" for event in store.events)
-    checkpoint_event = next(event for event in store.events if event["event_type"] == "p1_checkpoint_reused")
-    assert checkpoint_event["payload"]["artifact_type"] == ArtifactType.P1_LEAD_CANDIDATES.value
+    assert any(event["event_type"] == "p1_source_batch_reused" for event in store.events)
+    checkpoint_event = next(event for event in store.events if event["event_type"] == "p1_source_batch_reused")
+    assert checkpoint_event["payload"]["artifact_type"] == ArtifactType.P1_SOURCE_BATCH.value
 
 
 @pytest.mark.asyncio
@@ -444,6 +446,7 @@ async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.Mo
         executed_workers.append(task["worker_profile"])
         artifact_type = ArtifactType(task["artifact_type"])
         payloads = {
+            ArtifactType.P1_SOURCE_BATCH: {"source": "apify_linkedin", "lead_candidates": [{"lead_id": "new-lead", "name": "New Lead"}], "source_attempts": [{"source": "apify_linkedin", "result_count": 1}]},
             ArtifactType.P1_LEAD_CANDIDATES: {"lead_candidates": [{"lead_id": "new-lead", "name": "New Lead"}]},
             ArtifactType.P1_NORMALIZED_LEADS: {"normalized_leads": [{"lead_id": "new-lead", "name": "New Lead"}]},
             ArtifactType.P1_TRIAGE_SCORES: {"triage_scores": [{"lead_id": "new-lead", "score": 88, "qualified": True}]},

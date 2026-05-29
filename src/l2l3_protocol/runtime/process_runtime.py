@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -72,16 +73,16 @@ class ProcessRuntime:
             state = await self.store.get_run(run_id)
             if state is None:
                 raise KeyError(f"run not found: {run_id}")
-            goal_discovery_output = self._goal_discovery_waiting_output(playbook, state)
-            if goal_discovery_output is not None:
-                await self.store.set_run_status(run_id, RunStatus.WAITING_USER, goal_discovery_output)
-                await self.store.add_event(run_id, "l2_message_user", goal_discovery_output)
-                break
             stop_reason = self._repair_stop_reason(state)
             if stop_reason is not None:
                 await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": stop_reason})
                 await self.store.add_event(run_id, "repair_budget_exhausted", {"reason": stop_reason})
                 await self.store.add_event(run_id, "run_failed", {"reason": stop_reason})
+                break
+            goal_discovery_output = self._goal_discovery_waiting_output(playbook, state)
+            if goal_discovery_output is not None:
+                await self.store.set_run_status(run_id, RunStatus.WAITING_USER, goal_discovery_output)
+                await self.store.add_event(run_id, "l2_message_user", goal_discovery_output)
                 break
             action = await self.supervisor.next_action(playbook, worker_profiles, state, turn)
             await self.store.add_event(run_id, "l2_action_selected", action.model_dump(mode="json"))
@@ -343,18 +344,22 @@ class ProcessRuntime:
             resolved_tools = validate_tool_policy(work_order, profile, playbook, await self._tool_specs())
             if resolved_tools:
                 work_order.allowed_tools = resolved_tools
+                await self._patch_task_work_order(work_order.id, {"allowed_tools": resolved_tools})
         except WorkOrderValidationError as exc:
             await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
             await self.store.add_event(run_id, "work_order_validation_failed", {"error": str(exc), "failure_type": exc.failure_type}, work_order.id)
             await self.store.add_event(run_id, "task_failed", {"error": str(exc), "worker_profile": work_order.worker_profile}, work_order.id)
             await self._record_failure_context(run_id, work_order.id, work_order, profile, exc.failure_type, str(exc))
             return
+        started_at = datetime.now(UTC)
         await self.store.set_task_status(work_order.id, TaskStatus.RUNNING)
+        await self._patch_task_work_order(work_order.id, {"started_at": started_at.isoformat(), "status": TaskStatus.RUNNING.value})
         state = await self._require_run(run_id)
         try:
             payload = await self.l3.run(work_order, state, profile)
         except L3WorkerExecutionError as exc:
             await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
+            await self._finalize_task_timing(work_order.id, started_at)
             await self.store.add_event(run_id, "task_failed", {"error": str(exc), "worker_profile": work_order.worker_profile}, work_order.id)
             await self._record_failure_context(run_id, work_order.id, work_order, profile, self._classify_worker_error(exc), str(exc))
             return
@@ -362,22 +367,77 @@ class ProcessRuntime:
             validate_work_order_output(work_order, payload)
         except WorkOrderValidationError as exc:
             await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
+            await self._finalize_task_timing(work_order.id, started_at)
             await self.store.add_event(run_id, "work_order_output_validation_failed", {"error": str(exc), "failure_type": exc.failure_type}, work_order.id)
             await self._record_failure_context(run_id, work_order.id, work_order, profile, exc.failure_type, str(exc))
             return
         await self.store.set_task_status(work_order.id, TaskStatus.COMPLETED)
+        await self._finalize_task_timing(work_order.id, started_at)
         artifact_type = self._artifact_type_for_task(task, work_order, payload)
         if work_order.worker_profile == "approval-adapter":
             artifact_type = ArtifactType.APPROVAL_DECISION
         artifact = Artifact(run_id=run_id, task_id=work_order.id, artifact_type=artifact_type, payload=payload)
         await self.store.add_artifact(artifact)
         await self.store.add_event(run_id, "task_completed", {"artifact_type": artifact_type.value}, work_order.id)
+        await self._emit_task_observability_events(run_id, work_order.id, work_order.worker_profile, artifact_type, payload)
         if work_order.grader_spec:
             eval_result = await self._record_eval(run_id, work_order.id, work_order, payload)
             if not eval_result.passed:
                 await self.store.set_task_status(work_order.id, TaskStatus.FAILED)
                 await self.store.add_event(run_id, "task_eval_failed", eval_result.model_dump(mode="json"), work_order.id)
                 await self._record_failure_context(run_id, work_order.id, work_order, profile, "eval_failed", "eval did not meet threshold", eval_result)
+
+    async def _patch_task_work_order(self, task_id: UUID, patch: dict[str, Any]) -> None:
+        patcher = getattr(self.store, "patch_task_work_order", None)
+        if callable(patcher):
+            await patcher(task_id, patch)
+
+    async def _finalize_task_timing(self, task_id: UUID, started_at: datetime) -> None:
+        completed_at = datetime.now(UTC)
+        duration_ms = max(0, int((completed_at - started_at).total_seconds() * 1000))
+        await self._patch_task_work_order(task_id, {
+            "completed_at": completed_at.isoformat(),
+            "duration_ms": duration_ms,
+        })
+
+    async def _emit_task_observability_events(
+        self,
+        run_id: UUID,
+        task_id: UUID,
+        worker_profile: str,
+        artifact_type: ArtifactType,
+        payload: dict[str, Any],
+    ) -> None:
+        attempts = payload.get("source_attempts") if isinstance(payload, dict) else None
+        if isinstance(attempts, list):
+            for attempt in attempts:
+                if not isinstance(attempt, dict):
+                    continue
+                await self.store.add_event(
+                    run_id,
+                    "provider_call",
+                    {
+                        "provider": attempt.get("source") or attempt.get("provider"),
+                        "worker_profile": worker_profile,
+                        "cache_hit": bool(attempt.get("cache_hit")),
+                        "cache_enabled": bool(attempt.get("cache_enabled")),
+                        "result_count": attempt.get("result_count"),
+                        "query": attempt.get("query"),
+                    },
+                    task_id,
+                )
+        sync_result = payload.get("sync_result") if isinstance(payload, dict) else None
+        if isinstance(sync_result, dict):
+            skipped = int(sync_result.get("skipped_duplicate_count") or 0)
+            if skipped > 0:
+                event_type_map = {
+                    ArtifactType.P1_EXTERNAL_SYNC_RESULT: "p1_external_sync_duplicate_skipped",
+                    ArtifactType.P1_OUTREACH_MASTER_SYNC_RESULT: "p1_outreach_master_duplicate_skipped",
+                    ArtifactType.P1_DATA_LAKE_SYNC_RESULT: "p1_data_lake_duplicate_skipped",
+                }
+                event_type = event_type_map.get(artifact_type)
+                if event_type:
+                    await self.store.add_event(run_id, event_type, {**sync_result, "worker_profile": worker_profile}, task_id)
 
     async def _run_p1_operator_workflow(
         self,
@@ -434,13 +494,58 @@ class ProcessRuntime:
             ]
             return not failed
 
+        async def run_source_batch(source: str) -> bool:
+            if not bool(inputs.get("force_rerun", False)):
+                existing_batches = self._artifact_payloads(await self._require_run(run_id), ArtifactType.P1_SOURCE_BATCH)
+                for batch in existing_batches:
+                    if str(batch.get("source") or "").lower() == source:
+                        await self.store.add_event(
+                            run_id,
+                            "p1_source_batch_reused",
+                            {"source": source, "artifact_type": ArtifactType.P1_SOURCE_BATCH.value},
+                        )
+                        return True
+            profile = worker_profiles["p1-source-collector"]
+            state_before = await self._require_run(run_id)
+            existing_task_ids = {task.get("id") for task in state_before.get("tasks", []) if isinstance(task, dict)}
+            await self._execute_task(
+                run_id,
+                {
+                    "task_type": "collect_source_batch",
+                    "worker_profile": "p1-source-collector",
+                    "goal": f"Collect real P1 leads from source={source}",
+                    "inputs": {**inputs, "sources": [source], "source": source},
+                    "artifact_type": ArtifactType.P1_SOURCE_BATCH.value,
+                    "allowed_tools": profile.get("allowed_tools", []),
+                },
+                profile,
+            )
+            latest = await self._require_run(run_id)
+            failed = [
+                task
+                for task in latest.get("tasks", [])
+                if task.get("id") not in existing_task_ids
+                and task.get("worker_profile") == "p1-source-collector"
+                and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+            ]
+            return not failed
+
         if mode in {"existing_dossiers", "outreach_only"}:
             if not await run_task("p1-dossier-reader", "read_existing_dossiers", inputs, ArtifactType.P1_DOSSIERS):
                 await self._fail_p1_if_needed(run_id, "p1 existing dossier read failed")
                 return
         elif mode in {"full_pipeline", "source_only"}:
-            if not await run_task("p1-source-collector", "collect_sources", inputs, ArtifactType.P1_LEAD_CANDIDATES):
-                await self._fail_p1_if_needed(run_id, "p1 source collection failed")
+            sources = [str(item).strip().lower() for item in inputs.get("sources", []) if str(item).strip()]
+            if not sources:
+                await self._fail_p1_if_needed(run_id, "p1 source collection requires a non-empty sources list")
+                return
+            for source in sources:
+                if not await run_source_batch(source):
+                    await self._fail_p1_if_needed(run_id, f"p1 source collection failed for source={source}")
+                    return
+            source_batches = self._artifact_payloads(await self._require_run(run_id), ArtifactType.P1_SOURCE_BATCH)
+            if not await run_task("p1-source-merger", "merge_source_batches", {"source_batches": source_batches}, ArtifactType.P1_LEAD_CANDIDATES):
+                await self._fail_p1_if_needed(run_id, "p1 source merge failed")
                 return
             candidates = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_LEAD_CANDIDATES)
             if not await run_task("p1-lead-normalizer", "normalize_leads", {"lead_candidates": candidates.get("lead_candidates", [])}, ArtifactType.P1_NORMALIZED_LEADS):
@@ -492,9 +597,21 @@ class ProcessRuntime:
         approval_package = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE)
         allow_sheet_write = bool(inputs.get("allow_google_sheet_write", False))
         allow_outreach_master_write = bool(inputs.get("allow_outreach_master_write", False))
+        approval_preview = self._build_p1_approval_preview(
+            run_id=run_id,
+            inputs=inputs,
+            approval_package=approval_package,
+            dossiers=dossiers.get("p1_dossiers", []),
+            allow_sheet_write=allow_sheet_write,
+            allow_outreach_master_write=allow_outreach_master_write,
+            allow_data_lake_write=bool(inputs.get("allow_data_lake_write", False)),
+        )
+        await self.store.add_artifact(Artifact(run_id=run_id, artifact_type=ArtifactType.P1_EXTERNAL_ACTION_PREVIEW, payload=approval_preview))
         approval_required = self._requires_approval(await self._require_run(run_id))
         external_sync_performed = False
         outreach_master_sync_performed = False
+        sheet_sync_result: dict[str, Any] | None = None
+        outreach_master_sync_result: dict[str, Any] | None = None
         if allow_sheet_write and approval_required:
             await self.store.add_event(
                 run_id,
@@ -518,11 +635,13 @@ class ProcessRuntime:
                 await self._fail_p1_if_needed(run_id, "p1 Google Sheets sync failed")
                 return
             external_sync_performed = True
+            sheet_sync_result = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_EXTERNAL_SYNC_RESULT).get("sync_result", {})
         if allow_outreach_master_write and not approval_required:
             if not await run_task("p1-outreach-master-syncer", "sync_outreach_master", {**inputs, **approval_package}, ArtifactType.P1_OUTREACH_MASTER_SYNC_RESULT):
                 await self._fail_p1_if_needed(run_id, "p1 Outreach Master sync failed")
                 return
             outreach_master_sync_performed = True
+            outreach_master_sync_result = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_MASTER_SYNC_RESULT).get("sync_result", {})
         metrics = await self._run_p1_metrics_report(run_id, worker_profiles)
         await self.store.set_run_status(
             run_id,
@@ -530,10 +649,13 @@ class ProcessRuntime:
             {
                 "mode": mode,
                 "approval_package": approval_package,
+                "approval_preview": approval_preview,
                 "external_sync_requested": allow_sheet_write,
                 "external_sync_performed": external_sync_performed,
+                "external_sync_result": sheet_sync_result,
                 "outreach_master_sync_requested": allow_outreach_master_write,
                 "outreach_master_sync_performed": outreach_master_sync_performed,
+                "outreach_master_sync_result": outreach_master_sync_result,
                 "metrics": metrics.get("metrics", metrics),
             },
         )
@@ -547,6 +669,72 @@ class ProcessRuntime:
                 return payload if isinstance(payload, dict) else {}
         return {}
 
+    @staticmethod
+    def _artifact_payloads(state: dict[str, Any], artifact_type: ArtifactType) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for artifact in state.get("artifacts", []):
+            if artifact.get("artifact_type") != artifact_type.value:
+                continue
+            payload = artifact.get("payload", {})
+            if isinstance(payload, dict):
+                payloads.append(payload)
+        return payloads
+
+    def _build_p1_approval_preview(
+        self,
+        run_id: UUID,
+        inputs: dict[str, Any],
+        approval_package: dict[str, Any],
+        dossiers: list[dict[str, Any]],
+        allow_sheet_write: bool,
+        allow_outreach_master_write: bool,
+        allow_data_lake_write: bool,
+    ) -> dict[str, Any]:
+        drafts = approval_package.get("outreach_drafts", []) if isinstance(approval_package.get("outreach_drafts"), list) else []
+        spreadsheet_id = str(inputs.get("spreadsheet_id") or "")
+        tab_name = str(inputs.get("google_sheet_tab") or "P1_L2L3_NEW_LEADS")
+        rows = []
+        for draft in drafts:
+            if not isinstance(draft, dict):
+                continue
+            rows.append({
+                "run_id": str(run_id),
+                "lead_id": draft.get("lead_id"),
+                "name": draft.get("name"),
+                "linkedin_url": draft.get("linkedin_url"),
+                "runtime_source": draft.get("runtime_source", "p1-operator-outreach"),
+                "idempotency_key": draft.get("idempotency_key"),
+            })
+        data_lake_path = str(inputs.get("data_lake_dossier_path") or inputs.get("dossier_output_path") or "")
+        data_lake_files = []
+        for dossier in dossiers if isinstance(dossiers, list) else []:
+            if not isinstance(dossier, dict):
+                continue
+            identity = dossier.get("identity", {}) if isinstance(dossier.get("identity"), dict) else {}
+            lead_id = identity.get("lead_id")
+            if lead_id:
+                data_lake_files.append({"lead_id": lead_id, "name": identity.get("name")})
+        return {
+            "approval_required": True,
+            "google_sheets": {
+                "requested": allow_sheet_write,
+                "spreadsheet_id": spreadsheet_id,
+                "tab_name": tab_name,
+                "rows": rows,
+            },
+            "outreach_master": {
+                "requested": allow_outreach_master_write,
+                "path": inputs.get("outreach_master_path"),
+                "entries": rows,
+            },
+            "data_lake": {
+                "requested": allow_data_lake_write,
+                "path": data_lake_path,
+                "files": data_lake_files,
+            },
+            "risk_summary": approval_package.get("reasons", []),
+        }
+
     def _p1_metrics_inputs(self, state: dict[str, Any]) -> dict[str, Any]:
         candidates = self._latest_payload(state, ArtifactType.P1_LEAD_CANDIDATES)
         normalized = self._latest_payload(state, ArtifactType.P1_NORMALIZED_LEADS)
@@ -555,15 +743,28 @@ class ProcessRuntime:
         gateway = self._latest_payload(state, ArtifactType.P1_GATEWAY_EVALUATIONS)
         drafts = self._latest_payload(state, ArtifactType.P1_OUTREACH_DRAFTS)
         approval_package = self._latest_payload(state, ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE)
+        approval_preview = self._latest_payload(state, ArtifactType.P1_EXTERNAL_ACTION_PREVIEW)
         sheet = self._latest_payload(state, ArtifactType.P1_EXTERNAL_SYNC_RESULT)
         data_lake = self._latest_payload(state, ArtifactType.P1_DATA_LAKE_SYNC_RESULT)
         outreach_master = self._latest_payload(state, ArtifactType.P1_OUTREACH_MASTER_SYNC_RESULT)
+        source_batches = self._artifact_payloads(state, ArtifactType.P1_SOURCE_BATCH)
         latest_p1_eval = {}
         for item in reversed(state.get("evals", [])):
             if item.get("eval_key") == "p1-outreach-draft-quality":
                 latest_p1_eval = item
                 break
+        task_timings = [
+            {
+                "task_type": task.get("task_type"),
+                "worker_profile": task.get("worker_profile"),
+                "duration_ms": task.get("duration_ms"),
+                "status": task.get("status"),
+            }
+            for task in state.get("tasks", [])
+            if isinstance(task, dict)
+        ]
         return {
+            "source_batches": source_batches,
             "lead_candidates": candidates.get("lead_candidates", []),
             "normalized_leads": normalized.get("normalized_leads", []),
             "rejected_leads": normalized.get("rejected_leads", []),
@@ -571,6 +772,7 @@ class ProcessRuntime:
             "p1_dossiers": dossiers.get("p1_dossiers", []),
             "gateway_evaluations": gateway.get("gateway_evaluations", []),
             "outreach_drafts": drafts.get("outreach_drafts", []),
+            "approval_preview": approval_preview,
             "quality_eval": latest_p1_eval or {
                 "passed": approval_package.get("passed", False),
                 "score": approval_package.get("score"),
@@ -581,6 +783,7 @@ class ProcessRuntime:
                 "data_lake": data_lake.get("sync_result", {}),
                 "outreach_master": outreach_master.get("sync_result", {}),
             },
+            "task_timings": task_timings,
         }
 
     async def _fail_p1_if_needed(self, run_id: UUID, reason: str) -> None:

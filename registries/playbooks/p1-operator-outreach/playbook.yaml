@@ -8,6 +8,7 @@ max_tasks_per_turn: 2
 allowed_workers:
   - p1-dossier-reader
   - p1-source-collector
+  - p1-source-merger
   - p1-lead-normalizer
   - p1-triage-scorer
   - p1-dossier-writer

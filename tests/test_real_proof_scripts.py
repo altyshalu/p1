@@ -1,5 +1,17 @@
 import importlib.util
+import io
+import sys
 from pathlib import Path
+
+
+def _load_module(script_name: str, module_name: str):
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / script_name
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_real_before_after_proof_module():
@@ -93,3 +105,71 @@ def test_before_after_proof_rejects_new_after_run_root_cause(monkeypatch) -> Non
     else:
         raise AssertionError("expected RuntimeError")
     assert mark_proven_called is False
+
+
+def test_p1_real_common_assert_summary_shape_rejects_missing_fields() -> None:
+    module = _load_module('p1_real_common.py', 'p1_real_common')
+
+    try:
+        module.assert_summary_shape({'status': 'completed'})
+    except SystemExit as exc:
+        assert 'missing required fields' in str(exc)
+    else:
+        raise AssertionError('expected SystemExit')
+
+
+def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'require_human_approval': True})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs: {'id': 'run-1'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'id': 'run-1', 'status': 'waiting_approval', 'diagnosis': None})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'status': 'waiting_approval', 'playbook_key': 'p1-operator-outreach', 'goal': 'proof', 'latest_metrics': {}, 'artifact_counts': {}, 'task_status_counts': {}, 'pending_actions': [{'type': 'approval'}], 'latest_approval_preview': {}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert 'waiting_approval' in stdout.getvalue()
+
+
+def test_p1_cache_proof_rejects_missing_cache_hits(monkeypatch) -> None:
+    module = _load_module('real-p1-cache-proof.py', 'real_p1_cache_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'source_only'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs, require_human_approval=False: {'id': _goal})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'status': 'completed'})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'latest_metrics': {'provider_cache_hits': 0}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-cache-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'no provider_cache_hits' in str(exc)
+    else:
+        raise AssertionError('expected SystemExit')
+
+
+def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatch) -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs, require_human_approval=True: {'id': 'run-1'})
+    states = iter([{'status': 'waiting_approval'}, {'status': 'completed', 'events': []}, {'status': 'completed', 'events': []}])
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: next(states))
+    monkeypatch.setattr(module, 'approve_run', lambda _base_url, _run_id: {'status': 'completed'})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'latest_metrics': {'sheet_duplicate_skipped': 0, 'outreach_master_duplicate_skipped': 0}})
+    monkeypatch.setattr(module, 'find_duplicate_events', lambda _run: {'p1_external_sync_duplicate_skipped': 0, 'p1_outreach_master_duplicate_skipped': 0, 'p1_data_lake_duplicate_skipped': 0})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-idempotency-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'no duplicate-skip evidence found' in str(exc)
+    else:
+        raise AssertionError('expected SystemExit')

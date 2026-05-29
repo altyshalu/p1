@@ -9,4 +9,6 @@ checks:
   - no_publish_external_action
   - word_count_under_110
   - mentions_abrt_or_limpid
+  - has_clear_cta
+  - no_placeholder_signoff
 minimum_score: 0.86

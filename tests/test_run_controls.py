@@ -160,3 +160,44 @@ async def test_approve_control_runs_requested_p1_external_syncs(monkeypatch) -> 
 
 async def _completed_async() -> None:
     return None
+
+
+@pytest.mark.asyncio
+async def test_build_p1_approval_preview_contains_exact_targets_and_ids() -> None:
+    runtime = ProcessRuntime(FakeStore(), None, None, None)
+    run_id = uuid4()
+
+    preview = runtime._build_p1_approval_preview(
+        run_id=run_id,
+        inputs={
+            "spreadsheet_id": "sheet-123",
+            "google_sheet_tab": "P1_L2L3_NEW_LEADS",
+            "outreach_master_path": "/tmp/outreach.json",
+            "data_lake_dossier_path": "/tmp/dossiers",
+        },
+        approval_package={
+            "outreach_drafts": [
+                {
+                    "lead_id": "lead-1",
+                    "name": "Arianna Simpson",
+                    "linkedin_url": "https://www.linkedin.com/in/ariannasimpson",
+                    "runtime_source": "p1-operator-outreach",
+                    "idempotency_key": f"{run_id}:lead-1",
+                }
+            ],
+            "reasons": ["low risk"],
+        },
+        dossiers=[{"identity": {"lead_id": "lead-1", "name": "Arianna Simpson"}}],
+        allow_sheet_write=True,
+        allow_outreach_master_write=True,
+        allow_data_lake_write=True,
+    )
+
+    assert preview["google_sheets"]["spreadsheet_id"] == "sheet-123"
+    assert preview["google_sheets"]["tab_name"] == "P1_L2L3_NEW_LEADS"
+    assert preview["google_sheets"]["rows"][0]["lead_id"] == "lead-1"
+    assert preview["google_sheets"]["rows"][0]["idempotency_key"] == f"{run_id}:lead-1"
+    assert preview["outreach_master"]["path"] == "/tmp/outreach.json"
+    assert preview["data_lake"]["path"] == "/tmp/dossiers"
+    assert preview["data_lake"]["files"][0]["lead_id"] == "lead-1"
+    assert preview["risk_summary"] == ["low risk"]

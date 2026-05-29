@@ -156,19 +156,35 @@ The TUI shows run status, Work Orders, evals, Incident Briefs, approval prompts,
 
 ## Running P1 Operator Outreach
 
-`p1-operator-outreach` is the migrated ABRT/Limpid operator and angel outreach pipeline. It uses real P1 dossiers or real source providers, creates bounded Work Orders, stores canonical runtime artifacts, evaluates grounded outreach drafts, and stops at approval before external action.
+`p1-operator-outreach` is the hardened ABRT/Limpid operator and angel outreach pipeline. It now supports source-level resume, approval preview artifacts, idempotent external writes, compact run summaries, and real operator proof scripts.
 
-Existing real dossier migration proof:
+Useful real proof commands:
 
 ```sh
-uv run python scripts/real-playbook-acceptance.py \
-  --api-url http://localhost:8080 \
-  --playbook-key p1-operator-outreach \
-  --goal "P1 existing dossier migration proof" \
-  --inputs-json '{"mode":"existing_dossiers","limit":1,"dossier_source_path":"/root/sovereign-os/OS_Core/Data_Lake/Dossiers","only_awaiting_outreach":true,"allow_google_sheet_write":false,"require_human_approval":true}'
+uv run python scripts/real-p1-full-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-inputs.json
+
+uv run python scripts/real-p1-cache-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-source-only-inputs.json
+
+uv run python scripts/real-p1-idempotency-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1-approval-inputs.json
 ```
 
-Full sourcing proof requires real `EXA_API_KEY`, `APIFY_API_TOKEN`, `GEMINI_API_KEY`, and Google Sheets credentials when sheet sync is enabled. Crunchbase sourcing uses the Apify Store actor `parseforge/crunchbase-scraper` by default; pass `crunchbase_actor_id` only when deliberately switching to another real actor. Missing credentials or actor permissions fail explicitly; the runtime must not substitute demo leads or old scripts.
+What the hardened P1 backend now does:
+
+- Google Sheets writes default to the separate tab `P1_L2L3_NEW_LEADS` unless another tab is explicitly passed.
+- Each requested source is collected as its own `p1_source_batch`, then merged before normalization.
+- Approval-gated runs now store `p1_external_action_preview` before `waiting_approval`.
+- Google Sheets, Outreach Master, and Data Lake writes are idempotent by `run_id + lead_id` and report duplicate skips explicitly.
+- `GET /runs/{id}/summary` exposes the latest metrics, approval preview, task counts, and pending actions without requiring clients to scan every artifact.
+
+Required real credentials depend on the scenario:
+
+- `GEMINI_API_KEY` for gateway evaluation and outreach drafting.
+- `EXA_API_KEY` for live intelligence against existing dossiers.
+- `APIFY_API_TOKEN` for fresh sourcing through Apify-backed collectors.
+- `GOOGLE_SA_PATH` and `P1_GOOGLE_SHEET_ID` when Google Sheets sync is enabled.
+- `P1_OUTREACH_MASTER_PATH` and `P1_DOSSIER_OUTPUT_PATH` when those external writes are enabled.
+
+Missing credentials, missing paths, or missing provider permissions fail explicitly. The runtime and proof scripts must not fall back to demo leads, legacy scripts, or best-effort writes.
 
 Latest real proof notes: [docs/p1-l2l3-real-proof-2026-05-29.md](docs/p1-l2l3-real-proof-2026-05-29.md).
 

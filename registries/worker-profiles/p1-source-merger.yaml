@@ -1,0 +1,27 @@
+key: p1-source-merger
+description: Merge per-source P1 lead batches into a single candidate set for downstream normalization.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p1_operator_worker
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 30
+input_schema:
+  type: object
+  required: [source_batches]
+  properties:
+    source_batches: {type: array}
+output_schema:
+  type: object
+  required: [lead_candidates]
+  properties:
+    lead_candidates: {type: array}
+    source_attempts: {type: array}
+    source_batches: {type: array}
+retry_policy:
+  max_attempts: 1
+  retryable_failure_types: []
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

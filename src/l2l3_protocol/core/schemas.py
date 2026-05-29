@@ -45,6 +45,7 @@ class ArtifactType(StrEnum):
     RUN_DIAGNOSIS = "run_diagnosis"
     SYSTEM_REVIEW = "system_review"
     DESIGN_REPORT = "design_report"
+    P1_SOURCE_BATCH = "p1_source_batch"
     P1_LEAD_CANDIDATES = "p1_lead_candidates"
     P1_NORMALIZED_LEADS = "p1_normalized_leads"
     P1_TRIAGE_SCORES = "p1_triage_scores"
@@ -54,6 +55,7 @@ class ArtifactType(StrEnum):
     P1_FORGE_QUEUE = "p1_forge_queue"
     P1_OUTREACH_DRAFTS = "p1_outreach_drafts"
     P1_OUTREACH_APPROVAL_PACKAGE = "p1_outreach_approval_package"
+    P1_EXTERNAL_ACTION_PREVIEW = "p1_external_action_preview"
     P1_DATA_LAKE_SYNC_RESULT = "p1_data_lake_sync_result"
     P1_OUTREACH_MASTER_SYNC_RESULT = "p1_outreach_master_sync_result"
     P1_EXTERNAL_SYNC_RESULT = "p1_external_sync_result"
@@ -147,6 +149,9 @@ class WorkOrder(BaseModel):
     memory_policy: dict[str, Any] = Field(default_factory=dict)
     external_action_policy: dict[str, Any] = Field(default_factory=dict)
     status: TaskStatus = TaskStatus.PENDING
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: int | None = None
 
 
 class L2SpawnWorkOrder(BaseModel):

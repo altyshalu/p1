@@ -1,103 +1,45 @@
 # P1 L2/L3 Real Proof, 2026-05-29
 
-This note records real proof runs for the P1 operator outreach migration and the adjacent L2/L3 coordination layer. It is intentionally evidence-oriented: no mock run, synthetic provider response, fallback path, or demo dataset counts as proof here.
+This note records the current state of real proof for the hardened P1 operator outreach backend on the server. It is intentionally evidence-oriented: no mock run, synthetic provider response, fallback path, or demo dataset counts as proof here.
 
-## What Is Proven
+## What Is Now Hardened
 
-The P1 operator outreach process now runs through the L2/L3 protocol runtime using real worker profiles, real stored run artifacts, real eval results, and real approval boundaries.
+The P1 backend now includes these production-facing hardening changes:
 
-The current P1 path supports two practical entry modes:
+- per-source resume via `p1_source_batch` plus `p1-source-merger`
+- approval preview artifact `p1_external_action_preview`
+- idempotent Google Sheets, Outreach Master, and Data Lake writes keyed by `run_id + lead_id`
+- duplicate-skipped events for external syncs
+- compact backend summary endpoint `GET /runs/{id}/summary`
+- task timing fields `started_at`, `completed_at`, and `duration_ms`
+- operator proof scripts for full flow, cache proof, and idempotency proof
 
-- Existing ABRT/Limpid dossier migration: read real dossier files, enrich with Exa, evaluate via Gemini, build forge queue, write outreach drafts, run quality eval, stop before external action, then write to Google Sheets only after approval.
-- Fresh sourcing: collect real Crunchbase data through Apify, normalize leads, score or dossier them, then continue through the same P1 runtime chain.
+## Verified On The Server
 
-## Current Real Provider Coverage
+### 1. API Runtime Is Live
 
-- Gemini: used by the P1 gateway evaluator and outreach draft writer in real P1 runs.
-- Exa: used by the P1 live intelligence gatherer in real existing-dossier runs.
-- Apify: used by the P1 source collector through the real `parseforge/crunchbase-scraper` actor.
-- Google Sheets: used by the P1 external sync worker after explicit approval.
-- DeepSeek/Hermes: available on the deployed runtime and exercised by the real trend-radar L2 supervisor path.
+Checked on `127.0.0.1:8000`.
 
-## Proof Runs
+Observed:
 
-### 1. Crunchbase Through Apify
+- `GET /health` returned `{"status":"ok","service":"l2l3-protocol"}`
+- `GET /runtime/capabilities` returned Hermes and memory capability data successfully
 
-- Run: `c5e7c0c2-79cf-481f-a9a6-4bd5f2db47bd`
-- Playbook: `p1-operator-outreach`
-- Mode: `source_only`
-- Source: Apify Crunchbase actor
-- Status: `completed`
-- Evidence:
-  - Produced `p1_lead_candidates`.
-  - Candidate: Naval Ravikant.
-  - Source URL: `https://www.crunchbase.com/person/naval-ravikant`.
-  - Headline normalized from real Crunchbase fields: `Founder at AngelList`.
-  - Produced downstream normalized leads, triage scores, dossiers, and run diagnosis.
-- Diagnosis:
-  - Outcome: `completed`.
-  - Improvement needed: `false`.
+### 2. Backend Test Coverage Is Green
 
-### 2. Full P1 Pipeline From Crunchbase Source
+Targeted hardening slice:
 
-- Run: `cd32fd94-c457-49a8-8a74-ddf69cdda5ef`
-- Playbook: `p1-operator-outreach`
-- Mode: `full_pipeline`
-- Source: Apify Crunchbase actor
-- Status: `waiting_approval`
-- Evidence:
-  - Produced real Crunchbase lead candidates.
-  - Produced outreach draft for Naval Ravikant.
-  - Draft claims include source URLs and evidence URLs.
-  - Quality eval passed.
-  - Runtime stopped before external action.
-- Diagnosis:
-  - Outcome: `waiting_approval`.
-  - Root cause: `none`.
-  - Improvement needed: `false`.
+```sh
+uv run pytest tests/test_api_surface.py tests/test_process_runtime.py tests/test_p1_operator_worker.py -q
+```
 
-### 3. Existing Dossier To Google Sheets After Approval
+Result:
 
-- Run: `1e4930f2-6f1c-46b4-86b0-bc48097b81ef`
-- Playbook: `p1-operator-outreach`
-- Mode: `existing_dossiers`
-- Status before approval: `waiting_approval`
-- Status after approval: `completed`
-- Evidence:
-  - Read a real dossier from `/root/sovereign-os/OS_Core/Data_Lake/Dossiers`.
-  - Gathered live intelligence through Exa.
-  - Evaluated and drafted outreach with real provider calls.
-  - Eval `p1-outreach-draft-quality` passed with score `1.0`.
-  - Runtime created `p1_external_sync_waiting_approval` and did not write externally before approval.
-  - After `approve`, runtime executed `p1-google-sheets-syncer`.
-  - Google Sheets append result: row count `1`, updated range `'04_THE_FORGE_FINAL'!A1665:J1665`.
-- Diagnosis:
-  - Before approval: `waiting_approval`, no incident.
-  - After approval: `completed`, no incident.
+```text
+31 passed in 4.09s
+```
 
-### 4. L2/L3 Coordination Edge Case
-
-- Run: `2a497c84-6235-421c-acba-dcafbc873b76`
-- Playbook: `build-in-public-trend-radar`
-- Status: `waiting_approval`
-- Purpose:
-  - Real L2/Hermes coordination proof, separate from deterministic P1.
-- Evidence:
-  - GitHub provider returned real results.
-  - Hugging Face initially returned no model results, then L2 repair found dataset results.
-  - arXiv hit a real provider limit: timeout followed by HTTP `429 Rate exceeded`.
-  - System did not hide the failure or invent source data.
-  - System created an improvement proposal for `trend-source-collector/provider:arxiv`.
-- Proposal:
-  - ID: `6335d124-5fdd-4a9e-9289-7c1b1dad4af1`
-  - Type: `improve_tool`
-  - Signature: `provider_request_failed:trend-source-collector`
-  - Status: `proposed`
-  - Approval required before behavior change: `true`
-
-## Verification Commands
-
-Local verification:
+Full repository:
 
 ```sh
 uv run pytest -q
@@ -106,52 +48,87 @@ uv run pytest -q
 Result:
 
 ```text
-110 passed
+121 passed in 8.51s
 ```
 
-Server verification after deploy:
+### 3. Real Proof Scripts Are Executable
+
+Validated on the server:
 
 ```sh
-cd /root/l2l3-protocol
-/root/.local/bin/uv run pytest -q
+python3 scripts/real-p1-full-proof.py --help
+python3 scripts/real-p1-cache-proof.py --help
+python3 scripts/real-p1-idempotency-proof.py --help
 ```
 
-Result:
+All three scripts compiled and exposed the expected operator flags.
 
-```text
-110 passed
-```
+## Current Real-World Blocker
 
-Runtime capability check:
+The server does not currently have the full P1 credential set configured.
+
+Observed from `.env` on the server:
+
+- `GEMINI_API_KEY`: set
+- `EXA_API_KEY`: missing
+- `APIFY_API_TOKEN`: missing
+- `GOOGLE_SA_PATH`: missing
+- `P1_GOOGLE_SHEET_ID`: missing
+- `P1_OUTREACH_MASTER_PATH`: missing
+- `P1_DOSSIER_OUTPUT_PATH`: missing
+- `P1_DOSSIER_SOURCE_PATH`: missing
+
+Because of that, full external real proof cannot be claimed yet.
+
+## Explicit Failure Proof
+
+The new proof scripts and hardened runtime were exercised against the live API to confirm explicit failure behavior instead of silent fallback.
+
+### Source-Only Proof Without Apify Credential
+
+Command used:
 
 ```sh
-curl http://127.0.0.1:8093/runtime/capabilities
+python3 scripts/real-p1-cache-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1_source_only_inputs.json
 ```
 
-Observed:
+Observed outcome:
 
-```text
-Hermes enabled: true
-Hermes configured: true
-Hermes available: true
-Model: deepseek-v4-pro
-Memory enabled: true
+- Run status: `failed`
+- Worker: `p1-source-collector`
+- Explicit error: `missing required environment variable: APIFY_API_TOKEN`
+- Diagnosis created with real run evidence
+- Improvement proposal was created instead of pretending success
+
+### Existing-Dossier Proof Without Dossier Path
+
+Command used:
+
+```sh
+python3 scripts/real-p1-full-proof.py   --base-url http://127.0.0.1:8000   --inputs-json /tmp/p1_existing_inputs.json
 ```
 
-## Presentation Status
+Observed outcome:
 
-P1 is ready to show as a real working ABRT process:
+- Run status: `failed`
+- Worker: `p1-dossier-reader`
+- Explicit error: `missing required input: dossier_source_path`
+- Diagnosis created with real run evidence
+- No fallback path was used
 
-- It executes real operator/angel outreach work.
-- It uses real providers.
-- It produces persisted artifacts and evals.
-- It stops at approval before external writes.
-- It writes to the real Google Sheet only after approval.
-- It creates run diagnoses.
-- It does not silently degrade to fake data.
+## Operational Meaning
 
-The broader L2/L3 coordination layer is also demonstrable, with one important caveat: real public providers can rate limit. The current trend-radar proof shows that the system detects this, stores evidence, and creates an approval-gated improvement proposal instead of pretending success.
+P1 backend hardening is implemented, tested, and ready to run for real. What remains before claiming a fresh full external proof is not backend code work, but operational configuration:
 
-## Next Hardening Item
+- set the missing provider credentials
+- set the missing sheet and file-system paths
+- run the full proof script again with real inputs and approvals enabled where needed
 
-The next approved improvement should target arXiv provider behavior in `trend-source-collector`: slower request pacing, clearer rate-limit classification, and a before/after proof run showing that comparable trend-radar runs no longer fail from aggressive arXiv retry behavior.
+Once those values are configured, the new proof scripts are ready to verify:
+
+- health and runtime capabilities
+- full P1 execution path
+- approval preview generation
+- summary endpoint output
+- cache-hit evidence on a second comparable run
+- duplicate-skip evidence on repeated approval
