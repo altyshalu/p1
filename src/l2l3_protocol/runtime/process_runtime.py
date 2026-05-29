@@ -304,14 +304,31 @@ class ProcessRuntime:
             return
         approval_package = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE)
         allow_sheet_write = bool(inputs.get("allow_google_sheet_write", False))
-        if allow_sheet_write:
+        approval_required = self._requires_approval(await self._require_run(run_id))
+        external_sync_performed = False
+        if allow_sheet_write and approval_required:
+            await self.store.add_event(
+                run_id,
+                "p1_external_sync_waiting_approval",
+                {
+                    "reason": "Google Sheets write is an external action and requires approval before execution.",
+                    "requested_worker": "p1-google-sheets-syncer",
+                },
+            )
+        elif allow_sheet_write:
             if not await run_task("p1-google-sheets-syncer", "sync_google_sheets", {**inputs, **approval_package}, ArtifactType.P1_EXTERNAL_SYNC_RESULT):
                 await self._fail_p1_if_needed(run_id, "p1 Google Sheets sync failed")
                 return
+            external_sync_performed = True
         await self.store.set_run_status(
             run_id,
-            RunStatus.WAITING_APPROVAL if self._requires_approval(await self._require_run(run_id)) else RunStatus.COMPLETED,
-            {"mode": mode, "approval_package": approval_package, "external_sync_requested": allow_sheet_write},
+            RunStatus.WAITING_APPROVAL if approval_required else RunStatus.COMPLETED,
+            {
+                "mode": mode,
+                "approval_package": approval_package,
+                "external_sync_requested": allow_sheet_write,
+                "external_sync_performed": external_sync_performed,
+            },
         )
         await self.store.add_event(run_id, "run_finished", {"status": (await self.store.get_run_status(run_id)).value})
 
