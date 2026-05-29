@@ -221,6 +221,34 @@ def test_draft_schema_normalizer_maps_body_to_text_for_real_draft_writer_contrac
     assert claim_grounding({"inputs": {"drafts": payload["drafts"]}}, {})["passed"] is True
 
 
+def test_draft_schema_normalizer_maps_draft_text_from_real_writer_contract() -> None:
+    payload = normalize_draft_schema(
+        {
+            "inputs": {
+                "drafts": [
+                    {
+                        "channel": "x",
+                        "draft_text": "ECC supports agent memory workflows. https://github.com/affaan-m/ECC",
+                        "claims": [
+                            {
+                                "statement": "ECC supports agent memory workflows.",
+                                "source_url": "https://github.com/affaan-m/ECC",
+                            }
+                        ],
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    draft = payload["drafts"][0]
+
+    assert draft["text"].startswith("ECC supports agent memory workflows.")
+    assert draft["claims"][0]["text"] == "ECC supports agent memory workflows."
+    assert stop_slop_edit({"inputs": {"drafts": payload["drafts"]}}, {})["edited_drafts"][0]["text"]
+
+
 def test_draft_schema_normalizer_maps_claim_text_to_eval_text() -> None:
     payload = normalize_draft_schema(
         {

@@ -1,0 +1,26 @@
+key: goal-hypothesis-generator
+description: Turn a vague user goal into 2-4 concrete execution hypotheses and a structured clarification prompt without pretending certainty.
+worker_type: hermes_agent
+agent_prompt: >-
+  Analyze the user's goal and optional context. Return strict JSON with goal_hypotheses,
+  recommended_interaction, and ambiguity_summary. goal_hypotheses must be a list of 2-4
+  objects with option_id, candidate_goal, deliverable, assumptions, and success_signals.
+  recommended_interaction must be a goal_clarification object with 2-4 options. Do not
+  choose for the user. Do not invent facts.
+allowed_tools: []
+compatible_tools: []
+budget:
+  max_seconds: 120
+  max_iterations: 8
+input_schema:
+  type: object
+  required: [goal]
+output_schema:
+  type: object
+  required: [goal_hypotheses, recommended_interaction, ambiguity_summary]
+stop_conditions:
+  - goal_hypotheses_created
+memory_policy:
+  writes: artifact_only
+external_action_policy:
+  external_actions: none

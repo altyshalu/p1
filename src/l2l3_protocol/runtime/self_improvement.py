@@ -262,10 +262,13 @@ def render_recent_system_review_markdown(review: dict[str, Any]) -> str:
 
 def render_system_learning_report_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary", {}) if isinstance(report, dict) else {}
+    scope = report.get("scope", {}) if isinstance(report.get("scope"), dict) else {}
     lines = [
         "# What the system learned",
         "",
         f"- Generated at: {report.get('generated_at', 'unknown')}",
+        f"- Playbook scope: {scope.get('playbook_key') or 'all'}",
+        f"- Time scope (hours): {scope.get('since_hours') if scope.get('since_hours') is not None else 'all'}",
         f"- Active learnings: {summary.get('active_learning_count', 0)}",
         f"- Resolved learnings: {summary.get('resolved_learning_count', 0)}",
         f"- Evidence-backed proposals: {summary.get('proposal_count', 0)}",
@@ -568,6 +571,7 @@ def _proposal_report_row(proposal: ImprovementProposal) -> dict[str, Any]:
         "id": str(proposal.id),
         "run_id": str(proposal.run_id),
         "source_run_id": proposal.source_run_id,
+        "playbook_key": proof_spec.get("playbook_key"),
         "proposal_type": proposal.proposal_type,
         "target_component": proposal.target_component,
         "failure_signature": proposal.failure_signature,
@@ -581,10 +585,12 @@ def _proposal_report_row(proposal: ImprovementProposal) -> dict[str, Any]:
 
 
 def _regression_case_report_row(case: RegressionCase) -> dict[str, Any]:
+    comparable = case.comparable_run_input if isinstance(case.comparable_run_input, dict) else {}
     return {
         "id": str(case.id),
         "proposal_id": str(case.proposal_id),
         "baseline_run_id": case.baseline_run_id,
+        "playbook_key": comparable.get("playbook_key"),
         "failure_signature": case.failure_signature,
         "target_component": case.target_component,
         "proof_command": case.proof_command,

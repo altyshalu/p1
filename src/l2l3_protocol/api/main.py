@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 import asyncio
+from datetime import UTC, datetime, timedelta
 from contextlib import asynccontextmanager
 import json
 from time import perf_counter
@@ -17,6 +18,7 @@ from l2l3_protocol.api.state import app_state, build_memory_router
 from l2l3_protocol.config import get_settings
 from l2l3_protocol.core.schemas import (
     FailureLearningStatus,
+    ImprovementProposal,
     ImprovementProposalStatus,
     ProcessRun,
     ProcessRunCreate,
@@ -95,6 +97,25 @@ async def request_logging(request: Request, call_next) -> Response:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "service": "l2l3-protocol"}
+
+
+@app.get("/runtime/capabilities")
+async def runtime_capabilities() -> dict[str, Any]:
+    settings = app_state.settings
+    return {
+        'hermes': {
+            'enabled': settings.hermes_enabled,
+            'configured': bool(settings.deepseek_api_key),
+            'available': app_state.hermes.available(),
+            'model': settings.hermes_model,
+            'max_iterations': settings.hermes_max_iterations,
+        },
+        'memory': {
+            'agentmemory_enabled': settings.agentmemory_enabled,
+            'mem0_enabled': settings.mem0_enabled,
+            'mem0_vector_provider': settings.mem0_vector_provider,
+        },
+    }
 
 
 def make_runtime(store: WorkingMemoryStore) -> ProcessRuntime:
@@ -319,8 +340,12 @@ async def list_failure_learnings(
 @app.post("/system-reviews/recent")
 async def create_recent_system_review(payload: RecentSystemReviewCreate, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
-    recent_runs = await store.list_recent_runs(limit=payload.limit, playbook_key=payload.playbook_key)
-    learnings = await store.list_failure_learnings(status=FailureLearningStatus.ACTIVE, playbook_key=payload.playbook_key)
+    recent_runs = await store.list_recent_runs(limit=payload.limit, playbook_key=payload.playbook_key, since_hours=payload.since_hours)
+    learnings = await store.list_failure_learnings(
+        status=FailureLearningStatus.ACTIVE,
+        playbook_key=payload.playbook_key,
+        since_hours=payload.since_hours,
+    )
     reviewer_profile = await store.get_registry_item(RegistryKind.WORKER, "self-improvement-reviewer")
     if reviewer_profile is None:
         raise HTTPException(status_code=409, detail="registry worker is not seeded: self-improvement-reviewer")
@@ -370,24 +395,70 @@ async def list_system_reviews(playbook_key: str | None = None, session: AsyncSes
 
 
 @app.get("/reports/system-learning")
-async def get_system_learning_report(session: AsyncSession = Depends(get_session)) -> dict:
+async def get_system_learning_report(
+    playbook_key: str | None = None,
+    since_hours: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     store = WorkingMemoryStore(session)
-    active_learnings = await store.list_failure_learnings(status=FailureLearningStatus.ACTIVE)
-    resolved_learnings = await store.list_failure_learnings(status=FailureLearningStatus.RESOLVED)
-    proposals = await store.list_improvement_proposals()
-    regression_cases = await store.list_regression_cases()
-    return build_system_learning_report(
+    active_learnings = await store.list_failure_learnings(
+        status=FailureLearningStatus.ACTIVE,
+        playbook_key=playbook_key,
+        since_hours=since_hours,
+    )
+    resolved_learnings = await store.list_failure_learnings(
+        status=FailureLearningStatus.RESOLVED,
+        playbook_key=playbook_key,
+        since_hours=since_hours,
+    )
+    proposals = [
+        proposal
+        for proposal in await store.list_improvement_proposals()
+        if await _proposal_matches_scope(store, proposal, playbook_key=playbook_key, since_hours=since_hours)
+    ]
+    regression_cases = await store.list_regression_cases(playbook_key=playbook_key)
+    report = build_system_learning_report(
         active_learnings=active_learnings,
         resolved_learnings=resolved_learnings,
         proposals=proposals,
         regression_cases=regression_cases,
     )
+    report['scope'] = {
+        'playbook_key': playbook_key,
+        'since_hours': since_hours,
+        'generated_at': datetime.now(UTC).isoformat(),
+    }
+    return report
 
 
 @app.get("/regression-cases")
-async def list_regression_cases(session: AsyncSession = Depends(get_session)) -> list[dict]:
-    cases = await WorkingMemoryStore(session).list_regression_cases()
+async def list_regression_cases(playbook_key: str | None = None, session: AsyncSession = Depends(get_session)) -> list[dict]:
+    cases = await WorkingMemoryStore(session).list_regression_cases(playbook_key=playbook_key)
     return [case.model_dump(mode="json") for case in cases]
+
+
+async def _proposal_matches_scope(
+    store: WorkingMemoryStore,
+    proposal: ImprovementProposal,
+    *,
+    playbook_key: str | None,
+    since_hours: int | None,
+) -> bool:
+    if since_hours is not None and proposal.created_at is not None:
+        cutoff = datetime.now(UTC) - timedelta(hours=since_hours)
+        if proposal.created_at < cutoff:
+            return False
+    if playbook_key is None:
+        return True
+    proof_spec = proposal.proof_spec if isinstance(proposal.proof_spec, dict) else {}
+    scoped_playbook = proof_spec.get('playbook_key')
+    if isinstance(scoped_playbook, str) and scoped_playbook:
+        return scoped_playbook == playbook_key
+    try:
+        run = await store.get_run(UUID(proposal.source_run_id))
+    except (TypeError, ValueError):
+        return False
+    return isinstance(run, dict) and run.get('playbook_key') == playbook_key
 
 
 async def list_hub_items(kind: RegistryKind, session: AsyncSession) -> list[dict]:

@@ -4,29 +4,36 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+from urllib.parse import urlencode
 
-SCRIPT_PATH = Path(__file__).with_name("real-before-after-proof.py")
-SPEC = importlib.util.spec_from_file_location("real_before_after_proof", SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).with_name('real-before-after-proof.py')
+SPEC = importlib.util.spec_from_file_location('real_before_after_proof', SCRIPT_PATH)
 if SPEC is None or SPEC.loader is None:
-    raise RuntimeError(f"could not load proof helper from {SCRIPT_PATH}")
+    raise RuntimeError(f'could not load proof helper from {SCRIPT_PATH}')
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 request_json = MODULE.request_json
 run_before_after_proof = MODULE.run_before_after_proof
 
 
-def list_cases(api_url: str) -> None:
-    cases = request_json(f"{api_url.rstrip('/')}/regression-cases")
+def _case_url(api_url: str, playbook_key: str | None) -> str:
+    params = {'playbook_key': playbook_key} if playbook_key is not None else {}
+    query = f"?{urlencode(params)}" if params else ''
+    return f"{api_url.rstrip('/')}/regression-cases{query}"
+
+
+def list_cases(api_url: str, playbook_key: str | None) -> None:
+    cases = request_json(_case_url(api_url, playbook_key))
     print(json.dumps(cases, indent=2, ensure_ascii=False))
 
 
-def rerun_cases(api_url: str, case_id: str | None, limit: int, timeout_seconds: int) -> None:
-    payload = request_json(f"{api_url.rstrip('/')}/regression-cases")
+def rerun_cases(api_url: str, case_id: str | None, limit: int, timeout_seconds: int, playbook_key: str | None) -> None:
+    payload = request_json(_case_url(api_url, playbook_key))
     if not isinstance(payload, list):
-        raise RuntimeError(f"regression case list returned invalid payload: {payload}")
+        raise RuntimeError(f'regression case list returned invalid payload: {payload}')
     cases = [item for item in payload if isinstance(item, dict)]
     if case_id is not None:
-        cases = [item for item in cases if item.get("id") == case_id]
+        cases = [item for item in cases if item.get('id') == case_id]
     if limit > 0:
         cases = cases[:limit]
     results = []
@@ -34,8 +41,8 @@ def rerun_cases(api_url: str, case_id: str | None, limit: int, timeout_seconds: 
         results.append(
             run_before_after_proof(
                 api_url=api_url,
-                baseline_run_id=str(case["baseline_run_id"]),
-                proposal_id=str(case["proposal_id"]),
+                baseline_run_id=str(case['baseline_run_id']),
+                proposal_id=str(case['proposal_id']),
                 timeout_seconds=timeout_seconds,
             )
         )
@@ -43,20 +50,21 @@ def rerun_cases(api_url: str, case_id: str | None, limit: int, timeout_seconds: 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="List or rerun real regression cases against the live API.")
-    parser.add_argument("--api-url", default="http://localhost:8080")
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("list")
-    rerun = subparsers.add_parser("rerun")
-    rerun.add_argument("--case-id")
-    rerun.add_argument("--limit", type=int, default=10)
-    rerun.add_argument("--timeout-seconds", type=int, default=900)
+    parser = argparse.ArgumentParser(description='List or rerun real regression cases against the live API.')
+    parser.add_argument('--api-url', default='http://localhost:8080')
+    parser.add_argument('--playbook-key')
+    subparsers = parser.add_subparsers(dest='command', required=True)
+    subparsers.add_parser('list')
+    rerun = subparsers.add_parser('rerun')
+    rerun.add_argument('--case-id')
+    rerun.add_argument('--limit', type=int, default=10)
+    rerun.add_argument('--timeout-seconds', type=int, default=900)
     args = parser.parse_args()
-    if args.command == "list":
-        list_cases(args.api_url)
+    if args.command == 'list':
+        list_cases(args.api_url, args.playbook_key)
     else:
-        rerun_cases(args.api_url, args.case_id, args.limit, args.timeout_seconds)
+        rerun_cases(args.api_url, args.case_id, args.limit, args.timeout_seconds, args.playbook_key)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -67,6 +67,11 @@ class ProcessRuntime:
             state = await self.store.get_run(run_id)
             if state is None:
                 raise KeyError(f"run not found: {run_id}")
+            goal_discovery_output = self._goal_discovery_waiting_output(playbook, state)
+            if goal_discovery_output is not None:
+                await self.store.set_run_status(run_id, RunStatus.WAITING_USER, goal_discovery_output)
+                await self.store.add_event(run_id, "l2_message_user", goal_discovery_output)
+                break
             stop_reason = self._repair_stop_reason(state)
             if stop_reason is not None:
                 await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": stop_reason})
@@ -81,8 +86,11 @@ class ProcessRuntime:
                     await self._execute_task(run_id, task.model_dump(mode="json"), worker_profiles[task.worker_profile])
                 continue
             if action.action == "message_user":
-                await self.store.set_run_status(run_id, RunStatus.WAITING_USER)
-                await self.store.add_event(run_id, "l2_message_user", {"message": action.message})
+                output = {"message": action.message}
+                if action.interaction is not None:
+                    output["interaction"] = action.interaction.model_dump(mode="json")
+                await self.store.set_run_status(run_id, RunStatus.WAITING_USER, output)
+                await self.store.add_event(run_id, "l2_message_user", output)
                 break
             if action.action == "finish":
                 await self._persist_learnings(run_id, action.output.get("memory_writes", []))
@@ -190,7 +198,7 @@ class ProcessRuntime:
             await self._record_failure_context(run_id, work_order.id, work_order, profile, exc.failure_type, str(exc))
             return
         await self.store.set_task_status(work_order.id, TaskStatus.COMPLETED)
-        artifact_type = ArtifactType(task.get("artifact_type") or ArtifactType.GENERIC.value)
+        artifact_type = self._artifact_type_for_task(task, work_order, payload)
         if work_order.worker_profile == "approval-adapter":
             artifact_type = ArtifactType.APPROVAL_DECISION
         artifact = Artifact(run_id=run_id, task_id=work_order.id, artifact_type=artifact_type, payload=payload)
@@ -265,8 +273,6 @@ class ProcessRuntime:
 
     async def _record_run_diagnosis(self, run_id: UUID) -> None:
         state = await self._require_run(run_id)
-        if any(artifact.get("artifact_type") == ArtifactType.RUN_DIAGNOSIS.value for artifact in state.get("artifacts", [])):
-            return
         diagnosis, proposals = analyze_run(state)
         await self.store.add_artifact(diagnosis)
         await self.store.add_event(run_id, "run_diagnosis_created", diagnosis.payload)
@@ -492,8 +498,43 @@ class ProcessRuntime:
         return state
 
     @staticmethod
+    def _artifact_type_for_task(task: dict[str, Any], work_order: WorkOrder, payload: dict[str, Any]) -> ArtifactType:
+        explicit = task.get("artifact_type")
+        if isinstance(explicit, str) and explicit != ArtifactType.GENERIC.value:
+            return ArtifactType(explicit)
+        if work_order.worker_profile == "goal-hypothesis-generator" or "goal_hypotheses" in payload:
+            return ArtifactType.GOAL_HYPOTHESES
+        if work_order.worker_profile == "goal-brief-compiler" or "goal_brief" in payload:
+            return ArtifactType.GOAL_BRIEF
+        return ArtifactType(str(explicit or ArtifactType.GENERIC.value))
+
+    @staticmethod
+    def _goal_discovery_waiting_output(playbook: dict[str, Any], state: dict[str, Any]) -> dict[str, Any] | None:
+        if str(playbook.get("goal_protocol") or "") != "unclear_goal":
+            return None
+        if any(event.get("event_type") == "user_message" for event in state.get("events", [])):
+            return None
+        artifact = _latest_artifact(state, ArtifactType.GOAL_HYPOTHESES.value)
+        if artifact is None:
+            return None
+        payload = artifact.get("payload", {})
+        if not isinstance(payload, dict):
+            raise ValueError("goal-discovery goal_hypotheses artifact payload must be an object")
+        interaction = _normalize_goal_interaction(payload.get("recommended_interaction"))
+        return {
+            "message": "I mapped the unclear goal into concrete paths. Pick the direction that matters first.",
+            "interaction": interaction,
+        }
+
+    @staticmethod
     def _classify_worker_error(exc: L3WorkerExecutionError) -> str:
         message = str(exc).lower()
+        compact_message = message.replace(" ", "")
+        empty_provider_failures = '"provider_failures":{}' in compact_message or "'provider_failures':{}" in compact_message
+        if "trend providers failed" in message or "all trend providers failed" in message:
+            return "provider_request_failed"
+        if "provider_failures" in message and not empty_provider_failures:
+            return "provider_request_failed"
         if "timed out" in message:
             return "timeout"
         if "invalid json" in message:
@@ -507,3 +548,45 @@ class ProcessRuntime:
     @staticmethod
     def _requires_approval(state: dict[str, Any]) -> bool:
         return bool(state["input"]["require_human_approval"])
+
+
+def _latest_artifact(state: dict[str, Any], artifact_type: str) -> dict[str, Any] | None:
+    for artifact in reversed(state.get("artifacts", [])):
+        if isinstance(artifact, dict) and artifact.get("artifact_type") == artifact_type:
+            return artifact
+    return None
+
+
+def _normalize_goal_interaction(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError("goal-discovery recommended_interaction must be an object")
+    raw = value.get("goal_clarification") if isinstance(value.get("goal_clarification"), dict) else value
+    kind = str(raw.get("kind") or "goal_clarification")
+    question = raw.get("question") or raw.get("prompt")
+    if kind != "goal_clarification":
+        raise ValueError("goal-discovery recommended_interaction.kind must be goal_clarification")
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("goal-discovery recommended_interaction requires question or prompt")
+    raw_options = raw.get("options")
+    if not isinstance(raw_options, list) or len(raw_options) < 2 or len(raw_options) > 4:
+        raise ValueError("goal-discovery recommended_interaction must include 2-4 options")
+    options: list[dict[str, str]] = []
+    for index, option in enumerate(raw_options):
+        if not isinstance(option, dict):
+            raise ValueError(f"goal-discovery recommended_interaction.options[{index}] must be an object")
+        option_id = option.get("id") or option.get("option_id")
+        label = option.get("label") or option.get("title")
+        description = option.get("description") or option.get("outcome") or option.get("implies")
+        if not isinstance(option_id, str) or not option_id.strip():
+            raise ValueError(f"goal-discovery recommended_interaction.options[{index}] requires id or option_id")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"goal-discovery recommended_interaction.options[{index}] requires label")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(f"goal-discovery recommended_interaction.options[{index}] requires description, outcome, or implies")
+        options.append({"id": option_id.strip(), "label": label.strip(), "description": description.strip()})
+    output = {"kind": kind, "question": question.strip(), "options": options}
+    if isinstance(raw.get("why_this_question"), str) and raw["why_this_question"].strip():
+        output["why_this_question"] = raw["why_this_question"].strip()
+    if isinstance(raw.get("resolution_hint"), str) and raw["resolution_hint"].strip():
+        output["resolution_hint"] = raw["resolution_hint"].strip()
+    return output
