@@ -10,6 +10,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _gemini_json,
     _request_json,
     _redact_secrets,
+    _run_apify_actor,
     P1WorkerInputError,
     build_metrics_report,
     collect_sources,
@@ -768,6 +769,8 @@ def test_p1_crunchbase_source_normalizes_parseforge_person_rows(monkeypatch) -> 
 def test_p1_funding_source_enriches_company_rows_into_founder_leads(monkeypatch) -> None:
     def fake_run(actor_id, actor_input):
         assert actor_id == "nexgendata/startup-funding-tracker"
+        assert actor_input["maxItems"] == 1
+        assert actor_input["maxResults"] == 1
         return [
             {
                 "companyName": "Pixley AI",
@@ -808,6 +811,29 @@ def test_p1_funding_source_enriches_company_rows_into_founder_leads(monkeypatch)
     assert result[0]["source"] == "apify_funding"
     assert result[0]["source_url"] == "https://www.linkedin.com/in/mayachen"
     assert "Pixley AI" in result[0]["evidence"][0]
+
+
+def test_apify_actor_run_request_includes_charged_max_items(monkeypatch) -> None:
+    calls = []
+
+    def fake_request_json(url, method="GET", token=None, body=None, timeout=120):
+        calls.append({"url": url, "method": method, "body": body})
+        if "/runs?" in url:
+            return {"data": {"id": "run-1"}}
+        if "/actor-runs/run-1" in url:
+            return {"data": {"status": "SUCCEEDED", "defaultDatasetId": "dataset-1"}}
+        if "/datasets/dataset-1/items" in url:
+            return [{"name": "Maya Chen"}]
+        raise AssertionError(url)
+
+    monkeypatch.setenv("APIFY_API_TOKEN", "token")
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._request_json", fake_request_json)
+
+    result = _run_apify_actor("nexgendata/startup-funding-tracker", {"maxItems": 1, "timeoutSeconds": 1})
+
+    assert result == [{"name": "Maya Chen"}]
+    assert calls[0]["method"] == "POST"
+    assert "maxItems=1" in calls[0]["url"]
 
 
 def test_p1_linkedin_source_normalizes_sales_nav_rows(monkeypatch) -> None:

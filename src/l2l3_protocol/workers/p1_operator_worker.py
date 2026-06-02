@@ -1164,6 +1164,7 @@ def _apify_funding_search(inputs: dict[str, Any], limit: int) -> list[dict[str, 
         "mode": "all_sources",
         "searchQuery": str(inputs.get("apify_search_query") or "B2C"),
         "daysBack": int(inputs.get("days_back", 14)),
+        "maxItems": limit,
         "maxResults": limit,
         "outputMode": "raw",
     }
@@ -1283,7 +1284,8 @@ def _apify_linkedin_search(inputs: dict[str, Any], limit: int) -> list[dict[str,
 def _run_apify_actor(actor_id: str, actor_input: dict[str, Any]) -> list[dict[str, Any]]:
     token = require_env("APIFY_API_TOKEN")
     encoded_actor = actor_id.replace("/", "~")
-    run = _request_json(f"https://api.apify.com/v2/acts/{encoded_actor}/runs?token={quote(token)}", method="POST", body=actor_input, timeout=60)
+    max_items = _apify_max_items(actor_input)
+    run = _request_json(f"https://api.apify.com/v2/acts/{encoded_actor}/runs?token={quote(token)}&maxItems={max_items}", method="POST", body=actor_input, timeout=60)
     run_id = run.get("data", {}).get("id")
     if not run_id:
         raise P1WorkerInputError(f"Apify actor did not return run id: {actor_id}")
@@ -1302,6 +1304,17 @@ def _run_apify_actor(actor_id: str, actor_input: dict[str, Any]) -> list[dict[st
             raise P1WorkerInputError(f"Apify actor failed: {actor_id} status={status}")
         time.sleep(5)
     raise P1WorkerInputError(f"Apify actor timed out: {actor_id} latest_status={latest.get('status')}")
+
+
+def _apify_max_items(actor_input: dict[str, Any]) -> int:
+    raw = actor_input.get("maxItems") or actor_input.get("maxResults") or actor_input.get("limit")
+    try:
+        max_items = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise P1WorkerInputError("Apify actor input must include positive maxItems, maxResults, or limit") from exc
+    if max_items < 1:
+        raise P1WorkerInputError("Apify actor maxItems must be greater than zero")
+    return max_items
 
 
 def _gemini_client():
