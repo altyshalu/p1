@@ -173,6 +173,86 @@ def test_claim_grounding_failure_proposal_targets_eval_contract() -> None:
     assert "claim-grounding contract" in proposals[0].proposed_change
 
 
+def test_missing_env_error_overrides_output_schema_proposal_type() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "p1-source-collector", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "task_failed",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "p1-source-collector",
+                    "error": '{"error_type": "P1WorkerInputError", "message": "missing required environment variable: EXA_API_KEY"}',
+                },
+            },
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "p1-source-collector",
+                    "failure_type": "output_schema",
+                    "error": '{"error_type": "P1WorkerInputError", "message": "missing required environment variable: EXA_API_KEY"}',
+                    "structured_error": {
+                        "error_type": "P1WorkerInputError",
+                        "message": "missing required environment variable: EXA_API_KEY",
+                    },
+                },
+            },
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "missing_runtime_dependency"
+    assert proposals[0].proposal_type == "improve_observability"
+    assert proposals[0].target_component == "runtime:p1-source-collector/env:EXA_API_KEY"
+    assert proposals[0].failure_signature == "missing_runtime_dependency:p1-source-collector:EXA_API_KEY"
+    assert "missing runtime dependency" in proposals[0].proposed_change.lower()
+
+
+def test_missing_env_proposal_uses_env_evidence_in_mixed_runtime_failures() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "p1-source-collector", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "setup-checker",
+                    "failure_type": "missing_provider_credential",
+                    "error": "provider credential unavailable",
+                },
+            },
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "p1-source-collector",
+                    "failure_type": "output_schema",
+                    "error": "missing required environment variable: exa_api_key",
+                },
+            },
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "missing_runtime_dependency"
+    assert proposals[0].proposal_type == "improve_observability"
+    assert proposals[0].target_component == "runtime:p1-source-collector/env:exa_api_key"
+    assert proposals[0].failure_signature == "missing_runtime_dependency:p1-source-collector:exa_api_key"
+
+
 def test_repaired_eval_failure_does_not_create_terminal_quality_proposal() -> None:
     run = {
         "id": str(uuid4()),
