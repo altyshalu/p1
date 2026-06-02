@@ -290,6 +290,8 @@ def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
                     'outreach_drafts': [
                         {
                             'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
                             'text': 'ABRT/Limpid draft',
                             'status': 'draft',
                             'publish': False,
@@ -303,6 +305,60 @@ def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
     }
 
     assert module.verify_p1_quality(run) == {'gateway_approved': 1, 'drafts_verified': 1}
+
+
+def test_p1_full_proof_verify_quality_rejects_unverified_linkedin_identity() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Needs Review'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.crunchbase.com/person/example'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Needs Review',
+                            'linkedin_url': '',
+                            'identity_status': 'needs_review',
+                            'text': 'ABRT/Limpid draft',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.crunchbase.com/person/example'],
+                            'claims': [{'text': 'Needs Review is an investor.', 'source_url': 'https://www.crunchbase.com/person/example'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'missing_verified_person_linkedin' in str(exc)
+        assert 'identity_status_not_verified' in str(exc)
+    else:
+        raise AssertionError('expected unverified LinkedIn identity to fail P1 quality verification')
 
 
 def test_p1_full_proof_verify_quality_rejects_missing_investor_fit() -> None:

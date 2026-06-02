@@ -43,7 +43,7 @@ GOOGLE_SHEET_HEADERS = [
     "runtime_source",
     "synced_at",
 ]
-LINKEDIN_PERSON_RE = re.compile(r"^https://(?:www\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$")
+LINKEDIN_PERSON_RE = re.compile(r"^https?://(?:(?:www|[a-z]{2})\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$", re.IGNORECASE)
 IDENTITY_STATUS_VERIFIED = "verified_linkedin"
 IDENTITY_STATUS_REVIEW = "needs_review"
 
@@ -208,6 +208,9 @@ def normalize_leads(work_order: dict[str, Any], context: dict[str, Any]) -> dict
         name = str(candidate.get("name") or "").strip()
         if not name or _looks_like_company(name):
             rejected.append({"reason": "not_a_single_human", "candidate": candidate})
+            continue
+        if not _has_clean_person_name(name):
+            rejected.append({"reason": "invalid_person_name", "candidate": candidate})
             continue
         url = _clean_url(str(candidate.get("linkedin_url") or candidate.get("source_url") or ""))
         if url and 'linkedin.com/company/' in url:
@@ -434,6 +437,10 @@ def gather_live_intelligence(work_order: dict[str, Any], context: dict[str, Any]
                 for item in results
             ],
         }
+        live_linkedin_url = _linkedin_person_url_from_urls(canonical["live_intelligence"]["exa_raw_urls"])
+        if live_linkedin_url and not canonical["identity"].get("linkedin_url"):
+            canonical["identity"]["linkedin_url"] = live_linkedin_url
+            canonical["identity"]["identity_status"] = IDENTITY_STATUS_VERIFIED
         updated.append(canonical)
     return {"p1_dossiers": updated}
 
@@ -467,6 +474,7 @@ Return JSON only with keys: identity_confidence, product_b2c_fit, product_leader
 """,
         )
         gateway = _normalize_gateway_result(response)
+        _apply_identity_quality_gate(dossier, gateway)
         evaluations.append({"dossier": dossier, "gateway": gateway})
     return {"gateway_evaluations": evaluations}
 
@@ -550,6 +558,24 @@ def _gateway_decision(
     return "needs_more_evidence", reasons
 
 
+def _apply_identity_quality_gate(dossier: dict[str, Any], gateway: dict[str, Any]) -> None:
+    identity = dossier.get("identity") if isinstance(dossier.get("identity"), dict) else {}
+    linkedin_url = _clean_url(str(identity.get("linkedin_url") or ""))
+    identity_status = str(identity.get("identity_status") or "").strip()
+    reasons = gateway.get("decision_reasons")
+    if not isinstance(reasons, list):
+        reasons = []
+    if not LINKEDIN_PERSON_RE.match(linkedin_url):
+        reasons.append("missing_verified_person_linkedin")
+    if identity_status != IDENTITY_STATUS_VERIFIED:
+        reasons.append(f"identity_status_not_verified:{identity_status or IDENTITY_STATUS_REVIEW}")
+    deduped_reasons = list(dict.fromkeys(str(reason) for reason in reasons if str(reason).strip()))
+    if deduped_reasons:
+        gateway["decision_reasons"] = deduped_reasons
+        if gateway.get("decision") == "awaiting_outreach":
+            gateway["decision"] = "needs_more_evidence"
+
+
 def build_forge_queue(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     evaluations = require_list(work_order["inputs"].get("gateway_evaluations"), "gateway_evaluations")
     queue = [item for item in evaluations if item.get("gateway", {}).get("decision") == "awaiting_outreach"]
@@ -629,6 +655,7 @@ def judge_outreach_quality(work_order: dict[str, Any], context: dict[str, Any]) 
         "has_clear_cta": all(_has_clear_cta(str(item.get("text", ""))) for item in drafts),
         "no_placeholder_signoff": all(not _has_placeholder_signoff(str(item.get("text", ""))) for item in drafts),
         "all_have_idempotency_key": all(str(item.get("idempotency_key") or "").strip() for item in drafts),
+        "all_have_verified_person_linkedin": all(_draft_has_verified_person_linkedin(item) for item in drafts),
     }
     for key, passed in checks.items():
         if not passed:
@@ -1364,6 +1391,25 @@ def _clean_url(value: str) -> str:
     return value.strip().split("?")[0].rstrip("/")
 
 
+def _linkedin_person_url_from_urls(urls: list[Any]) -> str:
+    for value in urls:
+        url = _clean_url(str(value or ""))
+        if LINKEDIN_PERSON_RE.match(url):
+            return url
+    return ""
+
+
+def _has_clean_person_name(name: str) -> bool:
+    text = name.strip()
+    if len(text) < 2 or len(text) > 80:
+        return False
+    allowed_punctuation = {" ", "-", "'", "’", "."}
+    if any((not ch.isalpha()) and ch not in allowed_punctuation for ch in text):
+        return False
+    words = [word for word in re.split(r"[\s\-'.’]+", text) if word]
+    return bool(words) and all(any(ch.isalpha() for ch in word) for word in words)
+
+
 def _looks_like_company(name: str) -> bool:
     lowered = name.lower()
     tokens = ["ventures", "capital", "partners", "fund", "group", "inc", "llc", "ltd", "company", "combinator", "labs"]
@@ -1464,6 +1510,12 @@ def _claims_have_sources(draft: dict[str, Any]) -> bool:
         if not isinstance(claim, dict) or not str(claim.get("text") or "").strip() or not str(claim.get("source_url") or "").strip():
             return False
     return True
+
+
+def _draft_has_verified_person_linkedin(draft: dict[str, Any]) -> bool:
+    linkedin_url = _clean_url(str(draft.get("linkedin_url") or ""))
+    identity_status = str(draft.get("identity_status") or "").strip()
+    return bool(LINKEDIN_PERSON_RE.match(linkedin_url)) and identity_status == IDENTITY_STATUS_VERIFIED
 
 
 HANDLERS = {
