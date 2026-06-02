@@ -312,7 +312,7 @@ def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatc
     try:
         module.main()
     except SystemExit as exc:
-        assert 'no duplicate-skip evidence found' in str(exc)
+        assert 'no duplicate-skip or stable no-op evidence found' in str(exc)
     else:
         raise AssertionError('expected SystemExit')
 
@@ -569,6 +569,26 @@ def test_full_proof_expected_ids_come_from_run_artifacts() -> None:
     assert module.expected_draft_lead_ids(run) == ['lead-1', 'lead-2']
     assert module.expected_draft_pairs(run) == [('run-1', 'lead-1'), ('run-1', 'lead-2')]
     assert module.expected_dossier_lead_ids(run) == ['lead-1', 'lead-2']
+
+
+def test_p1_idempotency_accepts_stable_noop_metrics() -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+
+    before = {'sheet_written': 3, 'outreach_master_written': 3, 'data_lake_written': 5}
+    after = {'sheet_written': 3, 'outreach_master_written': 3, 'data_lake_written': 5}
+
+    assert module.sync_metrics_stable(before, after) is True
+    assert module.has_duplicate_skip_evidence(after, {'p1_external_sync_duplicate_skipped': 0}) is False
+
+
+def test_p1_idempotency_rejects_metric_growth_without_duplicate_skip() -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+
+    before = {'sheet_written': 3, 'outreach_master_written': 3, 'data_lake_written': 5}
+    after = {'sheet_written': 6, 'outreach_master_written': 6, 'data_lake_written': 5}
+
+    assert module.sync_metrics_stable(before, after) is False
+    assert module.has_duplicate_skip_evidence(after, {'p1_external_sync_duplicate_skipped': 0}) is False
 
 
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
