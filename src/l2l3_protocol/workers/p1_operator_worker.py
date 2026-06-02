@@ -653,6 +653,7 @@ def judge_outreach_quality(work_order: dict[str, Any], context: dict[str, Any]) 
         "word_count_under_110": all(len(str(item.get("text", "")).split()) <= 110 for item in drafts),
         "mentions_abrt_or_limpid": all(("abrt" in str(item.get("text", "")).lower()) or ("limpid" in str(item.get("text", "")).lower()) for item in drafts),
         "has_clear_cta": all(_has_clear_cta(str(item.get("text", ""))) for item in drafts),
+        "single_meeting_cta": all(_meeting_cta_count(str(item.get("text", ""))) <= 1 for item in drafts),
         "no_placeholder_signoff": all(not _has_placeholder_signoff(str(item.get("text", ""))) for item in drafts),
         "all_have_idempotency_key": all(str(item.get("idempotency_key") or "").strip() for item in drafts),
         "all_have_verified_person_linkedin": all(_draft_has_verified_person_linkedin(item) for item in drafts),
@@ -1484,17 +1485,22 @@ def _ensure_send_ready_cta(text: str) -> str:
 
 
 def _has_clear_cta(text: str) -> bool:
-    lowered = text.lower()
-    cta_markers = (
-        'call next week',
-        '30-minute call',
-        '30 minute call',
-        'quick call',
-        'resonates',
-        'compare notes',
-        'chat next week',
-    )
-    return any(marker in lowered for marker in cta_markers)
+    return _meeting_cta_count(text) == 1
+
+
+def _meeting_cta_count(text: str) -> int:
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    meeting_action_re = re.compile(r"\b(call|chat|connect|meet|meeting|conversation)\b")
+    timing_re = re.compile(r"\b(next week|30\s*[- ]?minutes?|30\s*min|quick|brief)\b")
+    count = 0
+    for sentence_match in re.finditer(r"[^.!?\n]+", normalized):
+        sentence = sentence_match.group(0)
+        for action_match in meeting_action_re.finditer(sentence):
+            start, end = action_match.span()
+            local_window = sentence[max(0, start - 50) : min(len(sentence), end + 80)]
+            if timing_re.search(local_window):
+                count += 1
+    return count
 
 
 def _has_placeholder_signoff(text: str) -> bool:

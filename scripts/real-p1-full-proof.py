@@ -216,8 +216,13 @@ def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
             draft_items.extend(item for item in items if isinstance(item, dict))
     for draft in draft_items:
         name = str(draft.get('name') or 'unknown')
-        if not str(draft.get('text') or '').strip():
+        text = str(draft.get('text') or '').strip()
+        if not text:
             failures.append(f'{name}: missing_draft_text')
+        if text and not has_clear_cta(text):
+            failures.append(f'{name}: missing_clear_cta')
+        if meeting_cta_count(text) > 1:
+            failures.append(f'{name}: duplicate_meeting_cta')
         if draft.get('publish') is True:
             failures.append(f'{name}: draft_publish_true')
         if str(draft.get('status') or '') != 'draft':
@@ -239,6 +244,25 @@ def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
     if failures:
         raise SystemExit(f'P1 quality verification failed: {failures}')
     return {'gateway_approved': len(approved), 'drafts_verified': len(draft_items)}
+
+
+def has_clear_cta(text: str) -> bool:
+    return meeting_cta_count(text) == 1
+
+
+def meeting_cta_count(text: str) -> int:
+    normalized = re.sub(r'\s+', ' ', text.strip().lower())
+    meeting_action_re = re.compile(r'\b(call|chat|connect|meet|meeting|conversation)\b')
+    timing_re = re.compile(r'\b(next week|30\s*[- ]?minutes?|30\s*min|quick|brief)\b')
+    count = 0
+    for sentence_match in re.finditer(r'[^.!?\n]+', normalized):
+        sentence = sentence_match.group(0)
+        for action_match in meeting_action_re.finditer(sentence):
+            start, end = action_match.span()
+            local_window = sentence[max(0, start - 50) : min(len(sentence), end + 80)]
+            if timing_re.search(local_window):
+                count += 1
+    return count
 
 
 def main() -> int:

@@ -292,7 +292,7 @@ def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
                             'name': 'Product Angel',
                             'linkedin_url': 'https://www.linkedin.com/in/productangel',
                             'identity_status': 'verified_linkedin',
-                            'text': 'ABRT/Limpid draft',
+                            'text': 'ABRT/Limpid is mapping product-led angels. Would a quick 30-minute call next week make sense?',
                             'status': 'draft',
                             'publish': False,
                             'evidence_urls': ['https://www.linkedin.com/in/productangel'],
@@ -305,6 +305,169 @@ def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
     }
 
     assert module.verify_p1_quality(run) == {'gateway_approved': 1, 'drafts_verified': 1}
+
+
+def test_p1_full_proof_verify_quality_rejects_duplicate_meeting_cta() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
+                            'text': (
+                                'ABRT/Limpid is mapping product-led angels. '
+                                'I would love to connect for 30 minutes next week. '
+                                'Would a quick 30-minute call next week make sense?'
+                            ),
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'duplicate_meeting_cta' in str(exc)
+    else:
+        raise AssertionError('expected duplicate meeting CTA to fail P1 quality verification')
+
+
+def test_p1_full_proof_verify_quality_rejects_same_sentence_duplicate_meeting_cta() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
+                            'text': 'ABRT/Limpid is mapping product-led angels. Would a quick 30-minute call next week or a brief chat next week make sense?',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'duplicate_meeting_cta' in str(exc)
+    else:
+        raise AssertionError('expected same-sentence duplicate meeting CTA to fail P1 quality verification')
+
+
+def test_p1_full_proof_verify_quality_rejects_resonates_only_without_meeting_cta() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
+                            'text': 'ABRT/Limpid is mapping product-led angels. Curious whether that thesis resonates.',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'missing_clear_cta' in str(exc)
+    else:
+        raise AssertionError('expected resonates-only draft to fail P1 quality verification')
 
 
 def test_p1_full_proof_verify_quality_rejects_unverified_linkedin_identity() -> None:
