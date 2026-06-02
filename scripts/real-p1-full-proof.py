@@ -29,7 +29,7 @@ def load_env_file(path_value: str | None) -> None:
         os.environ[key.strip()] = value.strip().strip('"').strip("'")
 
 
-def verify_sheet_rows(spreadsheet_id: str, tab_name: str, service_account_path: str, expected_lead_ids: list[str]) -> dict[str, int]:
+def verify_sheet_rows(spreadsheet_id: str, tab_name: str, service_account_path: str, expected_pairs: list[tuple[str, str]]) -> dict[str, int]:
     from l2l3_protocol.workers.p1_operator_worker import _google_access_token, _request_json
 
     token = _google_access_token(service_account_path)
@@ -41,14 +41,19 @@ def verify_sheet_rows(spreadsheet_id: str, tab_name: str, service_account_path: 
     if not values:
         raise SystemExit('sheet verification failed: target tab returned no values')
     header = values[0]
-    if 'lead_id' not in header:
-        raise SystemExit(f'sheet verification failed: header has no lead_id column: {header}')
+    if 'run_id' not in header or 'lead_id' not in header:
+        raise SystemExit(f'sheet verification failed: header has no run_id/lead_id columns: {header}')
+    run_idx = header.index('run_id')
     lead_idx = header.index('lead_id')
-    present = {str(row[lead_idx]).strip() for row in values[1:] if len(row) > lead_idx}
-    missing = [lead_id for lead_id in expected_lead_ids if lead_id not in present]
+    present = {
+        (str(row[run_idx]).strip(), str(row[lead_idx]).strip())
+        for row in values[1:]
+        if len(row) > max(run_idx, lead_idx)
+    }
+    missing = [pair for pair in expected_pairs if pair not in present]
     if missing:
-        raise SystemExit(f'sheet verification failed: expected lead_ids are missing from sheet: {missing}')
-    return {'row_count': len(values) - 1, 'matched_leads': len(expected_lead_ids)}
+        raise SystemExit(f'sheet verification failed: expected run_id/lead_id pairs are missing from sheet: {missing}')
+    return {'row_count': len(values) - 1, 'matched_pairs': len(expected_pairs)}
 
 
 def verify_outreach_master(path_value: str, expected_pairs: list[tuple[str, str]]) -> dict[str, int]:
@@ -132,7 +137,6 @@ def data_lake_path(preview: dict[str, Any], inputs: dict[str, Any]) -> str:
         or inputs.get('data_lake_dossier_path')
         or inputs.get('dossier_output_path')
         or os.environ.get('P1_DOSSIER_OUTPUT_PATH')
-        or os.environ.get('P1_DOSSIER_SOURCE_PATH')
         or ''
     )
 
@@ -260,6 +264,19 @@ def main() -> int:
         assert_summary_shape(summary)
 
     assert_status(final_run, {'completed', 'waiting_approval', 'waiting_user'})
+    external_writes_requested = any(bool(inputs.get(key)) for key in ('allow_google_sheet_write', 'allow_outreach_master_write', 'allow_data_lake_write'))
+    if external_writes_requested and final_run['status'] == 'waiting_approval':
+        raise SystemExit('full proof incomplete: external writes were requested but run is still waiting_approval; rerun with --approve and verification flags')
+    if final_run['status'] == 'completed':
+        missing_verify_flags: list[str] = []
+        if bool(inputs.get('allow_google_sheet_write')) and not args.verify_sheet:
+            missing_verify_flags.append('--verify-sheet')
+        if bool(inputs.get('allow_outreach_master_write')) and not args.verify_outreach_master:
+            missing_verify_flags.append('--verify-outreach-master')
+        if bool(inputs.get('allow_data_lake_write')) and not args.verify_data_lake:
+            missing_verify_flags.append('--verify-data-lake')
+        if missing_verify_flags:
+            raise SystemExit(f'full proof incomplete: missing verification flags for requested external writes: {missing_verify_flags}')
     latest_metrics = summary.get('latest_metrics', {}) if isinstance(summary.get('latest_metrics'), dict) else {}
     if final_run['status'] == 'completed' and not latest_metrics:
         raise SystemExit('full proof failed: completed run has empty latest_metrics')
@@ -276,12 +293,16 @@ def main() -> int:
         service_account_path = sheet_config['service_account_path']
         if not spreadsheet_id or not service_account_path:
             raise SystemExit('verify-sheet requires spreadsheet_id and google_service_account_path')
-        lead_ids = [str(row.get('lead_id')) for row in (preview.get('google_sheets') or {}).get('rows', []) if isinstance(row, dict) and row.get('lead_id')]
-        if not lead_ids:
-            lead_ids = expected_draft_lead_ids(final_run)
-        if not lead_ids:
-            raise SystemExit('verify-sheet requested but run did not include any expected lead_ids to validate')
-        sheet_verification = verify_sheet_rows(spreadsheet_id, tab_name, str(service_account_path), lead_ids)
+        sheet_pairs = [
+            (str(row.get('run_id')).strip(), str(row.get('lead_id')).strip())
+            for row in (preview.get('google_sheets') or {}).get('rows', [])
+            if isinstance(row, dict) and row.get('run_id') and row.get('lead_id')
+        ]
+        if not sheet_pairs:
+            sheet_pairs = expected_draft_pairs(final_run)
+        if not sheet_pairs:
+            raise SystemExit('verify-sheet requested but run did not include any expected run_id/lead_id pairs to validate')
+        sheet_verification = verify_sheet_rows(spreadsheet_id, tab_name, str(service_account_path), sheet_pairs)
 
     if args.verify_outreach_master and final_run['status'] == 'completed':
         outreach_master_path_value = outreach_master_path(preview, inputs)

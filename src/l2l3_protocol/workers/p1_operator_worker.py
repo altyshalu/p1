@@ -721,7 +721,6 @@ def sync_data_lake(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
         work_order["inputs"].get("data_lake_dossier_path")
         or work_order["inputs"].get("dossier_output_path")
         or os.environ.get("P1_DOSSIER_OUTPUT_PATH")
-        or os.environ.get("P1_DOSSIER_SOURCE_PATH")
     )
     root = Path(require_text(output_path, "data_lake_dossier_path"))
     root.mkdir(parents=True, exist_ok=True)

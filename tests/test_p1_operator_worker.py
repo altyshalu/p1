@@ -10,6 +10,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _gemini_json,
     _request_json,
     _redact_secrets,
+    P1WorkerInputError,
     build_metrics_report,
     collect_sources,
     evaluate_gateway,
@@ -679,6 +680,17 @@ def test_p1_data_lake_sync_writes_physical_dossier_files(tmp_path: Path) -> None
     payload = json.loads(written.read_text(encoding="utf-8"))
     assert payload["identity"]["name"] == "Arianna Simpson"
     assert payload["runtime_source"] == "p1-operator-outreach"
+
+
+def test_p1_data_lake_sync_requires_explicit_output_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("P1_DOSSIER_SOURCE_PATH", str(tmp_path))
+
+    try:
+        sync_data_lake({"inputs": {"allow_data_lake_write": True, "p1_dossiers": []}}, {})
+    except P1WorkerInputError as exc:
+        assert "data_lake_dossier_path" in str(exc)
+    else:
+        raise AssertionError("expected data lake sync to reject source path fallback")
 
 
 def test_p1_outreach_master_sync_appends_drafts(tmp_path: Path) -> None:
