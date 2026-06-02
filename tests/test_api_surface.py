@@ -1,4 +1,6 @@
 from l2l3_protocol.api.main import _build_run_summary, app
+from l2l3_protocol.services.dashboard import operator_dashboard_html
+from l2l3_protocol.services.p1_defaults import default_p1_inputs
 from l2l3_protocol.core.schemas import ProcessRunCreate, RecentSystemReviewCreate
 from pydantic import ValidationError
 
@@ -8,6 +10,9 @@ def test_generic_runtime_api_routes_are_registered() -> None:
 
     assert ('/runs', 'POST') in routes
     assert ('/runs', 'GET') in routes
+    assert ('/p1/runs', 'POST') in routes
+    assert ('/dashboard', 'GET') in routes
+    assert ('/favicon.ico', 'GET') in routes
     assert ('/runs/{run_id}', 'GET') in routes
     assert ('/runs/{run_id}/summary', 'GET') in routes
     assert ('/runs/{run_id}/messages', 'POST') in routes
@@ -25,6 +30,25 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ('/reports/system-learning', 'GET') in routes
     assert ('/regression-cases', 'GET') in routes
     assert ('/runtime/capabilities', 'GET') in routes
+
+
+def test_p1_defaults_are_demo_target_and_write_gated() -> None:
+    inputs = default_p1_inputs()
+
+    assert inputs['mode'] == 'full_pipeline'
+    assert inputs['limit'] == 20
+    assert inputs['allow_google_sheet_write'] is True
+    assert inputs['allow_outreach_master_write'] is True
+    assert inputs['google_sheet_tab'] == 'P1_L2L3_NEW_LEADS'
+
+
+def test_operator_dashboard_uses_real_api_endpoints() -> None:
+    html = operator_dashboard_html()
+
+    assert '/runs?playbook_key=p1-operator-outreach&limit=20' in html
+    assert '/p1/runs' in html
+    assert '/reports/system-learning?playbook_key=p1-operator-outreach&since_hours=168' in html
+    assert 'fake' not in html.lower()
 
 
 def test_run_create_rejects_old_process_key_field() -> None:

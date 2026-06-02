@@ -11,7 +11,7 @@ from uuid import uuid4
 import structlog
 import uvicorn
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ from l2l3_protocol.core.schemas import (
     RegistryKind,
     RunControlCreate,
     RunMessageCreate,
+    RunMode,
     RunStatus,
     SystemReview,
     WorkOrder,
@@ -48,6 +49,8 @@ from l2l3_protocol.runtime.self_improvement import (
     build_system_learning_report,
     proposal_from_failure_learning,
 )
+from l2l3_protocol.services.dashboard import operator_dashboard_html
+from l2l3_protocol.services.p1_defaults import DEFAULT_P1_GOAL, P1_PLAYBOOK_KEY, default_p1_inputs
 
 
 @asynccontextmanager
@@ -108,6 +111,16 @@ async def health() -> dict[str, str]:
     return {"status": "ok", "service": "l2l3-protocol"}
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> str:
+    return operator_dashboard_html()
+
+
+@app.get("/favicon.ico")
+async def favicon() -> Response:
+    return Response(status_code=204)
+
+
 @app.get("/runtime/capabilities")
 async def runtime_capabilities() -> dict[str, Any]:
     settings = app_state.settings
@@ -136,6 +149,27 @@ async def list_runs(
 ) -> list[dict]:
     bounded_limit = max(1, min(limit, 100))
     return await WorkingMemoryStore(session).list_recent_runs(limit=bounded_limit, playbook_key=playbook_key, since_hours=since_hours)
+
+
+@app.post("/p1/runs")
+async def create_default_p1_run(background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
+    store = WorkingMemoryStore(session)
+    run = ProcessRun(
+        playbook_key=P1_PLAYBOOK_KEY,
+        l2_mode=RunMode.EXECUTION,
+        goal=DEFAULT_P1_GOAL,
+        input={
+            "playbook_key": P1_PLAYBOOK_KEY,
+            "l2_mode": RunMode.EXECUTION.value,
+            "goal": DEFAULT_P1_GOAL,
+            "require_human_approval": True,
+            "inputs": default_p1_inputs(),
+        },
+    )
+    await store.create_run(run)
+    await session.commit()
+    background_tasks.add_task(execute_run, run.id)
+    return {"id": str(run.id), "status": run.status.value, "playbook_key": run.playbook_key, "l2_mode": run.l2_mode.value, "goal": run.goal}
 
 
 def _build_run_summary(run: dict[str, Any]) -> dict[str, Any]:
