@@ -604,7 +604,7 @@ Constraints:
             "gateway_decision": gateway.get("decision", "awaiting_outreach"),
             "triage_score": dossier.get("historical_context", {}).get("v2_triage_score"),
             "archetype": response.get("archetype"),
-            "text": _ensure_send_ready_cta(_ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft"))),
+            "text": _normalize_outreach_text(require_text(response.get("draft"), "draft")),
             "evidence_urls": evidence_urls,
             "claims": _normalize_claims(response.get("claims"), evidence_urls),
             "status": "draft",
@@ -1403,6 +1403,20 @@ def _ensure_abrt_or_limpid_mention(text: str) -> str:
     if "abrt" in lowered or "limpid" in lowered:
         return text
     return f"{text.rstrip()} At ABRT, we're comparing notes with operators building this kind of AI-native edge."
+
+
+def _normalize_outreach_text(text: str) -> str:
+    cleaned = _remove_placeholder_signoff(text)
+    cleaned = _ensure_abrt_or_limpid_mention(cleaned)
+    cleaned = _ensure_send_ready_cta(cleaned)
+    return _remove_placeholder_signoff(cleaned)
+
+
+def _remove_placeholder_signoff(text: str) -> str:
+    lines = text.rstrip().splitlines()
+    while lines and lines[-1].strip().lower() in {"best,", "thanks,", "regards,"}:
+        lines.pop()
+    return "\n".join(lines).rstrip()
 
 
 def _ensure_send_ready_cta(text: str) -> str:
