@@ -74,6 +74,71 @@ def verify_data_lake(root_value: str, expected_lead_ids: list[str]) -> dict[str,
     return {'matched_files': len(expected_lead_ids)}
 
 
+def artifact_payloads(run: dict[str, Any], artifact_type: str) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for artifact in run.get('artifacts', []):
+        if not isinstance(artifact, dict) or artifact.get('artifact_type') != artifact_type:
+            continue
+        payload = artifact.get('payload')
+        if isinstance(payload, dict):
+            payloads.append(payload)
+    return payloads
+
+
+def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
+    gateway_items: list[dict[str, Any]] = []
+    for payload in artifact_payloads(run, 'p1_gateway_evaluations'):
+        items = payload.get('gateway_evaluations', [])
+        if isinstance(items, list):
+            gateway_items.extend(item for item in items if isinstance(item, dict))
+    approved = [item for item in gateway_items if isinstance(item.get('gateway'), dict) and item['gateway'].get('decision') == 'awaiting_outreach']
+    failures: list[str] = []
+    for item in approved:
+        gateway = item['gateway']
+        name = str((item.get('dossier') or {}).get('identity', {}).get('name') or 'unknown')
+        if int(gateway.get('identity_confidence') or 0) < 90:
+            failures.append(f'{name}: identity_confidence_below_90')
+        for key in ('product_b2c_fit', 'product_leadership_fit', 'verified_investor_fit'):
+            if str(gateway.get(key)).upper() != 'PASS':
+                failures.append(f'{name}: {key}_not_pass')
+        if str(gateway.get('bandwidth_signal')).upper() != 'HIGH':
+            failures.append(f'{name}: bandwidth_not_high')
+        if str(gateway.get('liquidity_signal')).upper() != 'YES':
+            failures.append(f'{name}: liquidity_not_yes')
+        if str(gateway.get('exclusion_signal')).upper() == 'YES':
+            failures.append(f'{name}: exclusion_signal_yes')
+        if not isinstance(gateway.get('evidence_urls'), list) or not gateway['evidence_urls']:
+            failures.append(f'{name}: missing_gateway_evidence_urls')
+    if not approved:
+        failures.append('no_gateway_approved_leads')
+
+    draft_items: list[dict[str, Any]] = []
+    for payload in artifact_payloads(run, 'p1_outreach_drafts'):
+        items = payload.get('outreach_drafts', [])
+        if isinstance(items, list):
+            draft_items.extend(item for item in items if isinstance(item, dict))
+    for draft in draft_items:
+        name = str(draft.get('name') or 'unknown')
+        if not str(draft.get('text') or '').strip():
+            failures.append(f'{name}: missing_draft_text')
+        if draft.get('publish') is True:
+            failures.append(f'{name}: draft_publish_true')
+        if str(draft.get('status') or '') != 'draft':
+            failures.append(f'{name}: draft_status_not_draft')
+        if not isinstance(draft.get('evidence_urls'), list) or not draft['evidence_urls']:
+            failures.append(f'{name}: missing_draft_evidence_urls')
+        claims = draft.get('claims')
+        if not isinstance(claims, list) or not claims:
+            failures.append(f'{name}: missing_claims')
+        elif any(not isinstance(claim, dict) or not claim.get('source_url') for claim in claims):
+            failures.append(f'{name}: ungrounded_claim')
+    if approved and len(draft_items) < len(approved):
+        failures.append(f'draft_count_below_approved_count:{len(draft_items)}<{len(approved)}')
+    if failures:
+        raise SystemExit(f'P1 quality verification failed: {failures}')
+    return {'gateway_approved': len(approved), 'drafts_verified': len(draft_items)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run a real full P1 proof with health/capabilities/summary verification.')
     parser.add_argument('--base-url', default='http://127.0.0.1:8000')
@@ -84,6 +149,7 @@ def main() -> int:
     parser.add_argument('--verify-sheet', action='store_true')
     parser.add_argument('--verify-outreach-master', action='store_true')
     parser.add_argument('--verify-data-lake', action='store_true')
+    parser.add_argument('--verify-quality', action='store_true')
     parser.add_argument('--google-service-account-path')
     args = parser.parse_args()
 
@@ -110,6 +176,7 @@ def main() -> int:
     sheet_verification = None
     outreach_master_verification = None
     data_lake_verification = None
+    quality_verification = None
     preview = summary.get('latest_approval_preview', {}) if isinstance(summary.get('latest_approval_preview'), dict) else {}
     if args.verify_sheet and final_run['status'] == 'completed':
         spreadsheet_id = str((preview.get('google_sheets') or {}).get('spreadsheet_id') or inputs.get('spreadsheet_id') or '')
@@ -146,6 +213,9 @@ def main() -> int:
             raise SystemExit('verify-data-lake requested but preview did not include any lead_ids to validate')
         data_lake_verification = verify_data_lake(data_lake_path, lead_ids)
 
+    if args.verify_quality:
+        quality_verification = verify_p1_quality(final_run)
+
     report = {
         'run_id': created['id'],
         'status': final_run['status'],
@@ -157,6 +227,7 @@ def main() -> int:
         'sheet_verification': sheet_verification,
         'outreach_master_verification': outreach_master_verification,
         'data_lake_verification': data_lake_verification,
+        'quality_verification': quality_verification,
         'diagnosis': final_run.get('diagnosis'),
     }
     print(json.dumps(report, ensure_ascii=False, indent=2))

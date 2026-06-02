@@ -187,6 +187,8 @@ def append_full_verify_flags(command: list[str], args: argparse.Namespace) -> No
         command.append('--verify-outreach-master')
     if args.verify_data_lake:
         command.append('--verify-data-lake')
+    if args.verify_quality:
+        command.append('--verify-quality')
     if args.google_service_account_path:
         command.extend(['--google-service-account-path', args.google_service_account_path])
     if args.approve:
@@ -210,6 +212,7 @@ def main() -> int:
     parser.add_argument('--verify-sheet', action='store_true')
     parser.add_argument('--verify-outreach-master', action='store_true')
     parser.add_argument('--verify-data-lake', action='store_true')
+    parser.add_argument('--verify-quality', action='store_true')
     parser.add_argument('--google-service-account-path')
     args = parser.parse_args()
 

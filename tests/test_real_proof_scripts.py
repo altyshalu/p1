@@ -196,6 +196,88 @@ def test_p1_full_proof_verify_data_lake(monkeypatch, tmp_path: Path) -> None:
     assert 'data_lake_verification' in stdout.getvalue()
 
 
+def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'text': 'ABRT/Limpid draft',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    assert module.verify_p1_quality(run) == {'gateway_approved': 1, 'drafts_verified': 1}
+
+
+def test_p1_full_proof_verify_quality_rejects_missing_investor_fit() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Operator Only'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'FAIL',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/operator'],
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'verified_investor_fit_not_pass' in str(exc)
+    else:
+        raise AssertionError('expected SystemExit')
+
+
 def test_p1_cache_proof_rejects_missing_cache_hits(monkeypatch) -> None:
     module = _load_module('real-p1-cache-proof.py', 'real_p1_cache_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'source_only'})
