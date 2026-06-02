@@ -110,6 +110,40 @@ def test_p1_outreach_writer_enforces_abrt_or_limpid_mention(monkeypatch) -> None
     assert "abrt" in result["outreach_drafts"][0]["text"].lower() or "limpid" in result["outreach_drafts"][0]["text"].lower()
 
 
+def test_p1_outreach_writer_enforces_send_ready_cta(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "archetype": "Builder",
+            "draft": "Hi Arianna, ABRT is mapping operator-investors with strong consumer product judgment.",
+            "evidence_urls": ["https://www.linkedin.com/in/ariannasimpson"],
+            "claims": [{"text": "Arianna is an operator-investor.", "source_url": "https://www.linkedin.com/in/ariannasimpson"}],
+        },
+    )
+
+    result = write_outreach_drafts(
+        {
+            "inputs": {
+                "forge_queue": [
+                    {
+                        "dossier": {
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
+                        },
+                        "gateway": {"current_role_verified": "Investor"},
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    draft = result["outreach_drafts"][0]
+    assert "30-minute call" in draft["text"]
+    assert judge_outreach_quality({"inputs": {"outreach_drafts": [draft]}}, {})["passed"] is True
+
+
 def test_p1_http_error_redaction_removes_provider_tokens() -> None:
     raw = "https://api.apify.com/v2/acts/a/runs?token=apify_api_MsDummySecretWithS123 apify_api_MsDummySecretWithS123"
 

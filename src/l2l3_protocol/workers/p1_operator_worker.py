@@ -604,7 +604,7 @@ Constraints:
             "gateway_decision": gateway.get("decision", "awaiting_outreach"),
             "triage_score": dossier.get("historical_context", {}).get("v2_triage_score"),
             "archetype": response.get("archetype"),
-            "text": _ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft")),
+            "text": _ensure_send_ready_cta(_ensure_abrt_or_limpid_mention(require_text(response.get("draft"), "draft"))),
             "evidence_urls": evidence_urls,
             "claims": _normalize_claims(response.get("claims"), evidence_urls),
             "status": "draft",
@@ -1403,6 +1403,12 @@ def _ensure_abrt_or_limpid_mention(text: str) -> str:
     if "abrt" in lowered or "limpid" in lowered:
         return text
     return f"{text.rstrip()} At ABRT, we're comparing notes with operators building this kind of AI-native edge."
+
+
+def _ensure_send_ready_cta(text: str) -> str:
+    if _has_clear_cta(text):
+        return text
+    return f"{text.rstrip()} Would a quick 30-minute call next week make sense?"
 
 
 def _has_clear_cta(text: str) -> bool:
