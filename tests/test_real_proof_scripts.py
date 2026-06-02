@@ -162,6 +162,44 @@ def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monke
     assert 'waiting_approval' in stdout.getvalue()
 
 
+def test_p1_full_proof_rejects_waiting_approval_when_external_writes_requested(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'allow_google_sheet_write': True})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs: {'id': 'run-1'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'id': 'run-1', 'status': 'waiting_approval', 'diagnosis': None})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'status': 'waiting_approval', 'playbook_key': 'p1-operator-outreach', 'goal': 'proof', 'latest_metrics': {}, 'artifact_counts': {}, 'task_status_counts': {}, 'pending_actions': [{'type': 'approval'}], 'latest_approval_preview': {}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'external writes were requested but run is still waiting_approval' in str(exc)
+    else:
+        raise AssertionError('expected incomplete external-write proof to fail')
+
+
+def test_p1_full_proof_requires_physical_verification_flags_for_completed_writes(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'allow_google_sheet_write': True, 'allow_data_lake_write': True})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs: {'id': 'run-1'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'id': 'run-1', 'status': 'completed', 'diagnosis': None})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'status': 'completed', 'playbook_key': 'p1-operator-outreach', 'goal': 'proof', 'latest_metrics': {'drafted': 1}, 'artifact_counts': {}, 'task_status_counts': {}, 'pending_actions': [], 'latest_approval_preview': {}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        message = str(exc)
+        assert '--verify-sheet' in message
+        assert '--verify-data-lake' in message
+    else:
+        raise AssertionError('expected completed external-write proof without verification flags to fail')
+
+
 def test_p1_full_proof_verify_outreach_master(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
     master_path = tmp_path / 'master.json'
@@ -425,6 +463,32 @@ def test_p1_readiness_reports_ready_when_required_keys_exist(monkeypatch, tmp_pa
     assert report['missing_required_keys'] == []
     assert report['missing_runtime_inputs'] == []
     assert report['path_checks']['dossier_source_path'] is True
+
+
+def test_p1_readiness_data_lake_write_does_not_accept_source_path(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    source_dir = tmp_path / 'source-dossiers'
+    source_dir.mkdir()
+    env_path = tmp_path / 'test.env'
+    env_path.write_text(
+        f'GEMINI_API_KEY=test\nEXA_API_KEY=test\nAPIFY_API_TOKEN=test\nP1_DOSSIER_SOURCE_PATH={source_dir}\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report(
+        'http://api',
+        str(env_path),
+        'full_pipeline',
+        {'mode': 'full_pipeline', 'sources': ['exa'], 'allow_data_lake_write': True},
+        True,
+        explicit_inputs_supplied=True,
+    )
+
+    assert report['ready'] is False
+    assert report['missing_runtime_inputs'] == ['data_lake_dossier_path or dossier_output_path or P1_DOSSIER_OUTPUT_PATH']
 
 
 def test_p1_readiness_main_returns_nonzero_when_not_ready(monkeypatch, tmp_path: Path) -> None:
