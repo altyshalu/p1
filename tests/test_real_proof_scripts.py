@@ -798,6 +798,43 @@ def test_p1_cache_proof_rejects_missing_cache_hits(monkeypatch) -> None:
         raise AssertionError('expected SystemExit')
 
 
+def test_p1_cache_proof_rejects_missing_triage_cache_hits_when_requested(monkeypatch) -> None:
+    module = _load_module('real-p1-cache-proof.py', 'real_p1_cache_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'source_only', 'use_triage_cache': True})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs, require_human_approval=False: {'id': _goal})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'status': 'completed'})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'latest_metrics': {'provider_cache_hits': 1, 'triage_cache_hits': 0}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-cache-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'no triage_cache_hits' in str(exc)
+    else:
+        raise AssertionError('expected missing triage cache hits to fail')
+
+
+def test_p1_cache_proof_rejects_missing_triage_cache_hits_when_enabled_by_env(monkeypatch) -> None:
+    module = _load_module('real-p1-cache-proof.py', 'real_p1_cache_proof')
+    monkeypatch.setenv('P1_USE_TRIAGE_CACHE', 'true')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'source_only'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'create_run', lambda _base_url, _goal, _inputs, require_human_approval=False: {'id': _goal})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'status': 'completed'})
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'latest_metrics': {'provider_cache_hits': 1, 'triage_cache_hits': 0}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-cache-proof.py', '--inputs-json', '/tmp/in.json'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'no triage_cache_hits' in str(exc)
+    else:
+        raise AssertionError('expected env-enabled missing triage cache hits to fail')
+
+
 def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatch) -> None:
     module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers'})

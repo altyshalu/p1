@@ -427,7 +427,14 @@ async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.Mo
             "playbook_key": "p1-operator-outreach",
             "l2_mode": "execution",
             "goal": "Force a P1 source rerun",
-            "inputs": {"mode": "source_only", "sources": ["apify_linkedin"], "force_rerun": True, "require_human_approval": False},
+            "inputs": {
+                "mode": "source_only",
+                "sources": ["apify_linkedin"],
+                "force_rerun": True,
+                "require_human_approval": False,
+                "use_triage_cache": True,
+                "triage_cache_dir": "/tmp/p1-triage-cache-test",
+            },
             "require_human_approval": False,
         },
     )
@@ -441,9 +448,11 @@ async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.Mo
     )
     runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
     executed_workers: list[str] = []
+    task_inputs_by_worker: dict[str, dict[str, Any]] = {}
 
     async def fake_execute_task(run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
         executed_workers.append(task["worker_profile"])
+        task_inputs_by_worker[task["worker_profile"]] = task["inputs"]
         artifact_type = ArtifactType(task["artifact_type"])
         payloads = {
             ArtifactType.P1_SOURCE_BATCH: {"source": "apify_linkedin", "lead_candidates": [{"lead_id": "new-lead", "name": "New Lead"}], "source_attempts": [{"source": "apify_linkedin", "result_count": 1}]},
@@ -461,6 +470,8 @@ async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.Mo
 
     assert output["status"] == "completed"
     assert executed_workers[0] == "p1-source-collector"
+    assert task_inputs_by_worker["p1-triage-scorer"]["use_triage_cache"] is True
+    assert task_inputs_by_worker["p1-triage-scorer"]["triage_cache_dir"] == "/tmp/p1-triage-cache-test"
     assert not any(event["event_type"] == "p1_checkpoint_reused" for event in store.events)
 
 

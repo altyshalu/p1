@@ -214,7 +214,7 @@ def operator_dashboard_html() -> str:
   </main>
   <script>
     const state = { selectedRunId: null, eventSource: null };
-    const metricKeys = ["raw_leads","normalized_leads","rejected_leads","triage_qualified","dossiers","gateway_approved","gateway_rejected","drafted","eval_passed","sheet_written","data_lake_written","outreach_master_written","provider_cache_hits"];
+    const metricKeys = ["raw_leads","normalized_leads","rejected_leads","triage_qualified","dossiers","gateway_approved","gateway_rejected","drafted","eval_passed","sheet_written","data_lake_written","outreach_master_written","provider_cache_hits","triage_cache_hits"];
 
     async function api(path, options = {}) {
       const apiKey = localStorage.getItem("l2l3OperatorApiKey") || "";

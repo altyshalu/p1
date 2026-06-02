@@ -552,7 +552,7 @@ class ProcessRuntime:
                 await self._fail_p1_if_needed(run_id, "p1 lead normalization failed")
                 return
             normalized = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_NORMALIZED_LEADS)
-            if not await run_task("p1-triage-scorer", "score_triage", {"normalized_leads": normalized.get("normalized_leads", [])}, ArtifactType.P1_TRIAGE_SCORES):
+            if not await run_task("p1-triage-scorer", "score_triage", {**inputs, "normalized_leads": normalized.get("normalized_leads", [])}, ArtifactType.P1_TRIAGE_SCORES):
                 await self._fail_p1_if_needed(run_id, "p1 triage scoring failed")
                 return
             scores = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_TRIAGE_SCORES)

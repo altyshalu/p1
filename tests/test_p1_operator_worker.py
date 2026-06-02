@@ -918,6 +918,349 @@ def test_p1_triage_allows_only_gateway_eligible_golden_icp(monkeypatch) -> None:
     assert dossiers["p1_dossiers"][0]["historical_context"]["p1_hard_gates"]["verified_angel_or_check_writer"] is True
 
 
+def test_p1_triage_cache_reuses_real_scoring_by_evidence_hash(monkeypatch, tmp_path: Path) -> None:
+    calls = {"count": 0}
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+
+    def fake_gemini_json(_client, _prompt):
+        calls["count"] += 1
+        return {
+            "b2c_plg_dna_score": 28,
+            "product_leadership_score": 20,
+            "verified_angel_score": 25,
+            "liquidity_ecosystem_score": 8,
+            "systematic_fit_score": 8,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": True,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": True,
+                "geography_language_fit": True,
+                "excluded_industry": False,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/productangel"],
+            "reasoning": "Product leader with public angel portfolio.",
+        }
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_json", fake_gemini_json)
+    inputs = {
+        "use_triage_cache": True,
+        "triage_cache_dir": str(tmp_path / "triage-cache"),
+        "normalized_leads": [
+            {
+                "lead_id": "lead-2",
+                "name": "Product Angel",
+                "headline": "CPO and Angel Investor",
+                "linkedin_url": "https://www.linkedin.com/in/productangel",
+                "source": "exa",
+                "evidence": ["real evidence"],
+            }
+        ],
+    }
+
+    first = score_triage({"inputs": inputs}, {})
+    second = score_triage({"inputs": inputs}, {})
+
+    assert calls["count"] == 1
+    assert first["triage_scores"][0]["_triage_cache"]["cache_hit"] is False
+    assert second["triage_scores"][0]["_triage_cache"]["cache_hit"] is True
+    assert second["triage_scores"][0]["triage"]["qualified"] is True
+
+
+def test_p1_triage_cache_hit_does_not_require_gemini_client(monkeypatch, tmp_path: Path) -> None:
+    calls = {"count": 0}
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+
+    def fake_gemini_json(_client, _prompt):
+        calls["count"] += 1
+        return {
+            "b2c_plg_dna_score": 28,
+            "product_leadership_score": 20,
+            "verified_angel_score": 25,
+            "liquidity_ecosystem_score": 8,
+            "systematic_fit_score": 8,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": True,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": True,
+                "geography_language_fit": True,
+                "excluded_industry": False,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/productangel"],
+            "reasoning": "Product leader with public angel portfolio.",
+        }
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_json", fake_gemini_json)
+    inputs = {
+        "use_triage_cache": True,
+        "triage_cache_dir": str(tmp_path / "triage-cache"),
+        "normalized_leads": [
+            {
+                "name": "Product Angel",
+                "headline": "CPO and Angel Investor",
+                "linkedin_url": "https://www.linkedin.com/in/productangel",
+                "source": "exa",
+                "evidence": ["real evidence"],
+            }
+        ],
+    }
+
+    first = score_triage({"inputs": inputs}, {})
+    assert first["triage_scores"][0]["_triage_cache"]["cache_hit"] is False
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_client",
+        lambda: (_ for _ in ()).throw(AssertionError("Gemini client should not be created for warm triage cache hit")),
+    )
+
+    second = score_triage({"inputs": inputs}, {})
+
+    assert calls["count"] == 1
+    assert second["triage_scores"][0]["_triage_cache"]["cache_hit"] is True
+
+
+def test_p1_triage_cache_fails_on_corrupt_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    lead = {
+        "name": "Product Angel",
+        "headline": "CPO and Angel Investor",
+        "linkedin_url": "https://www.linkedin.com/in/productangel",
+        "source": "exa",
+        "evidence": ["real evidence"],
+    }
+    from l2l3_protocol.workers.p1_operator_worker import _triage_cache_key
+
+    cache_key = _triage_cache_key(lead)
+    cache_dir = tmp_path / "triage-cache"
+    cache_dir.mkdir()
+    (cache_dir / f"{cache_key}.json").write_text("{bad json", encoding="utf-8")
+
+    try:
+        score_triage({"inputs": {"use_triage_cache": True, "triage_cache_dir": str(cache_dir), "normalized_leads": [lead]}}, {})
+    except P1WorkerInputError as exc:
+        assert "P1 triage cache is corrupt" in str(exc)
+    else:
+        raise AssertionError("expected corrupt triage cache to fail explicitly")
+
+
+def test_p1_triage_cache_fails_on_invalid_structured_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    lead = {
+        "name": "Product Angel",
+        "headline": "CPO and Angel Investor",
+        "linkedin_url": "https://www.linkedin.com/in/productangel",
+        "source": "exa",
+        "evidence": ["real evidence"],
+    }
+    from l2l3_protocol.workers.p1_operator_worker import P1_TRIAGE_CACHE_VERSION, _triage_cache_key
+
+    cache_key = _triage_cache_key(lead)
+    cache_dir = tmp_path / "triage-cache"
+    cache_dir.mkdir()
+    (cache_dir / f"{cache_key}.json").write_text(
+        json.dumps({"version": P1_TRIAGE_CACHE_VERSION, "cache_key": cache_key, "triage": {}}),
+        encoding="utf-8",
+    )
+
+    try:
+        score_triage({"inputs": {"use_triage_cache": True, "triage_cache_dir": str(cache_dir), "normalized_leads": [lead]}}, {})
+    except P1WorkerInputError as exc:
+        assert "P1 triage cache has invalid payload" in str(exc)
+    else:
+        raise AssertionError("expected invalid triage cache payload to fail explicitly")
+
+
+def test_p1_triage_cache_fails_on_semantically_invalid_payload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    lead = {
+        "name": "Product Angel",
+        "headline": "CPO and Angel Investor",
+        "linkedin_url": "https://www.linkedin.com/in/productangel",
+        "source": "exa",
+        "evidence": ["real evidence"],
+    }
+    from l2l3_protocol.workers.p1_operator_worker import P1_TRIAGE_CACHE_VERSION, _triage_cache_key
+
+    cache_key = _triage_cache_key(lead)
+    cache_dir = tmp_path / "triage-cache"
+    cache_dir.mkdir()
+    triage = {
+        "b2c_plg_dna_score": 28,
+        "product_leadership_score": 20,
+        "verified_angel_score": 25,
+        "liquidity_ecosystem_score": 8,
+        "systematic_fit_score": 8,
+        "geography_language_score": 5,
+        "hard_gates": {
+            "b2c_or_plg_product_experience": True,
+            "product_leadership": True,
+            "verified_angel_or_check_writer": True,
+            "geography_language_fit": True,
+            "excluded_industry": False,
+            "excluded_profile_type": False,
+        },
+        "evidence_urls": ["https://www.linkedin.com/in/productangel"],
+        "reasoning": "Product leader with public angel portfolio.",
+        "total_score": 88,
+        "quality_band": "gold",
+        "missing_required_gates": [],
+        "blocking_gates": [],
+        "qualified": "yes please",
+        "datalake_eligible": True,
+        "status": "reject",
+        "reject_reason": "",
+    }
+    (cache_dir / f"{cache_key}.json").write_text(
+        json.dumps({"version": P1_TRIAGE_CACHE_VERSION, "cache_key": cache_key, "triage": triage}),
+        encoding="utf-8",
+    )
+
+    try:
+        score_triage({"inputs": {"use_triage_cache": True, "triage_cache_dir": str(cache_dir), "normalized_leads": [lead]}}, {})
+    except P1WorkerInputError as exc:
+        assert "P1 triage cache has invalid payload" in str(exc)
+    else:
+        raise AssertionError("expected semantically invalid triage cache payload to fail explicitly")
+
+
+def test_p1_triage_cache_fails_on_inconsistent_gate_lists(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    lead = {
+        "name": "Product Angel",
+        "headline": "CPO and Angel Investor",
+        "linkedin_url": "https://www.linkedin.com/in/productangel",
+        "source": "exa",
+        "evidence": ["real evidence"],
+    }
+    from l2l3_protocol.workers.p1_operator_worker import P1_TRIAGE_CACHE_VERSION, _triage_cache_key
+
+    cache_key = _triage_cache_key(lead)
+    cache_dir = tmp_path / "triage-cache"
+    cache_dir.mkdir()
+    triage = {
+        "b2c_plg_dna_score": 28,
+        "product_leadership_score": 20,
+        "verified_angel_score": 25,
+        "liquidity_ecosystem_score": 8,
+        "systematic_fit_score": 8,
+        "geography_language_score": 5,
+        "hard_gates": {
+            "b2c_or_plg_product_experience": True,
+            "product_leadership": True,
+            "verified_angel_or_check_writer": True,
+            "geography_language_fit": True,
+            "excluded_industry": False,
+            "excluded_profile_type": False,
+        },
+        "evidence_urls": ["https://www.linkedin.com/in/productangel"],
+        "reasoning": "Product leader with public angel portfolio.",
+        "total_score": 88,
+        "quality_band": "gold",
+        "missing_required_gates": ["verified_angel_or_check_writer"],
+        "blocking_gates": [],
+        "qualified": False,
+        "datalake_eligible": False,
+        "status": "reject",
+        "reject_reason": "missing_required_gates:verified_angel_or_check_writer",
+    }
+    (cache_dir / f"{cache_key}.json").write_text(
+        json.dumps({"version": P1_TRIAGE_CACHE_VERSION, "cache_key": cache_key, "triage": triage}),
+        encoding="utf-8",
+    )
+
+    try:
+        score_triage({"inputs": {"use_triage_cache": True, "triage_cache_dir": str(cache_dir), "normalized_leads": [lead]}}, {})
+    except P1WorkerInputError as exc:
+        assert "missing_required_gates are inconsistent" in str(exc)
+    else:
+        raise AssertionError("expected inconsistent gate lists to fail explicitly")
+
+
+def test_p1_triage_cache_fails_on_unknown_gate_names(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    lead = {
+        "name": "Product Angel",
+        "headline": "CPO and Angel Investor",
+        "linkedin_url": "https://www.linkedin.com/in/productangel",
+        "source": "exa",
+        "evidence": ["real evidence"],
+    }
+    from l2l3_protocol.workers.p1_operator_worker import P1_TRIAGE_CACHE_VERSION, _triage_cache_key
+
+    cache_key = _triage_cache_key(lead)
+    cache_dir = tmp_path / "triage-cache"
+    cache_dir.mkdir()
+    triage = {
+        "b2c_plg_dna_score": 28,
+        "product_leadership_score": 20,
+        "verified_angel_score": 25,
+        "liquidity_ecosystem_score": 8,
+        "systematic_fit_score": 8,
+        "geography_language_score": 5,
+        "hard_gates": {
+            "b2c_or_plg_product_experience": True,
+            "product_leadership": True,
+            "verified_angel_or_check_writer": True,
+            "geography_language_fit": True,
+            "excluded_industry": False,
+            "excluded_profile_type": False,
+        },
+        "evidence_urls": ["https://www.linkedin.com/in/productangel"],
+        "reasoning": "Product leader with public angel portfolio.",
+        "total_score": 88,
+        "quality_band": "gold",
+        "missing_required_gates": ["totally_fake_gate"],
+        "blocking_gates": [],
+        "qualified": False,
+        "datalake_eligible": False,
+        "status": "reject",
+        "reject_reason": "missing_required_gates:totally_fake_gate",
+    }
+    (cache_dir / f"{cache_key}.json").write_text(
+        json.dumps({"version": P1_TRIAGE_CACHE_VERSION, "cache_key": cache_key, "triage": triage}),
+        encoding="utf-8",
+    )
+
+    try:
+        score_triage({"inputs": {"use_triage_cache": True, "triage_cache_dir": str(cache_dir), "normalized_leads": [lead]}}, {})
+    except P1WorkerInputError as exc:
+        assert "unknown gate names" in str(exc)
+    else:
+        raise AssertionError("expected unknown gate names to fail explicitly")
+
+
+def test_p1_dossiers_require_strict_true_qualification() -> None:
+    try:
+        write_dossiers(
+            {
+                "inputs": {
+                    "triage_scores": [
+                        {
+                            "name": "Product Angel",
+                            "linkedin_url": "https://www.linkedin.com/in/productangel",
+                            "triage": {
+                                "qualified": "yes please",
+                                "reject_reason": "",
+                                "total_score": 88,
+                                "quality_band": "gold",
+                                "status": "gateway_eligible",
+                                "missing_required_gates": [],
+                                "blocking_gates": [],
+                            },
+                        }
+                    ]
+                }
+            },
+            {},
+        )
+    except P1WorkerInputError as exc:
+        assert "triage_not_gateway_eligible" in str(exc)
+    else:
+        raise AssertionError("expected non-boolean qualified value to fail dossier creation")
+
+
 def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch) -> None:
     monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
     monkeypatch.setattr(
@@ -1390,6 +1733,7 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
             },
         },
         "provider_cache_hits": 0,
+        "triage_cache_hits": 0,
         "duration_by_worker_ms": {
             "p1-source-collector": 10,
             "p1-source-merger": 5,

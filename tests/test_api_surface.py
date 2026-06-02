@@ -39,6 +39,7 @@ def test_p1_defaults_are_demo_target_and_write_gated() -> None:
     assert inputs['limit'] == 20
     assert inputs['allow_google_sheet_write'] is True
     assert inputs['allow_outreach_master_write'] is True
+    assert inputs['use_triage_cache'] is True
     assert inputs['google_sheet_tab'] == 'P1_L2L3_NEW_LEADS'
 
 
@@ -64,6 +65,7 @@ def test_operator_dashboard_uses_real_api_endpoints() -> None:
     assert 'Runtime Bottlenecks' in html
     assert 'source_quality_by_source' in html
     assert 'duration_by_worker_ms' in html
+    assert 'triage_cache_hits' in html
     assert 'function esc(value)' in html
     assert '<td>${esc(source)}</td>' in html
     assert '<tr><td>${esc(worker)}</td>' in html

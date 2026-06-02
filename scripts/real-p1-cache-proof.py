@@ -14,6 +14,15 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from p1_real_common import assert_status, create_run, get_summary, load_inputs, require_capabilities, require_health, wait_for_run
 
 
+def triage_cache_requested(inputs: dict) -> bool:
+    value = inputs.get('use_triage_cache')
+    if value is None:
+        value = os.environ.get('P1_USE_TRIAGE_CACHE', 'false')
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {'0', 'false', 'no', 'off'}
+
+
 def load_env_file(path_value: str | None) -> None:
     if not path_value:
         return
@@ -51,6 +60,10 @@ def main() -> int:
     cache_hits = int(latest_metrics.get('provider_cache_hits') or 0)
     if cache_hits <= 0:
         raise SystemExit(f'cache proof failed: second comparable run reported no provider_cache_hits; metrics={latest_metrics}')
+    if triage_cache_requested(inputs):
+        triage_cache_hits = int(latest_metrics.get('triage_cache_hits') or 0)
+        if triage_cache_hits <= 0:
+            raise SystemExit(f'cache proof failed: second comparable run reported no triage_cache_hits; metrics={latest_metrics}')
     print(json.dumps({'first_run_id': first['id'], 'second_run_id': second['id'], 'second_metrics': latest_metrics}, ensure_ascii=False, indent=2))
     return 0
 

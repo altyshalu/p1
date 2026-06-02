@@ -20,6 +20,7 @@ HTTP_TIMEOUT_SECONDS = 30
 HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
 P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
+P1_TRIAGE_CACHE_VERSION = "p1-triage-cache-v1"
 P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 P1_DATALAKE_MIN_SCORE = 50
 P1_STRONG_MIN_SCORE = 70
@@ -57,6 +58,25 @@ P1_REQUIRED_TRIAGE_GATES = (
 P1_BLOCKING_TRIAGE_GATES = (
     "excluded_industry",
     "excluded_profile_type",
+)
+P1_TRIAGE_CACHE_REQUIRED_KEYS = (
+    "b2c_plg_dna_score",
+    "product_leadership_score",
+    "verified_angel_score",
+    "liquidity_ecosystem_score",
+    "systematic_fit_score",
+    "geography_language_score",
+    "hard_gates",
+    "evidence_urls",
+    "reasoning",
+    "total_score",
+    "quality_band",
+    "missing_required_gates",
+    "blocking_gates",
+    "qualified",
+    "datalake_eligible",
+    "status",
+    "reject_reason",
 )
 
 
@@ -240,13 +260,31 @@ def normalize_leads(work_order: dict[str, Any], context: dict[str, Any]) -> dict
 
 
 def score_triage(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
-    client = _gemini_client()
-    leads = require_list(work_order["inputs"].get("normalized_leads"), "normalized_leads")
+    inputs = work_order["inputs"]
+    leads = require_list(inputs.get("normalized_leads"), "normalized_leads")
     scores = []
+    client: Any | None = None
     for lead in leads:
+        cache_key = _triage_cache_key(lead)
+        cache_payload = _read_triage_cache(inputs, cache_key)
+        if cache_payload is not None:
+            triage = cache_payload["triage"]
+            scores.append({**lead, "triage": triage, "_triage_cache": {"cache_hit": True, "cache_key": cache_key}})
+            continue
+        if client is None:
+            client = _gemini_client()
         response = _gemini_json(
             client,
-            f"""
+            _triage_prompt(lead),
+        )
+        triage = _normalize_triage_result(response)
+        _write_triage_cache(inputs, cache_key, lead, triage)
+        scores.append({**lead, "triage": triage, "_triage_cache": {"cache_hit": False, "cache_key": cache_key}})
+    return {"triage_scores": scores}
+
+
+def _triage_prompt(lead: dict[str, Any]) -> str:
+    return f"""
 You are the P1 Triage Agent for Limpid/ABRT.
 Score this real operator/angel lead.
 
@@ -269,11 +307,7 @@ Rules:
 - hard_gates.excluded_profile_type true for mentor-only, advisor-only, investor relations, corporate VC only, traditional VC partner without personal portfolio, or investor-only without operator history.
 - evidence_urls must include the source URLs supporting the score when available.
 Return JSON only with keys: b2c_plg_dna_score, product_leadership_score, verified_angel_score, liquidity_ecosystem_score, systematic_fit_score, geography_language_score, hard_gates, evidence_urls, reasoning.
-""",
-        )
-        triage = _normalize_triage_result(response)
-        scores.append({**lead, "triage": triage})
-    return {"triage_scores": scores}
+"""
 
 
 def _normalize_triage_result(response: dict[str, Any]) -> dict[str, Any]:
@@ -374,7 +408,7 @@ def write_dossiers(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
     rejected = []
     for item in scores:
         triage = item.get("triage") if isinstance(item.get("triage"), dict) else {}
-        if not triage.get("qualified"):
+        if triage.get("qualified") is not True:
             rejected.append(
                 {
                     "name": item.get("name"),
@@ -883,6 +917,10 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
             rejection_buckets[reason] = rejection_buckets.get(reason, 0) + 1
     source_counts: dict[str, int] = {}
     cache_hits = 0
+    triage_cache_hits = 0
+    for item in triage_scores if isinstance(triage_scores, list) else []:
+        if isinstance(item, dict) and isinstance(item.get("_triage_cache"), dict) and item["_triage_cache"].get("cache_hit") is True:
+            triage_cache_hits += 1
     for batch in source_batches if isinstance(source_batches, list) else []:
         if not isinstance(batch, dict):
             continue
@@ -923,6 +961,7 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
         "source_counts": source_counts,
         "source_quality_by_source": _source_quality_by_source(source_batches, normalized_leads, triage_scores, gateway_evaluations),
         "provider_cache_hits": cache_hits,
+        "triage_cache_hits": triage_cache_hits,
         "duration_by_worker_ms": duration_by_worker,
         "total_duration_ms": sum(duration_by_worker.values()),
         "source_duration_ms": source_duration_ms,
@@ -1064,6 +1103,150 @@ def _source_attempt_payload(source: str, request: dict[str, Any], result_count: 
     if actor_id:
         payload["actor_id"] = actor_id
     return payload
+
+
+def _triage_cache_key(lead: dict[str, Any]) -> str:
+    material = {
+        "name": lead.get("name"),
+        "headline": lead.get("headline"),
+        "linkedin_url": lead.get("linkedin_url"),
+        "source_url": lead.get("source_url"),
+        "source": lead.get("source"),
+        "evidence": lead.get("evidence") if isinstance(lead.get("evidence"), list) else [],
+        "policy_version": P1_TRIAGE_CACHE_VERSION,
+    }
+    return hashlib.sha256(json.dumps(material, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+
+
+def _triage_cache_path(inputs: dict[str, Any], cache_key: str) -> Path:
+    root = Path(str(inputs.get("triage_cache_dir") or os.environ.get("P1_TRIAGE_CACHE_DIR") or ".cache/p1_triage_cache"))
+    return root / f"{cache_key}.json"
+
+
+def _use_triage_cache(inputs: dict[str, Any]) -> bool:
+    value = inputs.get("use_triage_cache")
+    if value is None:
+        value = os.environ.get("P1_USE_TRIAGE_CACHE", "false")
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _read_triage_cache(inputs: dict[str, Any], cache_key: str) -> dict[str, Any] | None:
+    if not _use_triage_cache(inputs):
+        return None
+    path = _triage_cache_path(inputs, cache_key)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise P1WorkerInputError(f"P1 triage cache is corrupt: {path}") from exc
+    if not isinstance(payload, dict) or payload.get("version") != P1_TRIAGE_CACHE_VERSION:
+        raise P1WorkerInputError(f"P1 triage cache has invalid schema: {path}")
+    triage = payload.get("triage")
+    if not isinstance(triage, dict):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}")
+    _validate_cached_triage_payload(triage, path)
+    return {"triage": triage}
+
+
+def _validate_cached_triage_payload(triage: dict[str, Any], path: Path) -> None:
+    missing = [key for key in P1_TRIAGE_CACHE_REQUIRED_KEYS if key not in triage]
+    if missing:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; missing keys: {','.join(missing)}")
+    score_ranges = {
+        "b2c_plg_dna_score": (0, 30),
+        "product_leadership_score": (0, 20),
+        "verified_angel_score": (0, 25),
+        "liquidity_ecosystem_score": (0, 10),
+        "systematic_fit_score": (0, 10),
+        "geography_language_score": (0, 5),
+        "total_score": (0, 100),
+    }
+    for key, (minimum, maximum) in score_ranges.items():
+        value = triage.get(key)
+        if type(value) is not int or value < minimum or value > maximum:
+            raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; {key} must be an integer {minimum}-{maximum}")
+    hard_gates = triage.get("hard_gates")
+    if not isinstance(hard_gates, dict):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; hard_gates must be an object")
+    required_gate_keys = (*P1_REQUIRED_TRIAGE_GATES, *P1_BLOCKING_TRIAGE_GATES)
+    missing_gates = [gate for gate in required_gate_keys if gate not in hard_gates]
+    if missing_gates:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; missing gates: {','.join(missing_gates)}")
+    invalid_gates = [gate for gate in required_gate_keys if type(hard_gates.get(gate)) is not bool]
+    if invalid_gates:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; gates must be booleans: {','.join(invalid_gates)}")
+    if not isinstance(triage.get("evidence_urls"), list):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; evidence_urls must be a list")
+    if not all(isinstance(url, str) for url in triage["evidence_urls"]):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; evidence_urls items must be strings")
+    if not isinstance(triage.get("missing_required_gates"), list) or not isinstance(triage.get("blocking_gates"), list):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; gate lists must be lists")
+    if not all(isinstance(gate, str) for gate in triage["missing_required_gates"]) or not all(isinstance(gate, str) for gate in triage["blocking_gates"]):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; gate list items must be strings")
+    unknown_missing_gates = [gate for gate in triage["missing_required_gates"] if gate not in P1_REQUIRED_TRIAGE_GATES]
+    unknown_blocking_gates = [gate for gate in triage["blocking_gates"] if gate not in P1_BLOCKING_TRIAGE_GATES]
+    if unknown_missing_gates or unknown_blocking_gates:
+        unknown = unknown_missing_gates + unknown_blocking_gates
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; unknown gate names: {','.join(unknown)}")
+    expected_missing_gates = [gate for gate in P1_REQUIRED_TRIAGE_GATES if hard_gates.get(gate) is not True]
+    expected_blocking_gates = [gate for gate in P1_BLOCKING_TRIAGE_GATES if hard_gates.get(gate) is True]
+    if triage["missing_required_gates"] != expected_missing_gates:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; missing_required_gates are inconsistent")
+    if triage["blocking_gates"] != expected_blocking_gates:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; blocking_gates are inconsistent")
+    if type(triage.get("qualified")) is not bool or type(triage.get("datalake_eligible")) is not bool:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; eligibility fields must be booleans")
+    if not isinstance(triage.get("reasoning"), str):
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; reasoning must be a string")
+    total = (
+        triage["b2c_plg_dna_score"]
+        + triage["product_leadership_score"]
+        + triage["verified_angel_score"]
+        + triage["liquidity_ecosystem_score"]
+        + triage["systematic_fit_score"]
+        + triage["geography_language_score"]
+    )
+    if triage["total_score"] != total:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; total_score is inconsistent")
+    expected_band = _quality_band(total)
+    if triage.get("quality_band") != expected_band:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; quality_band is inconsistent")
+    expected_status = _triage_status(total, expected_missing_gates, expected_blocking_gates)
+    if triage.get("status") != expected_status:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; status is inconsistent")
+    expected_qualified = expected_status == "gateway_eligible"
+    expected_datalake_eligible = expected_status in {"gateway_eligible", "data_lake_only"}
+    if triage["qualified"] is not expected_qualified or triage["datalake_eligible"] is not expected_datalake_eligible:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; eligibility fields are inconsistent")
+    expected_reject_reason = _triage_reject_reason(total, expected_missing_gates, expected_blocking_gates, expected_status)
+    if triage.get("reject_reason") != expected_reject_reason:
+        raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; reject_reason is inconsistent")
+
+
+def _write_triage_cache(inputs: dict[str, Any], cache_key: str, lead: dict[str, Any], triage: dict[str, Any]) -> None:
+    if not _use_triage_cache(inputs):
+        return
+    path = _triage_cache_path(inputs, cache_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": P1_TRIAGE_CACHE_VERSION,
+        "cache_key": cache_key,
+        "lead": {
+            "name": lead.get("name"),
+            "headline": lead.get("headline"),
+            "linkedin_url": lead.get("linkedin_url"),
+            "source_url": lead.get("source_url"),
+            "source": lead.get("source"),
+        },
+        "cached_at": time.time(),
+        "triage": triage,
+    }
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _source_quality_by_source(
