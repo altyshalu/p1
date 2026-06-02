@@ -7,6 +7,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _apify_funding_search,
     _apify_linkedin_search,
     _ensure_google_sheet_headers,
+    _gemini_json,
     _request_json,
     _redact_secrets,
     build_metrics_report,
@@ -229,6 +230,35 @@ def test_google_sheet_header_update_uses_values_update_range(monkeypatch) -> Non
     put_call = next(call for call in calls if call["method"] == "PUT")
     assert "%211%3A1?valueInputOption=RAW" in put_call["url"]
     assert ":update" not in put_call["url"]
+
+
+def test_gemini_json_retries_invalid_json_with_json_mime_config() -> None:
+    class Response:
+        def __init__(self, text: str):
+            self.text = text
+
+    class Models:
+        def __init__(self):
+            self.calls = []
+
+        def generate_content(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return Response('{"score": 1')
+            return Response('{"score": 1}')
+
+    class Client:
+        def __init__(self):
+            self.models = Models()
+
+    client = Client()
+
+    result = _gemini_json(client, "Return JSON.")
+
+    assert result == {"score": 1}
+    assert len(client.models.calls) == 2
+    assert client.models.calls[0]["config"].response_mime_type == "application/json"
+    assert "Return one complete valid JSON object only" in client.models.calls[1]["contents"]
 
 
 def test_p1_http_error_redaction_removes_provider_tokens() -> None:

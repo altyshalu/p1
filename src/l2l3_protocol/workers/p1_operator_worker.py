@@ -13,6 +13,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from google import genai
+from google.genai import types
 
 
 HTTP_TIMEOUT_SECONDS = 30
@@ -1281,13 +1282,24 @@ def _gemini_client():
 
 
 def _gemini_json(client: Any, prompt: str) -> dict[str, Any]:
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    text = str(response.text or "").strip()
-    text = text.replace("```json", "").replace("```", "").strip()
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise P1WorkerInputError(f"Gemini returned invalid JSON: {text[:500]}") from exc
+    config = types.GenerateContentConfig(responseMimeType="application/json", temperature=0, maxOutputTokens=4096)
+    attempts = [
+        prompt,
+        f"{prompt}\n\nReturn one complete valid JSON object only. Do not truncate. Do not use markdown fences.",
+    ]
+    last_text = ""
+    for attempt_prompt in attempts:
+        response = client.models.generate_content(model="gemini-2.5-flash", contents=attempt_prompt, config=config)
+        text = str(response.text or "").strip()
+        text = text.replace("```json", "").replace("```", "").strip()
+        last_text = text
+        try:
+            parsed = json.loads(text)
+            break
+        except json.JSONDecodeError:
+            continue
+    else:
+        raise P1WorkerInputError(f"Gemini returned invalid JSON after {len(attempts)} attempts: {last_text[:500]}")
     if not isinstance(parsed, dict):
         raise P1WorkerInputError("Gemini returned non-object JSON")
     return parsed
