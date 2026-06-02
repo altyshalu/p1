@@ -388,6 +388,94 @@ def test_p1_outreach_quality_rejects_unverified_linkedin_identity() -> None:
     assert "all_have_verified_person_linkedin" in result["reasons"]
 
 
+def test_p1_outreach_quality_rejects_duplicate_meeting_cta() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Elad Gil",
+                        "linkedin_url": "https://www.linkedin.com/in/eladgil",
+                        "identity_status": "verified_linkedin",
+                        "text": (
+                            "Hi Elad, ABRT is building Limpid around operator-led investing. "
+                            "I'd love to connect for 30 minutes next week to compare notes. "
+                            "Would a quick 30-minute call next week make sense?"
+                        ),
+                        "evidence_urls": ["https://www.linkedin.com/in/eladgil"],
+                        "claims": [{"text": "Elad has operator-investor experience.", "source_url": "https://www.linkedin.com/in/eladgil"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "single_meeting_cta" in result["reasons"]
+
+
+def test_p1_outreach_quality_rejects_same_sentence_duplicate_meeting_cta() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Elad Gil",
+                        "linkedin_url": "https://www.linkedin.com/in/eladgil",
+                        "identity_status": "verified_linkedin",
+                        "text": "ABRT is building Limpid around operator-led investing. Would a quick 30-minute call next week or a brief chat next week make sense?",
+                        "evidence_urls": ["https://www.linkedin.com/in/eladgil"],
+                        "claims": [{"text": "Elad has operator-investor experience.", "source_url": "https://www.linkedin.com/in/eladgil"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "single_meeting_cta" in result["reasons"]
+
+
+def test_p1_outreach_quality_rejects_resonates_only_without_meeting_cta() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Elad Gil",
+                        "linkedin_url": "https://www.linkedin.com/in/eladgil",
+                        "identity_status": "verified_linkedin",
+                        "text": "ABRT is building Limpid around operator-led investing. Curious whether that thesis resonates.",
+                        "evidence_urls": ["https://www.linkedin.com/in/eladgil"],
+                        "claims": [{"text": "Elad has operator-investor experience.", "source_url": "https://www.linkedin.com/in/eladgil"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "has_clear_cta" in result["reasons"]
+
+
 def test_google_sheet_header_update_uses_values_update_range(monkeypatch) -> None:
     calls = []
 
