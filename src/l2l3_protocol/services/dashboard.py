@@ -123,6 +123,19 @@ def operator_dashboard_html() -> str:
     .draft { display: grid; gap: 8px; margin-top: 10px; }
     .event { border-bottom: 1px solid var(--line); padding: 8px 0; }
     .event:last-child { border-bottom: 0; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 13px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 7px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
     textarea {
       width: 100%;
       min-height: 74px;
@@ -183,6 +196,16 @@ def operator_dashboard_html() -> str:
           <div id="events"></div>
         </div>
       </div>
+      <div class="columns" style="margin-top: 14px;">
+        <div class="panel">
+          <strong>Source Quality</strong>
+          <div id="sourceQuality" class="muted">No source-quality metrics yet.</div>
+        </div>
+        <div class="panel">
+          <strong>Runtime Bottlenecks</strong>
+          <div id="bottlenecks" class="muted">No timing metrics yet.</div>
+        </div>
+      </div>
       <div class="panel" style="margin-top: 12px;">
         <strong>Learning</strong>
         <pre id="learning">Loading...</pre>
@@ -240,6 +263,50 @@ def operator_dashboard_html() -> str:
       document.getElementById("metrics").innerHTML = metricKeys.map(key => `
         <div class="metric"><strong>${esc(metrics[key] ?? 0)}</strong><span>${esc(key)}</span></div>
       `).join("");
+      renderSourceQuality(metrics.source_quality_by_source || {});
+      renderBottlenecks(metrics.duration_by_worker_ms || {});
+    }
+
+    function renderSourceQuality(sourceQuality) {
+      const rows = Object.entries(sourceQuality || {});
+      const target = document.getElementById("sourceQuality");
+      if (!rows.length) {
+        target.innerHTML = `<div class="muted">No source-quality metrics yet.</div>`;
+        return;
+      }
+      target.innerHTML = `
+        <table>
+          <thead><tr><th>Source</th><th>Raw</th><th>Qualified</th><th>Approved</th><th>Rates</th></tr></thead>
+          <tbody>${rows.map(([source, stats]) => `
+            <tr>
+              <td>${esc(source)}</td>
+              <td>${esc(stats.raw ?? 0)}</td>
+              <td>${esc(stats.triage_qualified ?? 0)}</td>
+              <td>${esc(stats.gateway_approved ?? 0)}</td>
+              <td>${esc(stats.triage_qualified_rate ?? 0)} / ${esc(stats.gateway_approved_rate ?? 0)}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table>
+      `;
+    }
+
+    function renderBottlenecks(durationByWorker) {
+      const rows = Object.entries(durationByWorker || {})
+        .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 6);
+      const target = document.getElementById("bottlenecks");
+      if (!rows.length) {
+        target.innerHTML = `<div class="muted">No timing metrics yet.</div>`;
+        return;
+      }
+      target.innerHTML = `
+        <table>
+          <thead><tr><th>Worker</th><th>Seconds</th></tr></thead>
+          <tbody>${rows.map(([worker, ms]) => `
+            <tr><td>${esc(worker)}</td><td>${esc(Math.round(Number(ms || 0) / 100) / 10)}</td></tr>
+          `).join("")}</tbody>
+        </table>
+      `;
     }
 
     async function loadRun(runId) {

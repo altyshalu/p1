@@ -60,6 +60,13 @@ def test_operator_dashboard_uses_real_api_endpoints() -> None:
     assert 'l2l3OperatorApiKey' in html
     assert 'authorization' in html
     assert '/reports/system-learning?playbook_key=p1-operator-outreach&since_hours=168' in html
+    assert 'Source Quality' in html
+    assert 'Runtime Bottlenecks' in html
+    assert 'source_quality_by_source' in html
+    assert 'duration_by_worker_ms' in html
+    assert 'function esc(value)' in html
+    assert '<td>${esc(source)}</td>' in html
+    assert '<tr><td>${esc(worker)}</td>' in html
     assert 'fake' not in html.lower()
 
 
