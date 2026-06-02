@@ -10,10 +10,13 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _redact_secrets,
     build_metrics_report,
     collect_sources,
+    evaluate_gateway,
     judge_outreach_quality,
     read_existing_dossiers,
+    score_triage,
     sync_data_lake,
     sync_outreach_master,
+    write_dossiers,
     write_outreach_drafts,
 )
 
@@ -140,6 +143,183 @@ def test_p1_request_json_retries_transient_get_http_errors(monkeypatch) -> None:
 
     assert _request_json("https://api.apify.com/v2/actor-runs/run-id?token=secret") == {"ok": True}
     assert calls["count"] == 2
+
+
+def test_p1_triage_blocks_high_score_without_check_writer_proof(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "b2c_plg_dna_score": 30,
+            "product_leadership_score": 20,
+            "verified_angel_score": 20,
+            "liquidity_ecosystem_score": 10,
+            "systematic_fit_score": 10,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": True,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": False,
+                "geography_language_fit": True,
+                "excluded_industry": False,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/operator"],
+            "reasoning": "Strong product operator, but no personal angel portfolio proof.",
+        },
+    )
+
+    scored = score_triage(
+        {
+            "inputs": {
+                "normalized_leads": [
+                    {
+                        "lead_id": "lead-1",
+                        "name": "Strong Operator",
+                        "headline": "Former VP Product at Consumer App",
+                        "linkedin_url": "https://www.linkedin.com/in/operator",
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    triage = scored["triage_scores"][0]["triage"]
+    assert triage["total_score"] == 95
+    assert triage["qualified"] is False
+    assert triage["status"] == "needs_enrichment"
+    assert triage["missing_required_gates"] == ["verified_angel_or_check_writer"]
+
+
+def test_p1_triage_allows_only_gateway_eligible_golden_icp(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "b2c_plg_dna_score": 28,
+            "product_leadership_score": 20,
+            "verified_angel_score": 25,
+            "liquidity_ecosystem_score": 8,
+            "systematic_fit_score": 8,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": True,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": True,
+                "geography_language_fit": True,
+                "excluded_industry": False,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/productangel", "https://angel.co/u/productangel"],
+            "reasoning": "Product leader with public angel portfolio.",
+        },
+    )
+
+    scored = score_triage(
+        {
+            "inputs": {
+                "normalized_leads": [
+                    {
+                        "lead_id": "lead-2",
+                        "name": "Product Angel",
+                        "headline": "CPO and Angel Investor",
+                        "linkedin_url": "https://www.linkedin.com/in/productangel",
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    triage = scored["triage_scores"][0]["triage"]
+    assert triage["qualified"] is True
+    assert triage["quality_band"] == "gold"
+    assert triage["status"] == "gateway_eligible"
+    dossiers = write_dossiers({"inputs": {"triage_scores": scored["triage_scores"]}}, {})
+    assert dossiers["p1_dossiers"][0]["historical_context"]["p1_hard_gates"]["verified_angel_or_check_writer"] is True
+
+
+def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "identity_confidence": 98,
+            "product_b2c_fit": "PASS",
+            "product_leadership_fit": "PASS",
+            "verified_investor_fit": "FAIL",
+            "bandwidth_signal": "HIGH",
+            "liquidity_signal": "YES",
+            "systematic_alignment": "YES",
+            "exclusion_signal": "NO",
+            "current_role_verified": "Independent product advisor",
+            "evidence_urls": ["https://www.linkedin.com/in/operator"],
+            "mythos_dossier": "Strong operator, but no personal investing evidence.",
+        },
+    )
+
+    result = evaluate_gateway(
+        {
+            "inputs": {
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Strong Operator", "linkedin_url": "https://www.linkedin.com/in/operator"},
+                        "historical_context": {"all_recorded_headlines": ["Former CPO"]},
+                        "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/operator"]},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    gateway = result["gateway_evaluations"][0]["gateway"]
+    assert gateway["decision"] == "needs_more_evidence"
+    assert gateway["decision_reasons"] == ["missing_verified_angel_or_check_writer_fit"]
+
+
+def test_p1_gateway_approves_full_golden_icp(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "identity_confidence": 96,
+            "product_b2c_fit": "PASS",
+            "product_leadership_fit": "PASS",
+            "verified_investor_fit": "PASS",
+            "bandwidth_signal": "HIGH",
+            "liquidity_signal": "YES",
+            "systematic_alignment": "YES",
+            "exclusion_signal": "NO",
+            "current_role_verified": "Fractional CPO and angel investor",
+            "evidence_urls": ["https://www.linkedin.com/in/productangel", "https://angel.co/u/productangel"],
+            "mythos_dossier": "Verified product-led operator angel with bandwidth.",
+        },
+    )
+
+    result = evaluate_gateway(
+        {
+            "inputs": {
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Product Angel", "linkedin_url": "https://www.linkedin.com/in/productangel"},
+                        "historical_context": {"all_recorded_headlines": ["CPO and Angel Investor"]},
+                        "live_intelligence": {"exa_raw_urls": ["https://angel.co/u/productangel"]},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    gateway = result["gateway_evaluations"][0]["gateway"]
+    assert gateway["decision"] == "awaiting_outreach"
+    assert gateway["decision_reasons"] == []
 
 
 def test_p1_crunchbase_source_normalizes_parseforge_person_rows(monkeypatch) -> None:

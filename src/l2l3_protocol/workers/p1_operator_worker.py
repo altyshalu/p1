@@ -20,6 +20,9 @@ HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
 P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
 P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
+P1_DATALAKE_MIN_SCORE = 50
+P1_STRONG_MIN_SCORE = 70
+P1_GOLD_MIN_SCORE = 85
 
 GOOGLE_SHEET_DEFAULT_TAB = "P1_L2L3_NEW_LEADS"
 GOOGLE_SHEET_HEADERS = [
@@ -42,6 +45,18 @@ GOOGLE_SHEET_HEADERS = [
 LINKEDIN_PERSON_RE = re.compile(r"^https://(?:www\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$")
 IDENTITY_STATUS_VERIFIED = "verified_linkedin"
 IDENTITY_STATUS_REVIEW = "needs_review"
+
+P1_REQUIRED_TRIAGE_GATES = (
+    "b2c_or_plg_product_experience",
+    "product_leadership",
+    "verified_angel_or_check_writer",
+    "geography_language_fit",
+)
+
+P1_BLOCKING_TRIAGE_GATES = (
+    "excluded_industry",
+    "excluded_profile_type",
+)
 
 
 class P1WorkerInputError(ValueError):
@@ -237,18 +252,118 @@ Lead:
 {json.dumps(lead, ensure_ascii=False)}
 
 Rules:
-- b2c_dna_score: 0-45 for B2C, PLG, consumer, product-led, viral, mobile, fintech, gaming, marketplace, or SMB bottom-up SaaS DNA.
-- investor_score: 0-35 for explicit angel investing, syndicate, portfolio, exits, or capital potential.
-- systematic_score: 0-20 for data-driven, AI, ML, quant, systematic, framework, evidence, metrics, product ops, analytics.
-- is_blacklist true for military, biotech-only, academic-only, legal-only, heavy industry.
-Return JSON only with keys: b2c_dna_score, investor_score, systematic_score, is_blacklist, reasoning.
+- Use the canonical P1 Golden ICP: B2C/PLG product leader AND verified angel/check-writer.
+- b2c_plg_dna_score: 0-30 for consumer, PLG, mobile, social, gaming, marketplace, fintech, viral, product-led, user-scale DNA.
+- product_leadership_score: 0-20 for CPO, VP Product, Head of Product, Lead PM, product-owning founder, growth/product owner.
+- verified_angel_score: 0-25 for explicit personal angel investing, syndicate, portfolio, AngelList, Crunchbase, Dealroom, PitchBook, NfX Signal, or micro-fund proof.
+- liquidity_ecosystem_score: 0-10 for unicorn/major exit/elite product ecosystem.
+- systematic_fit_score: 0-10 for data-driven, AI, ML, quant, systematic, framework, evidence, metrics, analytics.
+- geography_language_score: 0-5 for priority hub and English-language fit.
+- hard_gates.b2c_or_plg_product_experience true only when real product-led B2C/PLG evidence exists.
+- hard_gates.product_leadership true only when real product ownership exists.
+- hard_gates.verified_angel_or_check_writer true only when personal investing/check-writing evidence exists, not advisor/mentor/VC title alone.
+- hard_gates.geography_language_fit false for India, LATAM, or non-English profiles under current P1 policy.
+- hard_gates.excluded_industry true for enterprise-only B2B SaaS, defense/military, biotech, heavy industry, legal, corporate finance, academic-only, consulting-only.
+- hard_gates.excluded_profile_type true for mentor-only, advisor-only, investor relations, corporate VC only, traditional VC partner without personal portfolio, or investor-only without operator history.
+- evidence_urls must include the source URLs supporting the score when available.
+Return JSON only with keys: b2c_plg_dna_score, product_leadership_score, verified_angel_score, liquidity_ecosystem_score, systematic_fit_score, geography_language_score, hard_gates, evidence_urls, reasoning.
 """,
         )
-        total = int(response.get("b2c_dna_score", 0)) + int(response.get("investor_score", 0)) + int(response.get("systematic_score", 0))
-        if response.get("is_blacklist") is True:
-            total = 0
-        scores.append({**lead, "triage": {**response, "total_score": total, "qualified": total >= 50}})
+        triage = _normalize_triage_result(response)
+        scores.append({**lead, "triage": triage})
     return {"triage_scores": scores}
+
+
+def _normalize_triage_result(response: dict[str, Any]) -> dict[str, Any]:
+    b2c_score = _bounded_int(response.get("b2c_plg_dna_score", response.get("b2c_dna_score")), 0, 30)
+    product_score = _bounded_int(response.get("product_leadership_score"), 0, 20)
+    angel_score = _bounded_int(response.get("verified_angel_score", response.get("investor_score")), 0, 25)
+    liquidity_score = _bounded_int(response.get("liquidity_ecosystem_score"), 0, 10)
+    systematic_score = _bounded_int(response.get("systematic_fit_score", response.get("systematic_score")), 0, 10)
+    geography_score = _bounded_int(response.get("geography_language_score"), 0, 5)
+    hard_gates = response.get("hard_gates") if isinstance(response.get("hard_gates"), dict) else {}
+    normalized_gates = {
+        "b2c_or_plg_product_experience": _bool_gate(hard_gates.get("b2c_or_plg_product_experience")),
+        "product_leadership": _bool_gate(hard_gates.get("product_leadership")),
+        "verified_angel_or_check_writer": _bool_gate(hard_gates.get("verified_angel_or_check_writer")),
+        "geography_language_fit": _bool_gate(hard_gates.get("geography_language_fit")),
+        "excluded_industry": _bool_gate(hard_gates.get("excluded_industry") or response.get("is_blacklist")),
+        "excluded_profile_type": _bool_gate(hard_gates.get("excluded_profile_type")),
+    }
+    total = b2c_score + product_score + angel_score + liquidity_score + systematic_score + geography_score
+    missing_required = [gate for gate in P1_REQUIRED_TRIAGE_GATES if normalized_gates.get(gate) is not True]
+    blocking_gates = [gate for gate in P1_BLOCKING_TRIAGE_GATES if normalized_gates.get(gate) is True]
+    status = _triage_status(total, missing_required, blocking_gates)
+    evidence_urls = response.get("evidence_urls") if isinstance(response.get("evidence_urls"), list) else []
+    return {
+        **response,
+        "b2c_plg_dna_score": b2c_score,
+        "product_leadership_score": product_score,
+        "verified_angel_score": angel_score,
+        "liquidity_ecosystem_score": liquidity_score,
+        "systematic_fit_score": systematic_score,
+        "geography_language_score": geography_score,
+        "hard_gates": normalized_gates,
+        "evidence_urls": [_clean_url(str(url)) for url in evidence_urls if _clean_url(str(url))],
+        "total_score": total,
+        "quality_band": _quality_band(total),
+        "missing_required_gates": missing_required,
+        "blocking_gates": blocking_gates,
+        "qualified": status == "gateway_eligible",
+        "datalake_eligible": status in {"gateway_eligible", "data_lake_only"},
+        "status": status,
+        "reject_reason": _triage_reject_reason(total, missing_required, blocking_gates, status),
+    }
+
+
+def _bounded_int(value: Any, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = 0
+    return max(minimum, min(maximum, number))
+
+
+def _bool_gate(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "pass", "passed"}
+    return False
+
+
+def _quality_band(total: int) -> str:
+    if total >= P1_GOLD_MIN_SCORE:
+        return "gold"
+    if total >= P1_STRONG_MIN_SCORE:
+        return "strong"
+    if total >= P1_DATALAKE_MIN_SCORE:
+        return "data_lake_only"
+    return "reject"
+
+
+def _triage_status(total: int, missing_required: list[str], blocking_gates: list[str]) -> str:
+    if blocking_gates:
+        return "reject"
+    if missing_required:
+        return "needs_enrichment" if total >= P1_STRONG_MIN_SCORE else "reject"
+    if total >= P1_STRONG_MIN_SCORE:
+        return "gateway_eligible"
+    if total >= P1_DATALAKE_MIN_SCORE:
+        return "data_lake_only"
+    return "reject"
+
+
+def _triage_reject_reason(total: int, missing_required: list[str], blocking_gates: list[str], status: str) -> str:
+    if status == "gateway_eligible":
+        return ""
+    if blocking_gates:
+        return f"blocking_gates:{','.join(blocking_gates)}"
+    if missing_required:
+        return f"missing_required_gates:{','.join(missing_required)}"
+    if status == "data_lake_only":
+        return f"score_below_gateway_threshold:{total}"
+    return f"score_below_datalake_threshold:{total}"
 
 
 def write_dossiers(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -258,7 +373,17 @@ def write_dossiers(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
     for item in scores:
         triage = item.get("triage") if isinstance(item.get("triage"), dict) else {}
         if not triage.get("qualified"):
-            rejected.append({"name": item.get("name"), "reason": "triage_below_threshold", "score": triage.get("total_score")})
+            rejected.append(
+                {
+                    "name": item.get("name"),
+                    "reason": triage.get("reject_reason") or "triage_not_gateway_eligible",
+                    "score": triage.get("total_score"),
+                    "quality_band": triage.get("quality_band"),
+                    "status": triage.get("status"),
+                    "missing_required_gates": triage.get("missing_required_gates", []),
+                    "blocking_gates": triage.get("blocking_gates", []),
+                }
+            )
             continue
         dossiers.append(
             {
@@ -275,6 +400,10 @@ def write_dossiers(work_order: dict[str, Any], context: dict[str, Any]) -> dict[
                     "raw_notes_and_reasoning": [triage.get("reasoning", "")],
                     "v2_triage_score": triage.get("total_score"),
                     "v2_triage_reasoning": triage.get("reasoning", ""),
+                    "p1_quality_band": triage.get("quality_band"),
+                    "p1_hard_gates": triage.get("hard_gates", {}),
+                    "p1_triage_status": triage.get("status"),
+                    "p1_evidence_urls": triage.get("evidence_urls", []),
                 },
                 "live_intelligence": {"last_updated": None, "exa_raw_urls": [], "exa_snippets": []},
                 "gateway_evaluations": {"status": "UNPROCESSED"},
@@ -326,26 +455,100 @@ Dossier:
 
 Rules:
 - identity_confidence 0-100.
+- product_b2c_fit PASS only when the dossier has B2C/PLG product-building evidence.
+- product_leadership_fit PASS only when the person owned product as CPO, VP Product, Head of Product, Lead PM, or product-owning founder/operator.
+- verified_investor_fit PASS only when there is personal angel/check-writing, syndicate, portfolio, AngelList, Crunchbase, Dealroom, PitchBook, NfX Signal, or micro-fund proof.
 - bandwidth_signal HIGH only for advisors, angel investors, solo/fractional/stealth builders, independent operators, or not currently overloaded.
 - bandwidth_signal LOW for active C-suite/VP/Director/Partner/GP at substantial operating company.
 - liquidity_signal YES when unicorn/major exit/known high-growth operator/investor evidence exists.
 - systematic_alignment YES when data/AI/product/scaling/systematic evidence exists.
-Return JSON only with keys: identity_confidence, bandwidth_signal, liquidity_signal, systematic_alignment, current_role_verified, mythos_dossier.
+- exclusion_signal YES when the profile is enterprise-only, corporate finance, defense/military, biotech, heavy industry, legal, academic-only, consulting-only, India, LATAM, non-English, mentor-only, advisor-only, corporate VC-only, or traditional VC-only without personal portfolio.
+- evidence_urls must include the URLs used to support the decision.
+Return JSON only with keys: identity_confidence, product_b2c_fit, product_leadership_fit, verified_investor_fit, bandwidth_signal, liquidity_signal, systematic_alignment, exclusion_signal, current_role_verified, evidence_urls, mythos_dossier.
 """,
         )
-        confidence = int(response.get("identity_confidence", 0))
-        bandwidth = str(response.get("bandwidth_signal", "UNKNOWN")).upper()
-        liquidity = str(response.get("liquidity_signal", "UNKNOWN")).upper()
-        if confidence < 90:
-            decision = "identity_mismatch"
-        elif bandwidth == "LOW" or liquidity == "NO":
-            decision = "bypass"
-        elif bandwidth == "HIGH":
-            decision = "awaiting_outreach"
-        else:
-            decision = "needs_more_evidence"
-        evaluations.append({"dossier": dossier, "gateway": {**response, "decision": decision}})
+        gateway = _normalize_gateway_result(response)
+        evaluations.append({"dossier": dossier, "gateway": gateway})
     return {"gateway_evaluations": evaluations}
+
+
+def _normalize_gateway_result(response: dict[str, Any]) -> dict[str, Any]:
+    confidence = _bounded_int(response.get("identity_confidence"), 0, 100)
+    bandwidth = str(response.get("bandwidth_signal", "UNKNOWN")).strip().upper()
+    liquidity = str(response.get("liquidity_signal", "UNKNOWN")).strip().upper()
+    product_b2c = _pass_signal(response.get("product_b2c_fit"))
+    product_leadership = _pass_signal(response.get("product_leadership_fit"))
+    verified_investor = _pass_signal(response.get("verified_investor_fit"))
+    systematic = str(response.get("systematic_alignment", "UNKNOWN")).strip().upper()
+    exclusion = str(response.get("exclusion_signal", "UNKNOWN")).strip().upper()
+    evidence_urls = response.get("evidence_urls") if isinstance(response.get("evidence_urls"), list) else []
+    decision, reasons = _gateway_decision(
+        confidence=confidence,
+        product_b2c=product_b2c,
+        product_leadership=product_leadership,
+        verified_investor=verified_investor,
+        bandwidth=bandwidth,
+        liquidity=liquidity,
+        exclusion=exclusion,
+        evidence_urls=evidence_urls,
+    )
+    return {
+        **response,
+        "identity_confidence": confidence,
+        "product_b2c_fit": "PASS" if product_b2c else "FAIL",
+        "product_leadership_fit": "PASS" if product_leadership else "FAIL",
+        "verified_investor_fit": "PASS" if verified_investor else "FAIL",
+        "bandwidth_signal": bandwidth,
+        "liquidity_signal": liquidity,
+        "systematic_alignment": systematic,
+        "exclusion_signal": exclusion,
+        "evidence_urls": [_clean_url(str(url)) for url in evidence_urls if _clean_url(str(url))],
+        "decision": decision,
+        "decision_reasons": reasons,
+    }
+
+
+def _pass_signal(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().upper() in {"PASS", "YES", "TRUE", "1"}
+    return False
+
+
+def _gateway_decision(
+    *,
+    confidence: int,
+    product_b2c: bool,
+    product_leadership: bool,
+    verified_investor: bool,
+    bandwidth: str,
+    liquidity: str,
+    exclusion: str,
+    evidence_urls: list[Any],
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    if confidence < 90:
+        return "identity_mismatch", [f"identity_confidence_below_90:{confidence}"]
+    if exclusion == "YES":
+        reasons.append("exclusion_signal")
+    if not product_b2c:
+        reasons.append("missing_b2c_plg_product_fit")
+    if not product_leadership:
+        reasons.append("missing_product_leadership_fit")
+    if not verified_investor:
+        reasons.append("missing_verified_angel_or_check_writer_fit")
+    if bandwidth != "HIGH":
+        reasons.append(f"bandwidth_not_high:{bandwidth}")
+    if liquidity != "YES":
+        reasons.append(f"liquidity_not_yes:{liquidity}")
+    if not evidence_urls:
+        reasons.append("missing_gateway_evidence_urls")
+    if not reasons:
+        return "awaiting_outreach", []
+    if any(reason.startswith("bandwidth_not_high") or reason.startswith("liquidity_not_yes") or reason == "exclusion_signal" for reason in reasons):
+        return "bypass", reasons
+    return "needs_more_evidence", reasons
 
 
 def build_forge_queue(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -767,6 +970,10 @@ def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> d
             "legacy_highest_score": historical.get("legacy_highest_score"),
             "v2_triage_score": historical.get("v2_triage_score"),
             "v2_triage_reasoning": historical.get("v2_triage_reasoning"),
+            "p1_quality_band": historical.get("p1_quality_band"),
+            "p1_hard_gates": historical.get("p1_hard_gates") if isinstance(historical.get("p1_hard_gates"), dict) else {},
+            "p1_triage_status": historical.get("p1_triage_status"),
+            "p1_evidence_urls": historical.get("p1_evidence_urls") if isinstance(historical.get("p1_evidence_urls"), list) else [],
         },
         "live_intelligence": {
             "last_updated": live.get("last_updated"),
