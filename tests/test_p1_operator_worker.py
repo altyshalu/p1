@@ -6,6 +6,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _apify_crunchbase_search,
     _apify_funding_search,
     _apify_linkedin_search,
+    _exa_people_search,
     _ensure_google_sheet_headers,
     _gemini_json,
     _request_json,
@@ -1000,6 +1001,31 @@ def test_p1_linkedin_source_normalizes_sales_nav_rows(monkeypatch) -> None:
     ]
 
 
+def test_p1_exa_source_uses_people_category_and_text_contents(monkeypatch) -> None:
+    calls = []
+
+    def fake_request_json(url, method="GET", headers=None, body=None, timeout=120):
+        calls.append({"url": url, "method": method, "headers": headers, "body": body})
+        return {
+            "results": [
+                {
+                    "title": "Arianna Simpson | Product angel investor",
+                    "url": "https://www.linkedin.com/in/ariannasimpson/",
+                    "text": "Consumer product investor and operator.",
+                }
+            ]
+        }
+
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._request_json", fake_request_json)
+
+    result = _exa_people_search("CPO angel investor", 1)
+
+    assert result[0]["name"] == "Arianna Simpson"
+    assert calls[0]["body"]["category"] == "people"
+    assert calls[0]["body"]["contents"]["text"]["maxCharacters"] == 1200
+
+
 def test_p1_source_collector_reuses_explicit_provider_cache(tmp_path: Path, monkeypatch) -> None:
     calls = {"count": 0}
 
@@ -1152,16 +1178,20 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
         {
             "inputs": {
                 "lead_candidates": [{"name": "A"}, {"name": "B"}, {"name": "C"}],
-                "normalized_leads": [{"name": "A"}, {"name": "B"}],
+                "source_batches": [
+                    {"source": "exa", "lead_candidates": [{"name": "A"}, {"name": "B"}]},
+                    {"source": "apify_linkedin", "lead_candidates": [{"name": "C"}]},
+                ],
+                "normalized_leads": [{"name": "A", "source": "exa"}, {"name": "B", "source": "apify_linkedin"}],
                 "rejected_leads": [{"name": "C"}],
                 "triage_scores": [
-                    {"name": "A", "triage": {"qualified": True}},
-                    {"name": "B", "triage": {"qualified": False}},
+                    {"name": "A", "source": "exa", "triage": {"qualified": True}},
+                    {"name": "B", "source": "apify_linkedin", "triage": {"qualified": False}},
                 ],
                 "p1_dossiers": [{"identity": {"name": "A"}}],
                 "gateway_evaluations": [
-                    {"gateway": {"decision": "awaiting_outreach"}},
-                    {"gateway": {"decision": "bypass"}},
+                    {"dossier": {"identity": {"name": "A"}, "historical_context": {"sources_found": ["exa"]}}, "gateway": {"decision": "awaiting_outreach"}},
+                    {"dossier": {"identity": {"name": "B"}, "historical_context": {"sources_found": ["apify_linkedin"]}}, "gateway": {"decision": "bypass"}},
                 ],
                 "outreach_drafts": [{"name": "A"}],
                 "quality_eval": {"passed": True, "score": 1.0},
@@ -1208,7 +1238,27 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
         "outreach_master_written": 1,
         "outreach_master_duplicate_skipped": 0,
         "rejection_buckets": {"unknown": 1},
-        "source_counts": {},
+        "source_counts": {"exa": 2, "apify_linkedin": 1},
+        "source_quality_by_source": {
+            "exa": {
+                "raw": 2,
+                "normalized": 1,
+                "triage_qualified": 1,
+                "gateway_approved": 1,
+                "normalized_rate": 0.5,
+                "triage_qualified_rate": 1.0,
+                "gateway_approved_rate": 1.0,
+            },
+            "apify_linkedin": {
+                "raw": 1,
+                "normalized": 1,
+                "triage_qualified": 0,
+                "gateway_approved": 0,
+                "normalized_rate": 1.0,
+                "triage_qualified_rate": 0.0,
+                "gateway_approved_rate": 0,
+            },
+        },
         "provider_cache_hits": 0,
         "duration_by_worker_ms": {
             "p1-source-collector": 10,
@@ -1232,6 +1282,53 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
         "drafting_duration_ms": 60,
         "sync_duration_ms": 121,
     }
+
+
+def test_p1_metrics_source_quality_uses_written_dossier_source_shape() -> None:
+    dossiers = write_dossiers(
+        {
+            "inputs": {
+                "triage_scores": [
+                    {
+                        "name": "Arianna Simpson",
+                        "lead_id": "lead-1",
+                        "source": "exa",
+                        "linkedin_url": "https://www.linkedin.com/in/ariannasimpson",
+                        "source_url": "https://www.linkedin.com/in/ariannasimpson",
+                        "identity_status": "verified_linkedin",
+                        "headline": "Product operator and angel investor",
+                        "triage": {
+                            "qualified": True,
+                            "total_score": 90,
+                            "quality_band": "gold",
+                            "status": "gateway_eligible",
+                            "reasoning": "Strong product operator angel fit.",
+                            "hard_gates": {},
+                            "evidence_urls": ["https://www.linkedin.com/in/ariannasimpson"],
+                        },
+                    }
+                ]
+            }
+        },
+        {},
+    )["p1_dossiers"]
+
+    result = build_metrics_report(
+        {
+            "inputs": {
+                "source_batches": [{"source": "exa", "lead_candidates": [{"name": "Arianna Simpson"}]}],
+                "normalized_leads": [{"name": "Arianna Simpson", "source": "exa"}],
+                "triage_scores": [{"name": "Arianna Simpson", "source": "exa", "triage": {"qualified": True}}],
+                "p1_dossiers": dossiers,
+                "gateway_evaluations": [{"dossier": dossiers[0], "gateway": {"decision": "awaiting_outreach"}}],
+                "outreach_drafts": [],
+            }
+        },
+        {},
+    )
+
+    assert result["metrics"]["source_quality_by_source"]["exa"]["gateway_approved"] == 1
+    assert "unknown" not in result["metrics"]["source_quality_by_source"]
 
 
 def test_p1_outreach_quality_rejects_missing_cta_and_placeholder_signoff() -> None:

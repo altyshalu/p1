@@ -915,6 +915,7 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
         "outreach_master_duplicate_skipped": int((sync_results.get("outreach_master") or {}).get("skipped_duplicate_count") or 0),
         "rejection_buckets": rejection_buckets,
         "source_counts": source_counts,
+        "source_quality_by_source": _source_quality_by_source(source_batches, normalized_leads, triage_scores, gateway_evaluations),
         "provider_cache_hits": cache_hits,
         "duration_by_worker_ms": duration_by_worker,
         "total_duration_ms": sum(duration_by_worker.values()),
@@ -1021,7 +1022,13 @@ def _canonical_dossier(raw: dict[str, Any], source_file: str | None = None) -> d
 
 def _exa_people_search(query: str, limit: int) -> list[dict[str, Any]]:
     key = require_env("EXA_API_KEY")
-    payload = {"query": query, "numResults": limit, "useAutoprompt": True, "category": "auto"}
+    payload = {
+        "query": query,
+        "numResults": limit,
+        "useAutoprompt": True,
+        "category": "people",
+        "contents": {"text": {"maxCharacters": 1200}},
+    }
     response = _request_json("https://api.exa.ai/search", method="POST", headers={"x-api-key": key}, body=payload)
     results = response.get("results")
     if not isinstance(results, list):
@@ -1051,6 +1058,64 @@ def _source_attempt_payload(source: str, request: dict[str, Any], result_count: 
     if actor_id:
         payload["actor_id"] = actor_id
     return payload
+
+
+def _source_quality_by_source(
+    source_batches: Any,
+    normalized_leads: Any,
+    triage_scores: Any,
+    gateway_evaluations: Any,
+) -> dict[str, dict[str, Any]]:
+    quality: dict[str, dict[str, Any]] = {}
+    for batch in source_batches if isinstance(source_batches, list) else []:
+        if not isinstance(batch, dict):
+            continue
+        source = str(batch.get("source") or "unknown")
+        raw_count = len(batch.get("lead_candidates", []) if isinstance(batch.get("lead_candidates"), list) else [])
+        quality.setdefault(source, {"raw": 0, "normalized": 0, "triage_qualified": 0, "gateway_approved": 0})
+        quality[source]["raw"] += raw_count
+    for item in normalized_leads if isinstance(normalized_leads, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "unknown")
+        quality.setdefault(source, {"raw": 0, "normalized": 0, "triage_qualified": 0, "gateway_approved": 0})
+        quality[source]["normalized"] += 1
+    for item in triage_scores if isinstance(triage_scores, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source") or "unknown")
+        quality.setdefault(source, {"raw": 0, "normalized": 0, "triage_qualified": 0, "gateway_approved": 0})
+        if isinstance(item.get("triage"), dict) and item["triage"].get("qualified") is True:
+            quality[source]["triage_qualified"] += 1
+    for item in gateway_evaluations if isinstance(gateway_evaluations, list) else []:
+        if not isinstance(item, dict):
+            continue
+        source = _source_from_gateway_evaluation(item)
+        quality.setdefault(source, {"raw": 0, "normalized": 0, "triage_qualified": 0, "gateway_approved": 0})
+        if isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") == "awaiting_outreach":
+            quality[source]["gateway_approved"] += 1
+    for stats in quality.values():
+        raw = int(stats.get("raw") or 0)
+        normalized = int(stats.get("normalized") or 0)
+        triage = int(stats.get("triage_qualified") or 0)
+        stats["normalized_rate"] = round(normalized / raw, 4) if raw else 0
+        stats["triage_qualified_rate"] = round(triage / normalized, 4) if normalized else 0
+        stats["gateway_approved_rate"] = round(int(stats.get("gateway_approved") or 0) / triage, 4) if triage else 0
+    return quality
+
+
+def _source_from_gateway_evaluation(item: dict[str, Any]) -> str:
+    dossier = item.get("dossier") if isinstance(item.get("dossier"), dict) else {}
+    identity = dossier.get("identity") if isinstance(dossier.get("identity"), dict) else {}
+    if identity.get("source"):
+        return str(identity["source"])
+    historical_context = dossier.get("historical_context") if isinstance(dossier.get("historical_context"), dict) else {}
+    sources_found = historical_context.get("sources_found") if isinstance(historical_context.get("sources_found"), list) else []
+    for source in sources_found:
+        value = str(source or "").strip()
+        if value:
+            return value
+    return str(item.get("source") or "unknown")
 
 
 def _with_provider_cache(inputs: dict[str, Any], source: str, request: dict[str, Any], fetch: Any) -> tuple[list[dict[str, Any]], dict[str, Any]]:

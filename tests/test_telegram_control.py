@@ -22,7 +22,10 @@ def test_telegram_default_p1_inputs_use_real_demo_target() -> None:
     assert inputs["sources"] == ["exa", "apify_funding", "apify_crunchbase", "apify_linkedin"]
     assert inputs["allow_google_sheet_write"] is True
     assert inputs["allow_outreach_master_write"] is True
-    assert "operator-angels" in inputs["query"]
+    assert "angel investor" in inputs["query"]
+    assert "title_keywords" in inputs
+    assert "VP Product" in inputs["title_keywords"]
+    assert "Independent Product Advisor" in inputs["title_keywords"]
 
 
 def test_telegram_access_check_requires_allowed_chat_id() -> None:
