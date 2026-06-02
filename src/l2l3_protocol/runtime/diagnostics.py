@@ -118,6 +118,8 @@ def _root_cause(state: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         return "quality_gate_failed"
     if any(_missing_env_key_from_evidence(item) for item in evidence):
         return "missing_runtime_dependency"
+    if any(_is_provider_runtime_failure(item) for item in evidence):
+        return "tool_or_provider_failure"
     for item in evidence:
         failure_type = str(item.get("failure_type") or "")
         if failure_type in INTERNAL_FAILURE_TO_ROOT_CAUSE:
@@ -316,7 +318,22 @@ def _is_provider_input_validation(item: dict[str, Any]) -> bool:
     return "unsupported providers requested" in str(error)
 
 
+def _is_provider_runtime_failure(item: dict[str, Any]) -> bool:
+    haystack = _evidence_haystack(item).lower()
+    provider_markers = ("api.apify.com", "api.exa.ai", "api.github.com", "api-inference.huggingface.co", "sheets.googleapis.com", "generativelanguage.googleapis.com")
+    failure_markers = ("real http request failed", "http error", " 402:", " 403:", " 429:", "not-enough-usage-to-run-paid-actor")
+    return any(marker in haystack for marker in provider_markers) and any(marker in haystack for marker in failure_markers)
+
+
 def _missing_env_key_from_evidence(item: dict[str, Any]) -> str | None:
+    haystack = _evidence_haystack(item)
+    match = re.search(r"missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)", haystack, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _evidence_haystack(item: dict[str, Any]) -> str:
     payload = item.get("payload", {})
     haystack_items = [item.get("error")]
     if isinstance(payload, dict):
@@ -324,11 +341,7 @@ def _missing_env_key_from_evidence(item: dict[str, Any]) -> str | None:
         structured = payload.get("structured_error")
         if isinstance(structured, dict):
             haystack_items.append(structured.get("message"))
-    haystack = "\n".join(str(value) for value in haystack_items if value)
-    match = re.search(r"missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)", haystack, re.IGNORECASE)
-    if not match:
-        return None
-    return match.group(1)
+    return "\n".join(str(value) for value in haystack_items if value)
 
 
 def _primary_missing_env_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -350,9 +363,27 @@ def _provider_from_evidence(item: dict[str, Any]) -> str | None:
         if isinstance(failures, dict) and failures:
             return str(next(iter(failures))).lower()
     haystack = " ".join(str(value).lower() for value in [item.get("error"), item.get("failure_type"), payload])
-    for provider in ("huggingface", "github", "arxiv", "exa", "apify", "google sheets", "gemini"):
+    host_provider = _provider_from_url_host(haystack)
+    if host_provider:
+        return host_provider
+    for provider in ("huggingface", "github", "arxiv", "apify", "google sheets", "gemini", "exa"):
         if provider in haystack:
             return provider.replace(" ", "_")
+    return None
+
+
+def _provider_from_url_host(haystack: str) -> str | None:
+    host_mappings = {
+        "api.apify.com": "apify",
+        "api.exa.ai": "exa",
+        "api.github.com": "github",
+        "api-inference.huggingface.co": "huggingface",
+        "sheets.googleapis.com": "google_sheets",
+        "generativelanguage.googleapis.com": "gemini",
+    }
+    for host, provider in host_mappings.items():
+        if host in haystack:
+            return provider
     return None
 
 
