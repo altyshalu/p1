@@ -284,6 +284,8 @@ def main() -> int:
                     args.base_url,
                     '--inputs-json',
                     args.full_inputs_json,
+                    '--env-file',
+                    args.env_file,
                     '--timeout-seconds',
                     str(args.timeout_seconds),
                 ]

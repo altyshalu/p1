@@ -496,6 +496,8 @@ def test_p1_proof_pack_passes_verify_flags_to_full_proof(monkeypatch, tmp_path: 
     assert exit_code == 0
     command = captured['command']
     assert '--approve' in command
+    assert '--env-file' in command
+    assert '.env' in command
     assert '--verify-sheet' in command
     assert '--verify-outreach-master' in command
     assert '--verify-data-lake' in command
@@ -514,6 +516,20 @@ def test_full_proof_sheet_verification_uses_runtime_env(monkeypatch) -> None:
         'tab_name': 'P1_L2L3_NEW_LEADS',
         'service_account_path': '/secure/service-account.json',
     }
+
+
+def test_full_proof_loads_env_file_for_verification(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    env_path = tmp_path / '.env'
+    env_path.write_text('P1_GOOGLE_SHEET_ID=sheet-from-file\nGOOGLE_SA_PATH=/secure/from-file.json\n', encoding='utf-8')
+    monkeypatch.delenv('P1_GOOGLE_SHEET_ID', raising=False)
+    monkeypatch.delenv('GOOGLE_SA_PATH', raising=False)
+
+    module.load_env_file(str(env_path))
+    config = module.sheet_verification_config({'google_sheets': {'tab_name': 'P1_L2L3_NEW_LEADS'}}, {}, None)
+
+    assert config['spreadsheet_id'] == 'sheet-from-file'
+    assert config['service_account_path'] == '/secure/from-file.json'
 
 
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:

@@ -15,6 +15,20 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from p1_real_common import approve_run, assert_status, assert_summary_shape, create_run, get_summary, load_inputs, require_capabilities, require_health, wait_for_run
 
 
+def load_env_file(path_value: str | None) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    if not path.exists():
+        raise SystemExit(f'env file does not exist: {path}')
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+
 def verify_sheet_rows(spreadsheet_id: str, tab_name: str, service_account_path: str, expected_lead_ids: list[str]) -> dict[str, int]:
     from l2l3_protocol.workers.p1_operator_worker import _google_access_token, _request_json
 
@@ -162,6 +176,7 @@ def main() -> int:
     parser.add_argument('--base-url', default='http://127.0.0.1:8000')
     parser.add_argument('--goal', default='Run the full real P1 operator outreach proof.')
     parser.add_argument('--inputs-json', required=True)
+    parser.add_argument('--env-file')
     parser.add_argument('--timeout-seconds', type=int, default=1800)
     parser.add_argument('--approve', action='store_true', help='Approve external writes if the run stops at waiting_approval')
     parser.add_argument('--verify-sheet', action='store_true')
@@ -171,6 +186,7 @@ def main() -> int:
     parser.add_argument('--google-service-account-path')
     args = parser.parse_args()
 
+    load_env_file(args.env_file)
     inputs = load_inputs(args.inputs_json)
     require_health(args.base_url)
     capabilities = require_capabilities(args.base_url)
