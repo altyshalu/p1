@@ -361,6 +361,49 @@ def test_p1_gateway_blocks_unverified_linkedin_even_when_model_passes(monkeypatc
     assert "identity_status_not_verified:needs_review" in gateway["decision_reasons"]
 
 
+def test_p1_gateway_blocks_dead_live_linkedin_before_outreach(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._linkedin_profile_url_is_live", lambda _url: False)
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "identity_confidence": 100,
+            "product_b2c_fit": "PASS",
+            "product_leadership_fit": "PASS",
+            "verified_investor_fit": "PASS",
+            "bandwidth_signal": "HIGH",
+            "liquidity_signal": "YES",
+            "systematic_alignment": "YES",
+            "exclusion_signal": "NO",
+            "current_role_verified": "Angel investor",
+            "evidence_urls": ["https://www.linkedin.com/in/navalr", "https://www.crunchbase.com/person/naval-ravikant"],
+            "mythos_dossier": "Model says yes, deterministic live LinkedIn gate says not outreach-ready.",
+        },
+    )
+
+    result = evaluate_gateway(
+        {
+            "inputs": {
+                "verify_linkedin_live": True,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Naval Ravikant", "linkedin_url": "https://www.linkedin.com/in/navalr", "identity_status": "verified_linkedin"},
+                        "historical_context": {"all_recorded_headlines": ["AngelList co-founder"]},
+                        "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/navalr", "https://www.crunchbase.com/person/naval-ravikant"]},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    gateway = result["gateway_evaluations"][0]["gateway"]
+    assert gateway["decision"] == "needs_more_evidence"
+    assert "linkedin_profile_not_live" in gateway["decision_reasons"]
+
+
 def test_p1_outreach_quality_rejects_unverified_linkedin_identity() -> None:
     result = judge_outreach_quality(
         {

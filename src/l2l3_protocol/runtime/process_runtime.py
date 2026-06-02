@@ -579,7 +579,15 @@ class ProcessRuntime:
             await self._fail_p1_if_needed(run_id, "p1 live intelligence failed")
             return
         live_intel = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_LIVE_INTELLIGENCE)
-        if not await run_task("p1-gateway-evaluator", "evaluate_gateway", {"p1_dossiers": live_intel.get("p1_dossiers", [])}, ArtifactType.P1_GATEWAY_EVALUATIONS):
+        if not await run_task(
+            "p1-gateway-evaluator",
+            "evaluate_gateway",
+            {
+                "p1_dossiers": live_intel.get("p1_dossiers", []),
+                "verify_linkedin_live": bool(inputs.get("verify_linkedin_live", True)),
+            },
+            ArtifactType.P1_GATEWAY_EVALUATIONS,
+        ):
             await self._fail_p1_if_needed(run_id, "p1 gateway evaluation failed")
             return
         gateway = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_GATEWAY_EVALUATIONS)
