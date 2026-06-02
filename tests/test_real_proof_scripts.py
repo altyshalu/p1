@@ -144,6 +144,254 @@ def test_p1_real_common_sends_operator_api_key(monkeypatch) -> None:
     assert captured['authorization'] == 'Bearer secret'
 
 
+def test_p1_quality_audit_rejects_wrong_playbook() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+
+    try:
+        module.build_quality_audit(
+            {'id': 'run-1', 'playbook_key': 'build-in-public'},
+            {'status': 'completed'},
+        )
+    except SystemExit as exc:
+        assert 'not a P1 operator outreach run' in str(exc)
+    else:
+        raise AssertionError('expected wrong playbook audit to fail')
+
+
+def test_p1_quality_audit_flags_missing_real_artifacts() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 2},
+        'artifact_counts': {},
+        'task_status_counts': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(
+        {
+            'id': 'run-1',
+            'status': 'completed',
+            'playbook_key': 'p1-operator-outreach',
+            'goal': 'audit',
+            'artifacts': [],
+            'evals': [],
+            'events': [],
+            'tasks': [],
+        },
+        summary,
+    )
+
+    assert audit['risk_summary']['state'] == 'blocked by missing data'
+    assert 'missing_artifact:p1_lead_candidates' in {item['code'] for item in audit['findings']}
+    assert 'zero_normalized_after_raw' in {item['code'] for item in audit['findings']}
+
+
+def test_p1_quality_audit_surfaces_evidence_and_outreach_review_signals() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-2',
+        'status': 'waiting_approval',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Arianna Simpson'}]}},
+            {'artifact_type': 'p1_normalized_leads', 'payload': {'normalized_leads': [{'lead_id': 'lead-1', 'name': 'Arianna Simpson', 'linkedin_url': ''}], 'rejected_leads': []}},
+            {'artifact_type': 'p1_triage_scores', 'payload': {'triage_scores': [{'lead_id': 'lead-1', 'name': 'Arianna Simpson', 'triage': {'qualified': True, 'evidence_urls': []}}]}},
+            {'artifact_type': 'p1_dossiers', 'payload': {'p1_dossiers': [{'identity': {'lead_id': 'lead-1', 'name': 'Arianna Simpson', 'linkedin_url': ''}, 'historical_context': {'sources_found': []}}]}},
+            {'artifact_type': 'p1_gateway_evaluations', 'payload': {'gateway_evaluations': [{'dossier': {'identity': {'lead_id': 'lead-1', 'name': 'Arianna Simpson', 'linkedin_url': ''}, 'historical_context': {'sources_found': []}}, 'gateway': {'decision': 'awaiting_outreach'}}]}},
+            {'artifact_type': 'p1_outreach_drafts', 'payload': {'outreach_drafts': [{'lead_id': 'lead-1', 'name': 'Arianna Simpson', 'text': 'Quick note, I came across your profile and would love to connect.', 'evidence_urls': [], 'claims': [{'text': 'Arianna is an investor.'}]}]}},
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': False, 'score': 0.4}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'waiting_approval',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 1, 'normalized_leads': 1, 'triage_qualified': 1, 'dossiers': 1, 'gateway_approved': 1, 'drafted': 1},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [{'type': 'approval'}],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    assert audit['risk_summary']['state'] == 'needs review'
+    assert 'weak_evidence' in {item['code'] for item in audit['findings']}
+    assert 'weak_outreach_draft' in {item['code'] for item in audit['findings']}
+    assert audit['risk_summary']['recommended_human_review_focus'] == ['lead-1']
+    markdown = module.render_markdown(audit)
+    assert '| Severity | Code | Message | Leads |' in markdown
+    assert '`weak_outreach_draft`' in markdown
+    assert 'Arianna Simpson (`lead-1`)' in markdown
+
+
+def test_p1_quality_audit_uses_gateway_and_dossier_evidence_urls() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-3',
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Duncan Greenberg'}]}},
+            {'artifact_type': 'p1_normalized_leads', 'payload': {'normalized_leads': [{'lead_id': 'lead-2', 'name': 'Duncan Greenberg', 'linkedin_url': 'https://linkedin.com/in/duncan-greenberg-89004849'}], 'rejected_leads': []}},
+            {'artifact_type': 'p1_triage_scores', 'payload': {'triage_scores': [{'lead_id': 'lead-2', 'name': 'Duncan Greenberg', 'triage': {'qualified': True, 'evidence_urls': ['https://linkedin.com/in/duncan-greenberg-89004849']}}]}},
+            {
+                'artifact_type': 'p1_dossiers',
+                'payload': {
+                    'p1_dossiers': [
+                        {
+                            'identity': {'lead_id': 'lead-2', 'name': 'Duncan Greenberg', 'linkedin_url': 'https://linkedin.com/in/duncan-greenberg-89004849'},
+                            'historical_context': {'p1_evidence_urls': ['https://angel.co/u/duncan-greenberg']},
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {
+                                'identity': {'lead_id': 'lead-2', 'name': 'Duncan Greenberg', 'linkedin_url': 'https://linkedin.com/in/duncan-greenberg-89004849'},
+                                'historical_context': {'p1_evidence_urls': ['https://angel.co/u/duncan-greenberg']},
+                            },
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'evidence_urls': ['https://linkedin.com/in/duncan-greenberg-89004849', 'https://angel.co/u/duncan-greenberg'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'lead_id': 'lead-2',
+                            'name': 'Duncan Greenberg',
+                            'linkedin_url': 'https://linkedin.com/in/duncan-greenberg-89004849',
+                            'text': 'Duncan, ABRT/Limpid is mapping product-led operator angels with real evidence from your product and angel work. Would a quick 15-minute conversation next week make sense?',
+                            'evidence_urls': ['https://linkedin.com/in/duncan-greenberg-89004849', 'https://angel.co/u/duncan-greenberg'],
+                            'claims': [{'text': 'Duncan has product and angel evidence.', 'source_url': 'https://angel.co/u/duncan-greenberg'}],
+                        }
+                    ]
+                },
+            },
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': True, 'score': 1}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 1, 'normalized_leads': 1, 'triage_qualified': 1, 'dossiers': 1, 'gateway_approved': 1, 'drafted': 1},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    assert audit['evidence_records'][0]['evidence_url_count'] == 2
+    assert audit['evidence_records'][0]['source_domain_count'] == 2
+    assert 'weak_evidence' not in {item['code'] for item in audit['findings']}
+
+
+def test_p1_quality_audit_canonicalizes_source_domain_aliases() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-4',
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Operator Angel'}]}},
+            {'artifact_type': 'p1_normalized_leads', 'payload': {'normalized_leads': [{'lead_id': 'lead-3', 'name': 'Operator Angel', 'linkedin_url': 'https://linkedin.com/in/operator'}], 'rejected_leads': []}},
+            {'artifact_type': 'p1_triage_scores', 'payload': {'triage_scores': [{'lead_id': 'lead-3', 'name': 'Operator Angel', 'triage': {'qualified': True, 'evidence_urls': ['https://linkedin.com/in/operator']}}]}},
+            {'artifact_type': 'p1_dossiers', 'payload': {'p1_dossiers': [{'identity': {'lead_id': 'lead-3', 'name': 'Operator Angel', 'linkedin_url': 'https://linkedin.com/in/operator'}, 'historical_context': {'p1_evidence_urls': ['https://www.linkedin.com/in/operator']}}]}},
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'lead_id': 'lead-3', 'name': 'Operator Angel', 'linkedin_url': 'https://linkedin.com/in/operator'}},
+                            'gateway': {'decision': 'awaiting_outreach', 'evidence_urls': ['https://linkedin.com/in/operator', 'https://www.linkedin.com/in/operator']},
+                        }
+                    ]
+                },
+            },
+            {'artifact_type': 'p1_outreach_drafts', 'payload': {'outreach_drafts': []}},
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': False, 'score': 0}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 1, 'normalized_leads': 1, 'triage_qualified': 1, 'dossiers': 1, 'gateway_approved': 1, 'drafted': 0},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    assert audit['evidence_records'][0]['evidence_url_count'] == 2
+    assert audit['evidence_records'][0]['source_domain_count'] == 1
+    assert audit['evidence_records'][0]['source_domains'] == ['linkedin.com']
+    assert 'weak_evidence' in {item['code'] for item in audit['findings']}
+
+
 def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monkeypatch) -> None:
     module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'require_human_approval': True})

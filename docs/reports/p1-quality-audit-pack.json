@@ -1,0 +1,122 @@
+{
+  "audit_version": "2026-06-01.p1-quality-audit-pack.v1",
+  "generated_at": "2026-06-02T12:51:45.641535+00:00",
+  "run": {
+    "id": "a727f667-7737-4bd9-9697-167b28fb4073",
+    "status": "completed",
+    "playbook_key": "p1-operator-outreach",
+    "goal": "Run the full real P1 operator outreach proof.",
+    "created_at": "2026-06-02T12:21:15.638701+00:00",
+    "updated_at": "2026-06-02T12:23:50.331537+00:00"
+  },
+  "source_of_truth": {
+    "run_endpoint": "GET /runs/a727f667-7737-4bd9-9697-167b28fb4073",
+    "summary_endpoint": "GET /runs/a727f667-7737-4bd9-9697-167b28fb4073/summary",
+    "runtime_tables": [
+      "process_runs",
+      "work_orders",
+      "artifacts",
+      "eval_results",
+      "events"
+    ]
+  },
+  "funnel_counts": {
+    "raw_leads": 6,
+    "normalized_leads": 6,
+    "rejected_leads": 0,
+    "triage_qualified": 4,
+    "triage_total": 6,
+    "gateway_approved": 1,
+    "gateway_total": 4,
+    "dossiers": 4,
+    "drafts": 1,
+    "sheet_written": 0,
+    "data_lake_written": 0,
+    "outreach_master_written": 0
+  },
+  "artifact_presence": {
+    "source_batches": true,
+    "lead_candidates": true,
+    "normalized_leads": true,
+    "triage_scores": true,
+    "p1_dossiers": true,
+    "gateway_evaluations": true,
+    "outreach_drafts": true,
+    "approval_package": true,
+    "approval_preview": true,
+    "google_sheets_sync": false,
+    "data_lake_sync": false,
+    "outreach_master_sync": false,
+    "metrics_report": true
+  },
+  "eval_summary": {
+    "p1-outreach-draft-quality": {
+      "id": "3933b43d-5214-47e3-a916-76feeb4b0b0f",
+      "score": 1.0,
+      "checks": {
+        "threshold": 0.86,
+        "has_drafts": true,
+        "all_have_text": true,
+        "has_clear_cta": true,
+        "worker_passed": true,
+        "single_meeting_cta": true,
+        "word_count_under_110": true,
+        "all_have_evidence_urls": true,
+        "no_placeholder_signoff": true,
+        "all_claims_have_sources": true,
+        "mentions_abrt_or_limpid": true,
+        "all_have_idempotency_key": true,
+        "no_publish_external_action": true,
+        "all_have_live_linkedin_profile": true,
+        "all_have_verified_person_linkedin": true,
+        "all_linkedin_urls_are_evidence_backed": true
+      },
+      "passed": true,
+      "run_id": "a727f667-7737-4bd9-9697-167b28fb4073",
+      "reasons": [],
+      "task_id": "5acf9764-a228-41d6-98ea-7e286e5c504d",
+      "eval_key": "p1-outreach-draft-quality",
+      "eval_type": "unit",
+      "threshold": 0.86
+    }
+  },
+  "external_sync_status": {
+    "google_sheets": null,
+    "outreach_master": null,
+    "requested": {
+      "google_sheets": false,
+      "outreach_master": false
+    }
+  },
+  "evidence_records": [
+    {
+      "lead_id": "5431dfaba2bd88ed",
+      "name": "Duncan Greenberg",
+      "evidence_url_count": 2,
+      "source_domain_count": 2,
+      "source_domains": [
+        "exa",
+        "linkedin.com"
+      ],
+      "linkedin_url": "https://linkedin.com/in/duncan-greenberg-89004849"
+    }
+  ],
+  "outreach_records": [
+    {
+      "lead_id": "5431dfaba2bd88ed",
+      "name": "Duncan Greenberg",
+      "word_count": 66,
+      "evidence_url_count": 1,
+      "claim_count": 3,
+      "unsupported_claim_count": 0,
+      "flags": []
+    }
+  ],
+  "findings": [],
+  "risk_summary": {
+    "state": "looks healthy",
+    "top_risks": [],
+    "affected_leads": [],
+    "recommended_human_review_focus": []
+  }
+}
