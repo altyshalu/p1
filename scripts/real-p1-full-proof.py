@@ -8,6 +8,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -182,7 +184,7 @@ def expected_dossier_lead_ids(run: dict[str, Any]) -> list[str]:
     return sorted({lead_id for lead_id in lead_ids if lead_id})
 
 
-def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
+def verify_p1_quality(run: dict[str, Any], verify_linkedin_live: bool = False) -> dict[str, int]:
     gateway_items: list[dict[str, Any]] = []
     for payload in artifact_payloads(run, 'p1_gateway_evaluations'):
         items = payload.get('gateway_evaluations', [])
@@ -230,6 +232,10 @@ def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
         linkedin_url = str(draft.get('linkedin_url') or '').strip().split('?')[0].rstrip('/')
         if not LINKEDIN_PERSON_RE.match(linkedin_url):
             failures.append(f'{name}: missing_verified_person_linkedin')
+        if not draft_linkedin_has_evidence(draft):
+            failures.append(f'{name}: linkedin_not_evidence_backed')
+        if verify_linkedin_live and not linkedin_profile_url_is_live(linkedin_url):
+            failures.append(f'{name}: linkedin_profile_not_live')
         if str(draft.get('identity_status') or '').strip() != 'verified_linkedin':
             failures.append(f'{name}: identity_status_not_verified')
         if not isinstance(draft.get('evidence_urls'), list) or not draft['evidence_urls']:
@@ -263,6 +269,49 @@ def meeting_cta_count(text: str) -> int:
             if timing_re.search(local_window):
                 count += 1
     return count
+
+
+def draft_linkedin_has_evidence(draft: dict[str, Any]) -> bool:
+    linkedin_url = canonical_linkedin_url(str(draft.get('linkedin_url') or ''))
+    if not linkedin_url:
+        return False
+    evidence_urls = draft.get('evidence_urls')
+    claim_urls = [
+        str(claim.get('source_url') or '')
+        for claim in (draft.get('claims') if isinstance(draft.get('claims'), list) else [])
+        if isinstance(claim, dict)
+    ]
+    urls = [*(evidence_urls if isinstance(evidence_urls, list) else []), *claim_urls]
+    return any(canonical_linkedin_url(str(url)) == linkedin_url for url in urls)
+
+
+def linkedin_profile_url_is_live(linkedin_url: str) -> bool:
+    url = str(linkedin_url or '').strip().split('?')[0].rstrip('/')
+    if not LINKEDIN_PERSON_RE.match(url):
+        return False
+    request = Request(url, headers={'User-Agent': 'Mozilla/5.0 (compatible; ABRT-P1-LinkVerifier/1.0)'})
+    try:
+        with urlopen(request, timeout=15) as response:
+            status = int(getattr(response, 'status', 0) or response.getcode())
+            body = response.read(750_000).decode('utf-8', errors='ignore').lower()
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return False
+    if status != 200:
+        return False
+    if 'profile not found | linkedin' in body or 'profile not found' in body:
+        return False
+    title_match = re.search(r'<title[^>]*>(.*?)</title>', body, flags=re.IGNORECASE | re.DOTALL)
+    if not title_match:
+        return False
+    title = re.sub(r'\s+', ' ', title_match.group(1)).strip().lower()
+    return bool(title and title != 'linkedin' and 'profile not found' not in title)
+
+
+def canonical_linkedin_url(url: str) -> str:
+    cleaned = str(url or '').strip().split('?')[0].rstrip('/')
+    if not LINKEDIN_PERSON_RE.match(cleaned):
+        return ''
+    return re.sub(r'^https?://(?:(?:www|[a-z]{2})\.)?linkedin\.com/', 'linkedin.com/', cleaned, flags=re.IGNORECASE).lower()
 
 
 def main() -> int:
@@ -366,7 +415,7 @@ def main() -> int:
         data_lake_verification = verify_data_lake(data_lake_path_value, lead_ids)
 
     if args.verify_quality:
-        quality_verification = verify_p1_quality(final_run)
+        quality_verification = verify_p1_quality(final_run, verify_linkedin_live=True)
 
     report = {
         'run_id': created['id'],
