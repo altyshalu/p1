@@ -6,6 +6,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     _apify_crunchbase_search,
     _apify_funding_search,
     _apify_linkedin_search,
+    _ensure_google_sheet_headers,
     _request_json,
     _redact_secrets,
     build_metrics_report,
@@ -142,6 +143,24 @@ def test_p1_outreach_writer_enforces_send_ready_cta(monkeypatch) -> None:
     draft = result["outreach_drafts"][0]
     assert "30-minute call" in draft["text"]
     assert judge_outreach_quality({"inputs": {"outreach_drafts": [draft]}}, {})["passed"] is True
+
+
+def test_google_sheet_header_update_uses_values_update_range(monkeypatch) -> None:
+    calls = []
+
+    def fake_request_json(url, method="GET", token=None, body=None, timeout=120):
+        calls.append({"url": url, "method": method, "body": body})
+        if method == "GET":
+            return {"values": []}
+        return {"updatedRange": "P1_L2L3_NEW_LEADS!1:1"}
+
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._request_json", fake_request_json)
+
+    _ensure_google_sheet_headers("sheet-id", "P1_L2L3_NEW_LEADS", "token")
+
+    put_call = next(call for call in calls if call["method"] == "PUT")
+    assert "%211%3A1?valueInputOption=RAW" in put_call["url"]
+    assert ":update" not in put_call["url"]
 
 
 def test_p1_http_error_redaction_removes_provider_tokens() -> None:

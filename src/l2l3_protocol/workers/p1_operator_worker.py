@@ -942,7 +942,7 @@ def _ensure_google_sheet_headers(spreadsheet_id: str, tab_name: str, token: str)
     if existing and existing[0] == GOOGLE_SHEET_HEADERS:
         return
     _request_json(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{quote(f'{tab_name}!1:1', safe='')}:update?valueInputOption=RAW",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{quote(f'{tab_name}!1:1', safe='')}?valueInputOption=RAW",
         method="PUT",
         token=token,
         body={"values": [GOOGLE_SHEET_HEADERS]},
