@@ -437,10 +437,16 @@ def gather_live_intelligence(work_order: dict[str, Any], context: dict[str, Any]
                 for item in results
             ],
         }
-        live_linkedin_url = _linkedin_person_url_from_urls(canonical["live_intelligence"]["exa_raw_urls"])
+        live_linkedin_url = _linkedin_person_url_matching_name(name, canonical["live_intelligence"]["exa_raw_urls"])
         if live_linkedin_url and not canonical["identity"].get("linkedin_url"):
             canonical["identity"]["linkedin_url"] = live_linkedin_url
             canonical["identity"]["identity_status"] = IDENTITY_STATUS_VERIFIED
+        elif not canonical["identity"].get("linkedin_url"):
+            rejected_linkedin = _linkedin_person_url_from_urls(canonical["live_intelligence"]["exa_raw_urls"])
+            if rejected_linkedin:
+                canonical["live_intelligence"]["identity_repair_rejections"] = [
+                    {"url": rejected_linkedin, "reason": "linkedin_slug_name_mismatch"}
+                ]
         updated.append(canonical)
     return {"p1_dossiers": updated}
 
@@ -1483,6 +1489,35 @@ def _linkedin_person_url_from_urls(urls: list[Any]) -> str:
         if LINKEDIN_PERSON_RE.match(url):
             return url
     return ""
+
+
+def _linkedin_person_url_matching_name(name: str, urls: list[Any]) -> str:
+    name_patterns = _name_match_patterns(name)
+    for value in urls:
+        url = _clean_url(str(value or ""))
+        if not LINKEDIN_PERSON_RE.match(url):
+            continue
+        slug = url.rsplit("/in/", 1)[-1].lower()
+        compact_slug = re.sub(r"[^a-z0-9]+", "", slug)
+        if any(pattern and pattern in compact_slug for pattern in name_patterns):
+            return url
+    return ""
+
+
+def _name_match_patterns(name: str) -> list[str]:
+    tokens = [token for token in re.split(r"[^A-Za-z0-9]+", name.lower()) if token]
+    if not tokens:
+        return []
+    first = tokens[0]
+    last = tokens[-1]
+    compact_full = "".join(tokens)
+    patterns = {compact_full}
+    if len(tokens) >= 2:
+        patterns.add(f"{first}{last}")
+        patterns.add(f"{last}{first}")
+        patterns.add(f"{first}{last[0]}")
+        patterns.add(f"{last[0]}{first}")
+    return sorted(patterns, key=len, reverse=True)
 
 
 def _has_clean_person_name(name: str) -> bool:

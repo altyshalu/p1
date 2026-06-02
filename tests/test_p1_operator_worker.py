@@ -320,6 +320,136 @@ def test_p1_live_intelligence_repairs_missing_linkedin_from_real_evidence(monkey
     assert identity["identity_status"] == "verified_linkedin"
 
 
+def test_p1_live_intelligence_rejects_mismatched_linkedin_repair(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._exa_people_search",
+        lambda _query, _limit: [
+            {
+                "source_url": "https://linkedin.com/in/sheridan-clayborne-77723a119",
+                "headline": "Sheridan Clayborne",
+                "evidence": ["Different person profile"],
+            },
+            {"source_url": "https://www.crunchbase.com/person/naval-ravikant", "headline": "Naval Ravikant", "evidence": ["Investor"]},
+        ],
+    )
+
+    result = gather_live_intelligence(
+        {
+            "inputs": {
+                "exa_results_per_dossier": 2,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Naval Ravikant", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["AngelList co-founder and angel investor"]},
+                        "live_intelligence": {},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    dossier = result["p1_dossiers"][0]
+    assert dossier["identity"]["linkedin_url"] == ""
+    assert dossier["identity"]["identity_status"] == "needs_review"
+    assert dossier["live_intelligence"]["identity_repair_rejections"] == [
+        {"url": "https://linkedin.com/in/sheridan-clayborne-77723a119", "reason": "linkedin_slug_name_mismatch"}
+    ]
+
+
+def test_p1_live_intelligence_rejects_shared_surname_linkedin_repair(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._exa_people_search",
+        lambda _query, _limit: [
+            {"source_url": "https://www.linkedin.com/in/adam-simpson-123", "headline": "Adam Simpson", "evidence": ["Shared surname only"]}
+        ],
+    )
+
+    result = gather_live_intelligence(
+        {
+            "inputs": {
+                "exa_results_per_dossier": 1,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Arianna Simpson", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["Product angel investor"]},
+                        "live_intelligence": {},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    assert result["p1_dossiers"][0]["identity"]["linkedin_url"] == ""
+    assert result["p1_dossiers"][0]["identity"]["identity_status"] == "needs_review"
+
+
+def test_p1_live_intelligence_repairs_short_compact_name_linkedin(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._exa_people_search",
+        lambda _query, _limit: [
+            {"source_url": "https://www.linkedin.com/in/bolu", "headline": "Bo Lu", "evidence": ["Product angel investor"]}
+        ],
+    )
+
+    result = gather_live_intelligence(
+        {
+            "inputs": {
+                "exa_results_per_dossier": 1,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Bo Lu", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["Product angel investor"]},
+                        "live_intelligence": {},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    assert result["p1_dossiers"][0]["identity"]["linkedin_url"] == "https://www.linkedin.com/in/bolu"
+    assert result["p1_dossiers"][0]["identity"]["identity_status"] == "verified_linkedin"
+
+
+def test_p1_live_intelligence_rejects_ambiguous_initial_slug_repair(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._exa_people_search",
+        lambda _query, _limit: [
+            {"source_url": "https://www.linkedin.com/in/asmith", "headline": "A Smith", "evidence": ["Ambiguous initial slug"]},
+            {"source_url": "https://www.linkedin.com/in/jdoe", "headline": "J Doe", "evidence": ["Ambiguous initial slug"]},
+        ],
+    )
+
+    result = gather_live_intelligence(
+        {
+            "inputs": {
+                "exa_results_per_dossier": 2,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Alice Smith", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["Product angel investor"]},
+                        "live_intelligence": {},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    assert result["p1_dossiers"][0]["identity"]["linkedin_url"] == ""
+    assert result["p1_dossiers"][0]["identity"]["identity_status"] == "needs_review"
+
+
 def test_p1_gateway_blocks_unverified_linkedin_even_when_model_passes(monkeypatch) -> None:
     monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
     monkeypatch.setattr(
