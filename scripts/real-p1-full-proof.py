@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,9 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from p1_real_common import approve_run, assert_status, assert_summary_shape, create_run, get_summary, load_inputs, require_capabilities, require_health, wait_for_run
+
+
+LINKEDIN_PERSON_RE = re.compile(r"^https?://(?:(?:www|[a-z]{2})\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$", re.IGNORECASE)
 
 
 def load_env_file(path_value: str | None) -> None:
@@ -218,6 +222,11 @@ def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
             failures.append(f'{name}: draft_publish_true')
         if str(draft.get('status') or '') != 'draft':
             failures.append(f'{name}: draft_status_not_draft')
+        linkedin_url = str(draft.get('linkedin_url') or '').strip().split('?')[0].rstrip('/')
+        if not LINKEDIN_PERSON_RE.match(linkedin_url):
+            failures.append(f'{name}: missing_verified_person_linkedin')
+        if str(draft.get('identity_status') or '').strip() != 'verified_linkedin':
+            failures.append(f'{name}: identity_status_not_verified')
         if not isinstance(draft.get('evidence_urls'), list) or not draft['evidence_urls']:
             failures.append(f'{name}: missing_draft_evidence_urls')
         claims = draft.get('claims')

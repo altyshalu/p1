@@ -15,7 +15,9 @@ from l2l3_protocol.workers.p1_operator_worker import (
     collect_sources,
     evaluate_gateway,
     judge_outreach_quality,
+    gather_live_intelligence,
     merge_source_batches,
+    normalize_leads,
     read_existing_dossiers,
     score_triage,
     sync_data_lake,
@@ -64,6 +66,8 @@ def test_p1_outreach_quality_requires_evidence_and_no_publish() -> None:
                         "lead_id": "lead-1",
                         "idempotency_key": "run-1:lead-1",
                         "name": "Adeline Lee",
+                        "linkedin_url": "https://de.linkedin.com/in/adelineleecs",
+                        "identity_status": "verified_linkedin",
                         "text": "ABRT is building Limpid around operator product DNA. Curious whether this resonates for a quick 30-minute call next week?",
                         "evidence_urls": ["https://de.linkedin.com/in/adelineleecs"],
                         "claims": [{"text": "Adeline has operator product DNA.", "source_url": "https://de.linkedin.com/in/adelineleecs"}],
@@ -99,7 +103,7 @@ def test_p1_outreach_writer_enforces_abrt_or_limpid_mention(monkeypatch) -> None
                 "forge_queue": [
                     {
                         "dossier": {
-                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson", "identity_status": "verified_linkedin"},
                             "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
                         },
                         "gateway": {"current_role_verified": "Investor"},
@@ -131,7 +135,7 @@ def test_p1_outreach_writer_enforces_send_ready_cta(monkeypatch) -> None:
                 "forge_queue": [
                     {
                         "dossier": {
-                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson", "identity_status": "verified_linkedin"},
                             "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
                         },
                         "gateway": {"current_role_verified": "Investor"},
@@ -165,7 +169,7 @@ def test_p1_outreach_writer_removes_placeholder_signoff(monkeypatch) -> None:
                 "forge_queue": [
                     {
                         "dossier": {
-                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson", "identity_status": "verified_linkedin"},
                             "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
                         },
                         "gateway": {"current_role_verified": "Investor"},
@@ -199,7 +203,7 @@ def test_p1_outreach_writer_removes_inline_placeholder_signoff(monkeypatch) -> N
                 "forge_queue": [
                     {
                         "dossier": {
-                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson"},
+                            "identity": {"name": "Arianna Simpson", "linkedin_url": "https://www.linkedin.com/in/ariannasimpson", "identity_status": "verified_linkedin"},
                             "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/ariannasimpson"]},
                         },
                         "gateway": {"current_role_verified": "Investor"},
@@ -213,6 +217,175 @@ def test_p1_outreach_writer_removes_inline_placeholder_signoff(monkeypatch) -> N
     draft = result["outreach_drafts"][0]
     assert not draft["text"].lower().endswith("best,")
     assert judge_outreach_quality({"inputs": {"outreach_drafts": [draft]}}, {})["passed"] is True
+
+
+def test_p1_normalizer_rejects_broken_person_name() -> None:
+    result = normalize_leads(
+        {
+            "inputs": {
+                "lead_candidates": [
+                    {"name": "ann✺b", "source_url": "https://annbordetsky.com", "source": "exa"},
+                    {"name": "Elad Gil", "linkedin_url": "https://www.linkedin.com/in/eladgil/", "source": "apify_linkedin"},
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["normalized_leads"][0]["name"] == "Elad Gil"
+    assert result["normalized_leads"][0]["linkedin_url"] == "https://www.linkedin.com/in/eladgil"
+    assert result["normalized_leads"][0]["identity_status"] == "verified_linkedin"
+    assert result["rejected_leads"][0]["reason"] == "invalid_person_name"
+
+
+def test_p1_normalizer_accepts_country_subdomain_linkedin_person_url() -> None:
+    result = normalize_leads(
+        {
+            "inputs": {
+                "lead_candidates": [
+                    {"name": "Adeline Lee", "linkedin_url": "http://ca.linkedin.com/in/adelineleecs/", "source": "apify_linkedin"},
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["normalized_leads"][0]["linkedin_url"] == "http://ca.linkedin.com/in/adelineleecs"
+    assert result["normalized_leads"][0]["identity_status"] == "verified_linkedin"
+
+
+def test_p1_normalizer_allows_mononym_when_linkedin_is_valid() -> None:
+    result = normalize_leads(
+        {
+            "inputs": {
+                "lead_candidates": [
+                    {"name": "Dara", "linkedin_url": "https://www.linkedin.com/in/dara", "source": "apify_linkedin"},
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["normalized_leads"][0]["name"] == "Dara"
+    assert result["normalized_leads"][0]["identity_status"] == "verified_linkedin"
+
+
+def test_p1_normalizer_rejects_non_profile_linkedin_subdomain_shape() -> None:
+    result = normalize_leads(
+        {
+            "inputs": {
+                "lead_candidates": [
+                    {"name": "Adeline Lee", "linkedin_url": "https://touch.linkedin.com/in/adelineleecs", "source": "exa"},
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["normalized_leads"][0]["linkedin_url"] == ""
+    assert result["normalized_leads"][0]["identity_status"] == "needs_review"
+
+
+def test_p1_live_intelligence_repairs_missing_linkedin_from_real_evidence(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._exa_people_search",
+        lambda _query, _limit: [
+            {"source_url": "https://www.linkedin.com/in/navalr", "headline": "Naval Ravikant", "evidence": ["AngelList co-founder"]},
+            {"source_url": "https://example.com/naval", "headline": "Naval Ravikant", "evidence": ["Investor"]},
+        ],
+    )
+
+    result = gather_live_intelligence(
+        {
+            "inputs": {
+                "exa_results_per_dossier": 2,
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Naval Ravikant", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["AngelList co-founder and angel investor"]},
+                        "live_intelligence": {},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    identity = result["p1_dossiers"][0]["identity"]
+    assert identity["linkedin_url"] == "https://www.linkedin.com/in/navalr"
+    assert identity["identity_status"] == "verified_linkedin"
+
+
+def test_p1_gateway_blocks_unverified_linkedin_even_when_model_passes(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "identity_confidence": 100,
+            "product_b2c_fit": "PASS",
+            "product_leadership_fit": "PASS",
+            "verified_investor_fit": "PASS",
+            "bandwidth_signal": "HIGH",
+            "liquidity_signal": "YES",
+            "systematic_alignment": "YES",
+            "exclusion_signal": "NO",
+            "current_role_verified": "Angel investor",
+            "evidence_urls": ["https://www.crunchbase.com/person/naval-ravikant"],
+            "mythos_dossier": "Model says yes, deterministic identity gate says not yet.",
+        },
+    )
+
+    result = evaluate_gateway(
+        {
+            "inputs": {
+                "p1_dossiers": [
+                    {
+                        "identity": {"name": "Naval Ravikant", "linkedin_url": "", "identity_status": "needs_review"},
+                        "historical_context": {"all_recorded_headlines": ["AngelList co-founder"]},
+                        "live_intelligence": {"exa_raw_urls": ["https://www.crunchbase.com/person/naval-ravikant"]},
+                        "gateway_evaluations": {"status": "UNPROCESSED"},
+                        "outreach": {"status": "NONE"},
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    gateway = result["gateway_evaluations"][0]["gateway"]
+    assert gateway["decision"] == "needs_more_evidence"
+    assert "missing_verified_person_linkedin" in gateway["decision_reasons"]
+    assert "identity_status_not_verified:needs_review" in gateway["decision_reasons"]
+
+
+def test_p1_outreach_quality_rejects_unverified_linkedin_identity() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Naval Ravikant",
+                        "linkedin_url": "",
+                        "identity_status": "needs_review",
+                        "text": "ABRT is building Limpid around operator product DNA. Would a quick 30-minute call next week make sense?",
+                        "evidence_urls": ["https://www.crunchbase.com/person/naval-ravikant"],
+                        "claims": [{"text": "Naval is an investor.", "source_url": "https://www.crunchbase.com/person/naval-ravikant"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "all_have_verified_person_linkedin" in result["reasons"]
 
 
 def test_google_sheet_header_update_uses_values_update_range(monkeypatch) -> None:
@@ -417,7 +590,7 @@ def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch)
             "inputs": {
                 "p1_dossiers": [
                     {
-                        "identity": {"name": "Strong Operator", "linkedin_url": "https://www.linkedin.com/in/operator"},
+                        "identity": {"name": "Strong Operator", "linkedin_url": "https://www.linkedin.com/in/operator", "identity_status": "verified_linkedin"},
                         "historical_context": {"all_recorded_headlines": ["Former CPO"]},
                         "live_intelligence": {"exa_raw_urls": ["https://www.linkedin.com/in/operator"]},
                         "gateway_evaluations": {"status": "UNPROCESSED"},
@@ -458,7 +631,7 @@ def test_p1_gateway_approves_full_golden_icp(monkeypatch) -> None:
             "inputs": {
                 "p1_dossiers": [
                     {
-                        "identity": {"name": "Product Angel", "linkedin_url": "https://www.linkedin.com/in/productangel"},
+                        "identity": {"name": "Product Angel", "linkedin_url": "https://www.linkedin.com/in/productangel", "identity_status": "verified_linkedin"},
                         "historical_context": {"all_recorded_headlines": ["CPO and Angel Investor"]},
                         "live_intelligence": {"exa_raw_urls": ["https://angel.co/u/productangel"]},
                         "gateway_evaluations": {"status": "UNPROCESSED"},
