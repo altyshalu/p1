@@ -541,6 +541,36 @@ def test_full_proof_internal_paths_use_runtime_env(monkeypatch) -> None:
     assert module.data_lake_path({'data_lake': {}}, {}) == '/data/dossiers'
 
 
+def test_full_proof_expected_ids_come_from_run_artifacts() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {'run_id': 'run-1', 'lead_id': 'lead-1'},
+                        {'run_id': 'run-1', 'lead_id': 'lead-2'},
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_dossiers',
+                'payload': {
+                    'p1_dossiers': [
+                        {'identity': {'lead_id': 'lead-1'}},
+                        {'identity': {'lead_id': 'lead-2'}},
+                    ]
+                },
+            },
+        ]
+    }
+
+    assert module.expected_draft_lead_ids(run) == ['lead-1', 'lead-2']
+    assert module.expected_draft_pairs(run) == [('run-1', 'lead-1'), ('run-1', 'lead-2')]
+    assert module.expected_dossier_lead_ids(run) == ['lead-1', 'lead-2']
+
+
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     full_inputs = tmp_path / 'full.json'

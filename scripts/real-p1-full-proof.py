@@ -137,6 +137,43 @@ def data_lake_path(preview: dict[str, Any], inputs: dict[str, Any]) -> str:
     )
 
 
+def expected_draft_lead_ids(run: dict[str, Any]) -> list[str]:
+    lead_ids: list[str] = []
+    for payload in artifact_payloads(run, 'p1_outreach_drafts'):
+        drafts = payload.get('outreach_drafts', [])
+        if not isinstance(drafts, list):
+            continue
+        for draft in drafts:
+            if isinstance(draft, dict) and draft.get('lead_id'):
+                lead_ids.append(str(draft['lead_id']).strip())
+    return sorted({lead_id for lead_id in lead_ids if lead_id})
+
+
+def expected_draft_pairs(run: dict[str, Any]) -> list[tuple[str, str]]:
+    pairs: list[tuple[str, str]] = []
+    for payload in artifact_payloads(run, 'p1_outreach_drafts'):
+        drafts = payload.get('outreach_drafts', [])
+        if not isinstance(drafts, list):
+            continue
+        for draft in drafts:
+            if isinstance(draft, dict) and draft.get('run_id') and draft.get('lead_id'):
+                pairs.append((str(draft['run_id']).strip(), str(draft['lead_id']).strip()))
+    return sorted({pair for pair in pairs if pair[0] and pair[1]})
+
+
+def expected_dossier_lead_ids(run: dict[str, Any]) -> list[str]:
+    lead_ids: list[str] = []
+    for payload in artifact_payloads(run, 'p1_dossiers'):
+        dossiers = payload.get('p1_dossiers', [])
+        if not isinstance(dossiers, list):
+            continue
+        for dossier in dossiers:
+            identity = dossier.get('identity') if isinstance(dossier, dict) else None
+            if isinstance(identity, dict) and identity.get('lead_id'):
+                lead_ids.append(str(identity['lead_id']).strip())
+    return sorted({lead_id for lead_id in lead_ids if lead_id})
+
+
 def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
     gateway_items: list[dict[str, Any]] = []
     for payload in artifact_payloads(run, 'p1_gateway_evaluations'):
@@ -241,7 +278,9 @@ def main() -> int:
             raise SystemExit('verify-sheet requires spreadsheet_id and google_service_account_path')
         lead_ids = [str(row.get('lead_id')) for row in (preview.get('google_sheets') or {}).get('rows', []) if isinstance(row, dict) and row.get('lead_id')]
         if not lead_ids:
-            raise SystemExit('verify-sheet requested but preview did not include any lead_ids to validate')
+            lead_ids = expected_draft_lead_ids(final_run)
+        if not lead_ids:
+            raise SystemExit('verify-sheet requested but run did not include any expected lead_ids to validate')
         sheet_verification = verify_sheet_rows(spreadsheet_id, tab_name, str(service_account_path), lead_ids)
 
     if args.verify_outreach_master and final_run['status'] == 'completed':
@@ -252,20 +291,24 @@ def main() -> int:
             for row in rows
             if isinstance(row, dict) and row.get('run_id') and row.get('lead_id')
         ]
+        if not pairs:
+            pairs = expected_draft_pairs(final_run)
         if not outreach_master_path_value:
             raise SystemExit('verify-outreach-master requires outreach_master_path')
         if not pairs:
-            raise SystemExit('verify-outreach-master requested but preview did not include any run_id/lead_id pairs')
+            raise SystemExit('verify-outreach-master requested but run did not include any expected run_id/lead_id pairs')
         outreach_master_verification = verify_outreach_master(outreach_master_path_value, pairs)
 
     if args.verify_data_lake and final_run['status'] == 'completed':
         data_lake_path_value = data_lake_path(preview, inputs)
         files = (preview.get('data_lake') or {}).get('files', []) if isinstance(preview.get('data_lake'), dict) else []
         lead_ids = [str(item.get('lead_id')).strip() for item in files if isinstance(item, dict) and item.get('lead_id')]
+        if not lead_ids:
+            lead_ids = expected_dossier_lead_ids(final_run)
         if not data_lake_path_value:
             raise SystemExit('verify-data-lake requires data_lake_dossier_path or dossier_output_path')
         if not lead_ids:
-            raise SystemExit('verify-data-lake requested but preview did not include any lead_ids to validate')
+            raise SystemExit('verify-data-lake requested but run did not include any expected lead_ids to validate')
         data_lake_verification = verify_data_lake(data_lake_path_value, lead_ids)
 
     if args.verify_quality:
