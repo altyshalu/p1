@@ -169,8 +169,6 @@ def collect_sources(work_order: dict[str, Any], context: dict[str, Any]) -> dict
         else:
             raise P1WorkerInputError(f"unsupported P1 source: {source}")
         attempts[-1]["duration_ms"] = max(0, int((time.perf_counter() - started_at) * 1000))
-    if not candidates:
-        raise P1WorkerInputError(f"real P1 sourcing returned no lead candidates for sources={sources}")
     primary_source = str(inputs.get("source") or (sources[0] if len(sources) == 1 else "merged"))
     return {"source": primary_source, "lead_candidates": candidates[:limit], "source_attempts": attempts}
 
@@ -193,7 +191,7 @@ def merge_source_batches(work_order: dict[str, Any], context: dict[str, Any]) ->
             seen.add(dedupe_key)
             merged_candidates.append(candidate)
     if not merged_candidates:
-        raise P1WorkerInputError("source batch merge produced no lead candidates")
+        raise P1WorkerInputError("real P1 sourcing returned no lead candidates after merging source batches")
     return {"lead_candidates": merged_candidates, "source_attempts": merged_attempts, "source_batches": batches}
 
 

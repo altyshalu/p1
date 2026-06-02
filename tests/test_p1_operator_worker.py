@@ -12,6 +12,7 @@ from l2l3_protocol.workers.p1_operator_worker import (
     collect_sources,
     evaluate_gateway,
     judge_outreach_quality,
+    merge_source_batches,
     read_existing_dossiers,
     score_triage,
     sync_data_lake,
@@ -470,6 +471,35 @@ def test_p1_source_collector_reuses_explicit_provider_cache(tmp_path: Path, monk
     assert second["source_attempts"][0]["cache_hit"] is True
     assert second["source_attempts"][0]["cache_key"] == first["source_attempts"][0]["cache_key"]
     assert second["lead_candidates"] == first["lead_candidates"]
+
+
+def test_p1_source_collector_preserves_zero_result_source_without_failing(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._exa_people_search", lambda _query, _limit: [])
+
+    result = collect_sources({"inputs": {"mode": "source_only", "sources": ["exa"], "limit": 5, "use_provider_cache": False}}, {})
+
+    assert result["lead_candidates"] == []
+    assert result["source_attempts"][0]["provider"] == "exa"
+    assert result["source_attempts"][0]["result_count"] == 0
+
+
+def test_p1_source_merger_fails_only_when_all_sources_are_empty() -> None:
+    try:
+        merge_source_batches(
+            {
+                "inputs": {
+                    "source_batches": [
+                        {"source": "exa", "lead_candidates": [], "source_attempts": [{"provider": "exa", "result_count": 0}]},
+                        {"source": "apify_linkedin", "lead_candidates": [], "source_attempts": [{"provider": "apify_linkedin", "result_count": 0}]},
+                    ]
+                }
+            },
+            {},
+        )
+    except ValueError as exc:
+        assert "real P1 sourcing returned no lead candidates after merging source batches" in str(exc)
+    else:
+        raise AssertionError("expected source merge failure")
 
 
 def test_p1_data_lake_sync_writes_physical_dossier_files(tmp_path: Path) -> None:
