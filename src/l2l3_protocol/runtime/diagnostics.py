@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -115,6 +116,8 @@ def _root_cause(state: dict[str, Any], evidence: list[dict[str, Any]]) -> str:
         return "repeated_repair"
     if _low_quality_evals(state):
         return "quality_gate_failed"
+    if any(_missing_env_key_from_evidence(item) for item in evidence):
+        return "missing_runtime_dependency"
     for item in evidence:
         failure_type = str(item.get("failure_type") or "")
         if failure_type in INTERNAL_FAILURE_TO_ROOT_CAUSE:
@@ -264,6 +267,11 @@ def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quali
     primary = _primary_evidence(root_cause, evidence) if evidence else {}
     worker = str(primary.get("worker_profile") or "unknown-worker")
     failure_type = str(primary.get("failure_type") or "")
+    missing_env_item = _primary_missing_env_evidence(evidence)
+    missing_env_key = _missing_env_key_from_evidence(missing_env_item or primary)
+    if root_cause == "missing_runtime_dependency" and missing_env_key:
+        env_worker = str((missing_env_item or primary).get("worker_profile") or "unknown-worker")
+        return f"runtime:{env_worker}/env:{missing_env_key}"
     if root_cause == "tool_or_provider_failure":
         provider = _provider_from_evidence(primary)
         if worker.startswith("p1-"):
@@ -290,6 +298,11 @@ def _failure_signature(root_cause: str, evidence: list[dict[str, Any]]) -> str:
     if not evidence:
         return root_cause
     primary = _primary_evidence(root_cause, evidence)
+    missing_env_item = _primary_missing_env_evidence(evidence)
+    missing_env_key = _missing_env_key_from_evidence(missing_env_item or primary)
+    if root_cause == "missing_runtime_dependency" and missing_env_key:
+        worker = str((missing_env_item or primary).get("worker_profile") or "unknown-worker")
+        return f"missing_runtime_dependency:{worker}:{missing_env_key}"
     failure_type = str(primary.get("failure_type") or root_cause)
     if root_cause == "bad_or_missing_input" and _is_provider_input_validation(primary):
         return f"{failure_type}:trend-radar/input.providers"
@@ -301,6 +314,28 @@ def _is_provider_input_validation(item: dict[str, Any]) -> bool:
     payload = item.get("payload", {})
     error = item.get("error") or (payload.get("error") if isinstance(payload, dict) else "")
     return "unsupported providers requested" in str(error)
+
+
+def _missing_env_key_from_evidence(item: dict[str, Any]) -> str | None:
+    payload = item.get("payload", {})
+    haystack_items = [item.get("error")]
+    if isinstance(payload, dict):
+        haystack_items.append(payload.get("error"))
+        structured = payload.get("structured_error")
+        if isinstance(structured, dict):
+            haystack_items.append(structured.get("message"))
+    haystack = "\n".join(str(value) for value in haystack_items if value)
+    match = re.search(r"missing required environment variable:\s*([A-Za-z_][A-Za-z0-9_]*)", haystack, re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _primary_missing_env_evidence(evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for item in evidence:
+        if _missing_env_key_from_evidence(item):
+            return item
+    return None
 
 
 def _provider_from_evidence(item: dict[str, Any]) -> str | None:
