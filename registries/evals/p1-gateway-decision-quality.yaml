@@ -3,8 +3,16 @@ version: 0.1.0
 eval_type: unit
 checks:
   - identity_confidence_present
+  - product_b2c_fit_present
+  - product_leadership_fit_present
+  - verified_investor_fit_present
   - bandwidth_signal_present
   - liquidity_signal_present
+  - evidence_urls_present
   - outreach_requires_high_bandwidth
   - identity_mismatch_blocks_outreach
-minimum_score: 0.8
+  - outreach_requires_product_b2c_fit
+  - outreach_requires_product_leadership_fit
+  - outreach_requires_verified_investor_fit
+  - outreach_blocks_exclusions
+minimum_score: 1.0

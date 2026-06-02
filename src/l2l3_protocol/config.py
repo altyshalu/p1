@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     deepseek_base_url: str = 'https://api.deepseek.com'
 
     procedural_registry_path: Path = Path('registries')
+    operator_api_key: str | None = Field(default=None, validation_alias='L2L3_OPERATOR_API_KEY')
+    cors_allow_origins: str = Field(
+        default='http://127.0.0.1:8094,http://localhost:8094,http://127.0.0.1:8105,http://localhost:8105',
+        validation_alias='L2L3_CORS_ALLOW_ORIGINS',
+    )
 
 
 @lru_cache

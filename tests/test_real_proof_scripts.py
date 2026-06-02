@@ -119,6 +119,31 @@ def test_p1_real_common_assert_summary_shape_rejects_missing_fields() -> None:
         raise AssertionError('expected SystemExit')
 
 
+def test_p1_real_common_sends_operator_api_key(monkeypatch) -> None:
+    module = _load_module('p1_real_common.py', 'p1_real_common')
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout=120):
+        captured['authorization'] = request.headers.get('Authorization') or request.headers.get('authorization')
+        return Response()
+
+    monkeypatch.setenv('L2L3_OPERATOR_API_KEY', 'secret')
+    monkeypatch.setattr(module, 'urlopen', fake_urlopen)
+
+    assert module.request_json('http://api/runs', method='POST', body={}) == {'ok': True}
+    assert captured['authorization'] == 'Bearer secret'
+
+
 def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monkeypatch) -> None:
     module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'require_human_approval': True})
@@ -196,6 +221,88 @@ def test_p1_full_proof_verify_data_lake(monkeypatch, tmp_path: Path) -> None:
     assert 'data_lake_verification' in stdout.getvalue()
 
 
+def test_p1_full_proof_verify_quality_accepts_golden_icp_run() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'text': 'ABRT/Limpid draft',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    assert module.verify_p1_quality(run) == {'gateway_approved': 1, 'drafts_verified': 1}
+
+
+def test_p1_full_proof_verify_quality_rejects_missing_investor_fit() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Operator Only'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'FAIL',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/operator'],
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'verified_investor_fit_not_pass' in str(exc)
+    else:
+        raise AssertionError('expected SystemExit')
+
+
 def test_p1_cache_proof_rejects_missing_cache_hits(monkeypatch) -> None:
     module = _load_module('real-p1-cache-proof.py', 'real_p1_cache_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'source_only'})
@@ -225,14 +332,39 @@ def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatc
     monkeypatch.setattr(module, 'approve_run', lambda _base_url, _run_id: {'status': 'completed'})
     monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'latest_metrics': {'sheet_duplicate_skipped': 0, 'outreach_master_duplicate_skipped': 0}})
     monkeypatch.setattr(module, 'find_duplicate_events', lambda _run: {'p1_external_sync_duplicate_skipped': 0, 'p1_outreach_master_duplicate_skipped': 0, 'p1_data_lake_duplicate_skipped': 0})
+    monkeypatch.setattr(module, 'duplicate_sync_check', lambda _run: (_ for _ in ()).throw(SystemExit('idempotency proof failed: duplicate sync did not skip every draft')))
     monkeypatch.setattr(sys, 'argv', ['real-p1-idempotency-proof.py', '--inputs-json', '/tmp/in.json'])
 
     try:
         module.main()
     except SystemExit as exc:
-        assert 'no duplicate-skip evidence found' in str(exc)
+        assert 'duplicate sync did not skip every draft' in str(exc)
     else:
         raise AssertionError('expected SystemExit')
+
+
+def test_p1_idempotency_proof_accepts_existing_completed_run(monkeypatch) -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'request_json', lambda _url: {'status': 'completed'})
+    monkeypatch.setattr(module, 'approve_run', lambda _base_url, _run_id: {'status': 'completed'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'status': 'completed', 'events': []})
+    monkeypatch.setattr(
+        module,
+        'get_summary',
+        lambda _base_url, _run_id: {'latest_metrics': {'sheet_written': 3, 'outreach_master_written': 3, 'data_lake_written': 5}},
+    )
+    monkeypatch.setattr(module, 'find_duplicate_events', lambda _run: {'p1_external_sync_duplicate_skipped': 0})
+    monkeypatch.setattr(module, 'duplicate_sync_check', lambda _run: {'expected_drafts': 3, 'sheet_duplicate_skipped': 3, 'outreach_master_duplicate_skipped': 3})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-idempotency-proof.py', '--run-id', 'run-1'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert 'duplicate_worker_check' in stdout.getvalue()
 
 
 def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path) -> None:
@@ -246,13 +378,27 @@ def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path)
     report = module.readiness_report('http://api', str(env_path), 'source_only', {'sources': ['exa']}, True)
 
     assert report['ready'] is False
-    assert 'APIFY_API_TOKEN' in report['missing_required_keys']
+    assert 'EXA_API_KEY' in report['missing_required_keys']
+
+
+def test_p1_readiness_requires_apify_and_exa_for_funding_source(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    env_path.write_text('GEMINI_API_KEY=test\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report('http://api', str(env_path), 'source_only', {'sources': ['apify_funding']}, True)
+
+    assert report['ready'] is False
+    assert report['missing_required_keys'] == ['APIFY_API_TOKEN', 'EXA_API_KEY']
 
 
 def test_p1_readiness_reports_missing_runtime_inputs(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
     env_path = tmp_path / 'test.env'
-    env_path.write_text('GEMINI_API_KEY=test\nAPIFY_API_TOKEN=test\n')
+    env_path.write_text('GEMINI_API_KEY=test\nEXA_API_KEY=test\nAPIFY_API_TOKEN=test\n')
     monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
     monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
     monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
@@ -400,10 +546,138 @@ def test_p1_proof_pack_passes_verify_flags_to_full_proof(monkeypatch, tmp_path: 
     assert exit_code == 0
     command = captured['command']
     assert '--approve' in command
+    assert '--env-file' in command
+    assert '.env' in command
     assert '--verify-sheet' in command
     assert '--verify-outreach-master' in command
     assert '--verify-data-lake' in command
     assert '/tmp/service-account.json' in command
+
+
+def test_full_proof_sheet_verification_uses_runtime_env(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setenv('P1_GOOGLE_SHEET_ID', 'sheet-from-env')
+    monkeypatch.setenv('GOOGLE_SA_PATH', '/secure/service-account.json')
+
+    config = module.sheet_verification_config({'google_sheets': {'tab_name': 'P1_L2L3_NEW_LEADS'}}, {}, None)
+
+    assert config == {
+        'spreadsheet_id': 'sheet-from-env',
+        'tab_name': 'P1_L2L3_NEW_LEADS',
+        'service_account_path': '/secure/service-account.json',
+    }
+
+
+def test_full_proof_loads_env_file_for_verification(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    env_path = tmp_path / '.env'
+    env_path.write_text('P1_GOOGLE_SHEET_ID=sheet-from-file\nGOOGLE_SA_PATH=/secure/from-file.json\n', encoding='utf-8')
+    monkeypatch.delenv('P1_GOOGLE_SHEET_ID', raising=False)
+    monkeypatch.delenv('GOOGLE_SA_PATH', raising=False)
+
+    module.load_env_file(str(env_path))
+    config = module.sheet_verification_config({'google_sheets': {'tab_name': 'P1_L2L3_NEW_LEADS'}}, {}, None)
+
+    assert config['spreadsheet_id'] == 'sheet-from-file'
+    assert config['service_account_path'] == '/secure/from-file.json'
+
+
+def test_full_proof_internal_paths_use_runtime_env(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setenv('P1_OUTREACH_MASTER_PATH', '/ops/Outreach_Drafts_Master.json')
+    monkeypatch.setenv('P1_DOSSIER_OUTPUT_PATH', '/data/dossiers')
+    monkeypatch.setenv('P1_DOSSIER_SOURCE_PATH', '/source/dossiers')
+
+    assert module.outreach_master_path({'outreach_master': {}}, {}) == '/ops/Outreach_Drafts_Master.json'
+    assert module.data_lake_path({'data_lake': {}}, {}) == '/data/dossiers'
+
+
+def test_full_proof_data_lake_path_does_not_fall_back_to_source(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.delenv('P1_DOSSIER_OUTPUT_PATH', raising=False)
+    monkeypatch.setenv('P1_DOSSIER_SOURCE_PATH', '/source/dossiers')
+
+    assert module.data_lake_path({'data_lake': {}}, {}) == ''
+
+
+def test_full_proof_sheet_verification_requires_run_lead_pairs(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+
+    monkeypatch.setattr('l2l3_protocol.workers.p1_operator_worker._google_access_token', lambda _path: 'token')
+    monkeypatch.setattr(
+        'l2l3_protocol.workers.p1_operator_worker._request_json',
+        lambda _url, token=None: {'values': [['run_id', 'lead_id'], ['run-1', 'lead-1']]},
+    )
+
+    result = module.verify_sheet_rows('sheet-id', 'P1_L2L3_NEW_LEADS', '/sa.json', [('run-1', 'lead-1')])
+
+    assert result['matched_pairs'] == 1
+
+
+def test_full_proof_sheet_verification_rejects_old_run_rows(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+
+    monkeypatch.setattr('l2l3_protocol.workers.p1_operator_worker._google_access_token', lambda _path: 'token')
+    monkeypatch.setattr(
+        'l2l3_protocol.workers.p1_operator_worker._request_json',
+        lambda _url, token=None: {'values': [['run_id', 'lead_id'], ['old-run', 'lead-1']]},
+    )
+
+    try:
+        module.verify_sheet_rows('sheet-id', 'P1_L2L3_NEW_LEADS', '/sa.json', [('run-1', 'lead-1')])
+    except SystemExit as exc:
+        assert 'expected run_id/lead_id pairs are missing' in str(exc)
+    else:
+        raise AssertionError('expected sheet verification to reject old run row')
+
+
+def test_full_proof_expected_ids_come_from_run_artifacts() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {'run_id': 'run-1', 'lead_id': 'lead-1'},
+                        {'run_id': 'run-1', 'lead_id': 'lead-2'},
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_dossiers',
+                'payload': {
+                    'p1_dossiers': [
+                        {'identity': {'lead_id': 'lead-1'}},
+                        {'identity': {'lead_id': 'lead-2'}},
+                    ]
+                },
+            },
+        ]
+    }
+
+    assert module.expected_draft_lead_ids(run) == ['lead-1', 'lead-2']
+    assert module.expected_draft_pairs(run) == [('run-1', 'lead-1'), ('run-1', 'lead-2')]
+    assert module.expected_dossier_lead_ids(run) == ['lead-1', 'lead-2']
+
+
+def test_p1_idempotency_extracts_latest_outreach_drafts() -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+    run = {
+        'artifacts': [
+            {'artifact_type': 'p1_outreach_drafts', 'payload': {'outreach_drafts': [{'run_id': 'run-1', 'lead_id': 'lead-1'}]}},
+        ]
+    }
+
+    assert module.latest_outreach_drafts(run) == [{'run_id': 'run-1', 'lead_id': 'lead-1'}]
+
+
+def test_p1_idempotency_duplicate_skip_evidence_requires_skip_count() -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+
+    assert module.has_duplicate_skip_evidence({'sheet_duplicate_skipped': 1}, {'p1_external_sync_duplicate_skipped': 0}) is True
+    assert module.has_duplicate_skip_evidence({}, {'p1_external_sync_duplicate_skipped': 0}) is False
+
 
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
