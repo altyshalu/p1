@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,9 @@ def request_json(url: str, method: str = 'GET', body: dict | None = None, timeou
     headers = {'accept': 'application/json'}
     if body is not None:
         headers['content-type'] = 'application/json'
+    operator_api_key = os.environ.get('L2L3_OPERATOR_API_KEY')
+    if operator_api_key:
+        headers['authorization'] = f'Bearer {operator_api_key}'
     try:
         with urlopen(Request(url, method=method, data=data, headers=headers), timeout=timeout) as response:
             payload = response.read().decode('utf-8')

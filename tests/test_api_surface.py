@@ -1,4 +1,4 @@
-from l2l3_protocol.api.main import _build_run_summary, app
+from l2l3_protocol.api.main import _build_run_summary, _cors_allow_origins, _is_operator_authorized, app
 from l2l3_protocol.services.dashboard import operator_dashboard_html
 from l2l3_protocol.services.p1_defaults import default_p1_inputs
 from l2l3_protocol.core.schemas import ProcessRunCreate, RecentSystemReviewCreate
@@ -42,11 +42,23 @@ def test_p1_defaults_are_demo_target_and_write_gated() -> None:
     assert inputs['google_sheet_tab'] == 'P1_L2L3_NEW_LEADS'
 
 
+def test_operator_auth_accepts_bearer_or_api_key_header() -> None:
+    assert _is_operator_authorized({'authorization': 'Bearer secret'}, 'secret') is True
+    assert _is_operator_authorized({'x-l2l3-api-key': 'secret'}, 'secret') is True
+    assert _is_operator_authorized({'authorization': 'Bearer wrong'}, 'secret') is False
+
+
+def test_cors_origins_are_not_wildcard() -> None:
+    assert '*' not in _cors_allow_origins()
+
+
 def test_operator_dashboard_uses_real_api_endpoints() -> None:
     html = operator_dashboard_html()
 
     assert '/runs?playbook_key=p1-operator-outreach&limit=20' in html
     assert '/p1/runs' in html
+    assert 'l2l3OperatorApiKey' in html
+    assert 'authorization' in html
     assert '/reports/system-learning?playbook_key=p1-operator-outreach&since_hours=168' in html
     assert 'fake' not in html.lower()
 

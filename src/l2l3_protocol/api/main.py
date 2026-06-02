@@ -71,11 +71,41 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await engine.dispose()
 
 
+def _cors_allow_origins() -> list[str]:
+    raw = get_settings().cors_allow_origins
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    if not origins:
+        raise RuntimeError("L2L3_CORS_ALLOW_ORIGINS must contain at least one explicit origin")
+    if "*" in origins:
+        raise RuntimeError("L2L3_CORS_ALLOW_ORIGINS must not use wildcard origins")
+    return origins
+
+
+def _is_operator_authorized(headers: dict[str, str], api_key: str) -> bool:
+    authorization = headers.get("authorization", "")
+    bearer_prefix = "bearer "
+    bearer = authorization[len(bearer_prefix):].strip() if authorization.lower().startswith(bearer_prefix) else ""
+    header_key = headers.get("x-l2l3-api-key", "").strip()
+    return bool(api_key) and (bearer == api_key or header_key == api_key)
+
+
+async def require_operator_auth(request: Request) -> None:
+    api_key = (app_state.settings.operator_api_key if app_state.settings else get_settings().operator_api_key) or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="L2L3_OPERATOR_API_KEY is required for mutating runtime endpoints")
+    headers = {key.lower(): value for key, value in request.headers.items()}
+    if not _is_operator_authorized(headers, api_key):
+        raise HTTPException(status_code=401, detail="operator API key required")
+
+
+OperatorAuth = Depends(require_operator_auth)
+
+
 app = FastAPI(title="L2-L3 Active Inference Runtime", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_allow_origins(),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -152,7 +182,7 @@ async def list_runs(
 
 
 @app.post("/p1/runs")
-async def create_default_p1_run(background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_default_p1_run(background_tasks: BackgroundTasks, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     run = ProcessRun(
         playbook_key=P1_PLAYBOOK_KEY,
@@ -231,7 +261,7 @@ def make_runtime(store: WorkingMemoryStore) -> ProcessRuntime:
 
 
 @app.post("/runs")
-async def create_run(payload: ProcessRunCreate, background_tasks: BackgroundTasks, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_run(payload: ProcessRunCreate, background_tasks: BackgroundTasks, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     run = ProcessRun(playbook_key=payload.playbook_key, l2_mode=payload.l2_mode, goal=payload.goal, input=payload.model_dump(mode="json"))
     await store.create_run(run)
@@ -279,7 +309,7 @@ async def get_run_summary(run_id: UUID, session: AsyncSession = Depends(get_sess
 
 
 @app.post("/runs/{run_id}/messages")
-async def send_run_message(run_id: UUID, payload: RunMessageCreate, background_tasks: BackgroundTasks) -> dict:
+async def send_run_message(run_id: UUID, payload: RunMessageCreate, background_tasks: BackgroundTasks, _: None = OperatorAuth) -> dict:
     async with app_state.session_factory() as session:
         store = WorkingMemoryStore(session, auto_commit=True)
         run = await store.get_run(run_id)
@@ -292,7 +322,7 @@ async def send_run_message(run_id: UUID, payload: RunMessageCreate, background_t
 
 
 @app.post("/runs/{run_id}/control")
-async def control_run(run_id: UUID, payload: RunControlCreate) -> dict:
+async def control_run(run_id: UUID, payload: RunControlCreate, _: None = OperatorAuth) -> dict:
     async with app_state.session_factory() as session:
         store = WorkingMemoryStore(session, auto_commit=True)
         try:
@@ -336,7 +366,7 @@ async def list_improvement_proposals(
 
 
 @app.post("/improvement-proposals/{proposal_id}/approve")
-async def approve_improvement_proposal(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def approve_improvement_proposal(proposal_id: UUID, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     try:
         proposal = await store.approve_improvement_proposal(proposal_id)
@@ -347,7 +377,7 @@ async def approve_improvement_proposal(proposal_id: UUID, session: AsyncSession 
 
 
 @app.post("/improvement-proposals/{proposal_id}/reject")
-async def reject_improvement_proposal(proposal_id: UUID, payload: dict[str, str], session: AsyncSession = Depends(get_session)) -> dict:
+async def reject_improvement_proposal(proposal_id: UUID, payload: dict[str, str], _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     reason = payload.get("reason")
     if not reason:
         raise HTTPException(status_code=400, detail="reject requires reason")
@@ -361,7 +391,7 @@ async def reject_improvement_proposal(proposal_id: UUID, payload: dict[str, str]
 
 
 @app.post("/improvement-proposals/{proposal_id}/mark-implemented")
-async def mark_improvement_proposal_implemented(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def mark_improvement_proposal_implemented(proposal_id: UUID, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     try:
         proposal = await store.mark_improvement_proposal_implemented(proposal_id)
@@ -374,7 +404,7 @@ async def mark_improvement_proposal_implemented(proposal_id: UUID, session: Asyn
 
 
 @app.post("/improvement-proposals/{proposal_id}/implement")
-async def implement_improvement_proposal(proposal_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def implement_improvement_proposal(proposal_id: UUID, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     proposal = await store.get_improvement_proposal(proposal_id)
     if proposal is None:
@@ -425,6 +455,7 @@ async def implement_improvement_proposal(proposal_id: UUID, session: AsyncSessio
 async def mark_improvement_proposal_proven(
     proposal_id: UUID,
     payload: dict[str, Any] | None = None,
+    _: None = OperatorAuth,
     session: AsyncSession = Depends(get_session),
 ) -> dict:
     store = WorkingMemoryStore(session)
@@ -449,7 +480,7 @@ async def list_failure_learnings(
 
 
 @app.post("/system-reviews/recent")
-async def create_recent_system_review(payload: RecentSystemReviewCreate, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_recent_system_review(payload: RecentSystemReviewCreate, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     store = WorkingMemoryStore(session)
     recent_runs = await store.list_recent_runs(limit=payload.limit, playbook_key=payload.playbook_key, since_hours=payload.since_hours)
     learnings = await store.list_failure_learnings(
@@ -623,22 +654,22 @@ async def sync_hub_registry_from_yaml(session: AsyncSession) -> dict:
 
 
 @app.post("/hub/change-candidates")
-async def create_hub_change_candidate(payload: RegistryChangeCandidateCreate, session: AsyncSession = Depends(get_session)) -> dict:
+async def create_hub_change_candidate(payload: RegistryChangeCandidateCreate, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     return await create_hub_registry_change_candidate(payload, session)
 
 
 @app.post("/hub/change-candidates/{candidate_id}/approve")
-async def approve_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def approve_hub_change_candidate(candidate_id: UUID, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     return await approve_hub_registry_change_candidate(candidate_id, session)
 
 
 @app.post("/hub/change-candidates/{candidate_id}/reject")
-async def reject_hub_change_candidate(candidate_id: UUID, session: AsyncSession = Depends(get_session)) -> dict:
+async def reject_hub_change_candidate(candidate_id: UUID, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     return await reject_hub_registry_change_candidate(candidate_id, session)
 
 
 @app.post("/hub/sync/yaml")
-async def sync_hub_from_yaml(session: AsyncSession = Depends(get_session)) -> dict:
+async def sync_hub_from_yaml(_: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
     return await sync_hub_registry_from_yaml(session)
 
 

@@ -132,6 +132,13 @@ def operator_dashboard_html() -> str:
       background: var(--panel);
       resize: vertical;
     }
+    input {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: var(--panel);
+      min-width: 220px;
+    }
     @media (max-width: 860px) {
       main { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -147,6 +154,7 @@ def operator_dashboard_html() -> str:
       <div class="muted">Real P1 runs, evidence, approvals, drafts, and learning state.</div>
     </div>
     <div class="toolbar">
+      <input id="apiKey" type="password" placeholder="Operator API key">
       <button class="primary" id="start">Start P1</button>
       <button id="refresh">Refresh</button>
     </div>
@@ -186,7 +194,9 @@ def operator_dashboard_html() -> str:
     const metricKeys = ["raw_leads","normalized_leads","rejected_leads","triage_qualified","dossiers","gateway_approved","gateway_rejected","drafted","eval_passed","sheet_written","data_lake_written","outreach_master_written","provider_cache_hits"];
 
     async function api(path, options = {}) {
-      const response = await fetch(path, { headers: { "content-type": "application/json" }, ...options });
+      const apiKey = localStorage.getItem("l2l3OperatorApiKey") || "";
+      const headers = { "content-type": "application/json", ...(apiKey ? { "authorization": `Bearer ${apiKey}` } : {}) };
+      const response = await fetch(path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
       if (!response.ok) throw new Error(`${options.method || "GET"} ${path} ${response.status}`);
       return response.json();
     }
@@ -277,6 +287,10 @@ def operator_dashboard_html() -> str:
       await selectRun(created.id);
     });
     document.getElementById("refresh").addEventListener("click", loadRuns);
+    document.getElementById("apiKey").value = localStorage.getItem("l2l3OperatorApiKey") || "";
+    document.getElementById("apiKey").addEventListener("change", event => {
+      localStorage.setItem("l2l3OperatorApiKey", event.target.value.trim());
+    });
     document.getElementById("approve").addEventListener("click", async () => {
       if (!state.selectedRunId) return;
       await api(`/runs/${state.selectedRunId}/control`, { method: "POST", body: JSON.stringify({ action: "approve", payload: {} }) });

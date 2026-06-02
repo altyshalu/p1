@@ -304,6 +304,8 @@ def main() -> int:
                     args.base_url,
                     '--inputs-json',
                     args.cache_inputs_json,
+                    '--env-file',
+                    args.env_file,
                     '--timeout-seconds',
                     str(args.timeout_seconds),
                 ]
@@ -321,6 +323,8 @@ def main() -> int:
                     args.base_url,
                     '--inputs-json',
                     args.idempotency_inputs_json,
+                    '--env-file',
+                    args.env_file,
                     '--timeout-seconds',
                     str(args.timeout_seconds),
                 ]

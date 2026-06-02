@@ -15,6 +15,7 @@ class TelegramConfig:
     token: str
     allowed_chat_ids: set[int]
     api_base_url: str = "http://127.0.0.1:8000"
+    operator_api_key: str | None = None
     poll_timeout_seconds: int = 30
 
 
@@ -32,6 +33,7 @@ def load_config_from_env() -> TelegramConfig:
         token=token,
         allowed_chat_ids=allowed,
         api_base_url=os.environ.get("L2L3_API_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
+        operator_api_key=os.environ.get("L2L3_OPERATOR_API_KEY"),
     )
 
 
@@ -56,9 +58,10 @@ def is_allowed_chat(chat_id: int, allowed_chat_ids: set[int]) -> bool:
 
 
 class L2L3ApiClient:
-    def __init__(self, base_url: str, client: httpx.Client | None = None) -> None:
+    def __init__(self, base_url: str, client: httpx.Client | None = None, operator_api_key: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.client = client or httpx.Client(timeout=120)
+        self.operator_api_key = operator_api_key
 
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health")
@@ -97,7 +100,8 @@ class L2L3ApiClient:
         return self._request("POST", f"/runs/{run_id}/messages", json={"message": message})
 
     def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> Any:
-        response = self.client.request(method, f"{self.base_url}{path}", json=json)
+        headers = {"authorization": f"Bearer {self.operator_api_key}"} if self.operator_api_key else None
+        response = self.client.request(method, f"{self.base_url}{path}", json=json, headers=headers)
         if response.status_code >= 400:
             raise TelegramControlError(f"{method} {path} failed: HTTP {response.status_code} {response.text[:500]}")
         return response.json()
@@ -145,7 +149,7 @@ def _telegram_chunks(text: str, limit: int = 3900) -> list[str]:
 class TelegramControlBot:
     def __init__(self, config: TelegramConfig, api: L2L3ApiClient | None = None, telegram: TelegramApiClient | None = None) -> None:
         self.config = config
-        self.api = api or L2L3ApiClient(config.api_base_url)
+        self.api = api or L2L3ApiClient(config.api_base_url, operator_api_key=config.operator_api_key)
         self.telegram = telegram or TelegramApiClient(config.token)
 
     def run_forever(self) -> None:

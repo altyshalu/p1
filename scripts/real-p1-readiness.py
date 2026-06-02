@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,10 @@ def load_env_map(path: str) -> dict[str, str]:
         if not stripped or stripped.startswith('#') or '=' not in stripped:
             continue
         key, value = stripped.split('=', 1)
-        values[key.strip()] = value.strip()
+        clean_key = key.strip()
+        clean_value = value.strip().strip('"').strip("'")
+        values[clean_key] = clean_value
+        os.environ[clean_key] = clean_value
     return values
 
 
@@ -160,10 +164,10 @@ def readiness_report(
     *,
     explicit_inputs_supplied: bool = False,
 ) -> dict[str, object]:
+    env_map = load_env_map(env_file)
     health = require_health(base_url)
     capabilities = require_capabilities(base_url)
     hub = require_hub_seed(base_url, sync_yaml)
-    env_map = load_env_map(env_file)
 
     required_keys = _required_keys_for_inputs(mode, inputs)
     for flag, keys in OPTIONAL_WRITE_KEYS.items():

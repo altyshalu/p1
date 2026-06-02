@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,13 +14,29 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from p1_real_common import assert_status, create_run, get_summary, load_inputs, require_capabilities, require_health, wait_for_run
 
 
+def load_env_file(path_value: str | None) -> None:
+    if not path_value:
+        return
+    path = Path(path_value)
+    if not path.exists():
+        raise SystemExit(f'env file does not exist: {path}')
+    for raw_line in path.read_text(encoding='utf-8').splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+        key, value = line.split('=', 1)
+        os.environ[key.strip()] = value.strip().strip('"').strip("'")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description='Run two real comparable P1 source-only runs and verify cache/source-batch reuse signals.')
     parser.add_argument('--base-url', default='http://127.0.0.1:8000')
     parser.add_argument('--inputs-json', required=True)
+    parser.add_argument('--env-file')
     parser.add_argument('--timeout-seconds', type=int, default=1200)
     args = parser.parse_args()
 
+    load_env_file(args.env_file)
     inputs = load_inputs(args.inputs_json)
     require_health(args.base_url)
     require_capabilities(args.base_url)
