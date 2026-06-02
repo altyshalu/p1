@@ -317,6 +317,29 @@ def test_p1_idempotency_proof_rejects_missing_duplicate_skip_evidence(monkeypatc
         raise AssertionError('expected SystemExit')
 
 
+def test_p1_idempotency_proof_accepts_existing_completed_run(monkeypatch) -> None:
+    module = _load_module('real-p1-idempotency-proof.py', 'real_p1_idempotency_proof')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'request_json', lambda _url: {'status': 'completed'})
+    monkeypatch.setattr(module, 'approve_run', lambda _base_url, _run_id: {'status': 'completed'})
+    monkeypatch.setattr(module, 'wait_for_run', lambda _base_url, _run_id, _timeout: {'status': 'completed', 'events': []})
+    monkeypatch.setattr(
+        module,
+        'get_summary',
+        lambda _base_url, _run_id: {'latest_metrics': {'sheet_written': 3, 'outreach_master_written': 3, 'data_lake_written': 5}},
+    )
+    monkeypatch.setattr(module, 'find_duplicate_events', lambda _run: {'p1_external_sync_duplicate_skipped': 0})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-idempotency-proof.py', '--run-id', 'run-1'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert 'stable_noop' in stdout.getvalue()
+
+
 def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
     env_path = tmp_path / 'test.env'
