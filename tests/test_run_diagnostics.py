@@ -253,6 +253,96 @@ def test_missing_env_proposal_uses_env_evidence_in_mixed_runtime_failures() -> N
     assert proposals[0].failure_signature == "missing_runtime_dependency:p1-source-collector:exa_api_key"
 
 
+def test_apify_billing_error_is_provider_failure_not_worker_crash() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "p1-source-collector", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "p1-source-collector",
+                    "failure_type": "worker_exception",
+                    "error": '{"error_type":"P1WorkerInputError","message":"real HTTP request failed POST https://api.apify.com/v2/acts/nexgendata~startup-funding-tracker/runs?token=[REDACTED]&maxItems=10: 402: {\\"error\\":{\\"type\\":\\"not-enough-usage-to-run-paid-actor\\",\\"message\\":\\"remaining usage\\"}}"}',
+                    "structured_error": {
+                        "error_type": "P1WorkerInputError",
+                        "message": 'real HTTP request failed POST https://api.apify.com/v2/acts/nexgendata~startup-funding-tracker/runs?token=[REDACTED]&maxItems=10: 402: {"error":{"type":"not-enough-usage-to-run-paid-actor","message":"remaining usage"}}',
+                    },
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "tool_or_provider_failure"
+    assert proposals[0].proposal_type == "improve_tool"
+    assert proposals[0].target_component == "p1-source-collector/provider:apify"
+    assert proposals[0].failure_signature == "worker_exception:p1-source-collector"
+
+
+def test_apify_provider_detection_uses_host_before_substrings() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "p1-source-collector", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "p1-source-collector",
+                    "failure_type": "worker_exception",
+                    "structured_error": {
+                        "error_type": "P1WorkerInputError",
+                        "message": 'real HTTP request failed POST https://api.apify.com/v2/acts/example~actor/runs?token=[REDACTED]&maxItems=1: 402: {"error":{"type":"not-enough-usage-to-run-paid-actor"}}',
+                    },
+                },
+            }
+        ],
+    }
+
+    _, proposals = analyze_run(run)
+
+    assert proposals[0].target_component == "p1-source-collector/provider:apify"
+
+
+def test_generic_worker_http_error_is_not_provider_failure_without_provider_marker() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "custom-worker", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "custom-worker",
+                    "failure_type": "worker_exception",
+                    "error": "real HTTP request failed POST http://internal-service.local/jobs: 500",
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert diagnosis.payload["root_cause"] == "worker_execution_failed"
+    assert proposals[0].proposal_type == "fix_code"
+    assert proposals[0].target_component == "custom-worker"
+
+
 def test_repaired_eval_failure_does_not_create_terminal_quality_proposal() -> None:
     run = {
         "id": str(uuid4()),
