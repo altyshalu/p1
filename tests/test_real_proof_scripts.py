@@ -234,12 +234,22 @@ def test_p1_quality_audit_surfaces_evidence_and_outreach_review_signals() -> Non
     audit = module.build_quality_audit(run, summary)
 
     assert audit['risk_summary']['state'] == 'needs review'
-    assert 'weak_evidence' in {item['code'] for item in audit['findings']}
+    finding_codes = {item['code'] for item in audit['findings']}
+    assert {'missing_evidence_urls', 'thin_source_diversity', 'missing_identity_linkedin'} <= finding_codes
     assert 'weak_outreach_draft' in {item['code'] for item in audit['findings']}
     assert audit['risk_summary']['recommended_human_review_focus'] == ['lead-1']
+    assert audit['risk_summary']['recommended_improvement_count'] == 3
+    improvement_types = {item['proposal_type'] for item in audit['recommended_improvements']}
+    assert improvement_types == {'improve_eval', 'improve_worker'}
+    targets = {item['target_component'] for item in audit['recommended_improvements']}
+    assert 'p1-gateway-evaluator/p1-quality-audit' in targets
+    assert 'p1-lead-normalizer/p1-live-intel-gatherer' in targets
+    assert 'p1-outreach-draft-writer/p1-outreach-quality-judge' in targets
     markdown = module.render_markdown(audit)
     assert '| Severity | Code | Message | Leads |' in markdown
     assert '`weak_outreach_draft`' in markdown
+    assert '## Recommended Improvements' in markdown
+    assert 'p1-outreach-draft-writer/p1-outreach-quality-judge' in markdown
     assert 'Arianna Simpson (`lead-1`)' in markdown
 
 
@@ -290,7 +300,7 @@ def test_p1_quality_audit_uses_gateway_and_dossier_evidence_urls() -> None:
                             'lead_id': 'lead-2',
                             'name': 'Duncan Greenberg',
                             'linkedin_url': 'https://linkedin.com/in/duncan-greenberg-89004849',
-                            'text': 'Duncan, ABRT/Limpid is mapping product-led operator angels with real evidence from your product and angel work. Would a quick 15-minute conversation next week make sense?',
+                            'text': 'Duncan, ABRT/Limpid is mapping product-led operator angels with real evidence from your product and angel work. Your mix of product operating context and angel investing signal is exactly the pattern we are studying. Would a quick 15-minute conversation next week make sense?',
                             'evidence_urls': ['https://linkedin.com/in/duncan-greenberg-89004849', 'https://angel.co/u/duncan-greenberg'],
                             'claims': [{'text': 'Duncan has product and angel evidence.', 'source_url': 'https://angel.co/u/duncan-greenberg'}],
                         }
@@ -329,7 +339,8 @@ def test_p1_quality_audit_uses_gateway_and_dossier_evidence_urls() -> None:
 
     assert audit['evidence_records'][0]['evidence_url_count'] == 2
     assert audit['evidence_records'][0]['source_domain_count'] == 2
-    assert 'weak_evidence' not in {item['code'] for item in audit['findings']}
+    assert not {'missing_evidence_urls', 'thin_source_diversity', 'missing_identity_linkedin'} & {item['code'] for item in audit['findings']}
+    assert audit['recommended_improvements'] == []
 
 
 def test_p1_quality_audit_canonicalizes_source_domain_aliases() -> None:
@@ -389,7 +400,274 @@ def test_p1_quality_audit_canonicalizes_source_domain_aliases() -> None:
     assert audit['evidence_records'][0]['evidence_url_count'] == 2
     assert audit['evidence_records'][0]['source_domain_count'] == 1
     assert audit['evidence_records'][0]['source_domains'] == ['linkedin.com']
-    assert 'weak_evidence' in {item['code'] for item in audit['findings']}
+    assert 'thin_source_diversity' in {item['code'] for item in audit['findings']}
+
+
+def test_p1_quality_audit_routes_missing_linkedin_to_identity_improvement() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-5',
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Missing LinkedIn'}]}},
+            {'artifact_type': 'p1_normalized_leads', 'payload': {'normalized_leads': [{'lead_id': 'lead-4', 'name': 'Missing LinkedIn', 'linkedin_url': ''}], 'rejected_leads': []}},
+            {'artifact_type': 'p1_triage_scores', 'payload': {'triage_scores': [{'lead_id': 'lead-4', 'name': 'Missing LinkedIn', 'triage': {'qualified': True, 'evidence_urls': ['https://angel.co/u/missing-linkedin', 'https://crunchbase.com/person/missing-linkedin']}}]}},
+            {
+                'artifact_type': 'p1_dossiers',
+                'payload': {
+                    'p1_dossiers': [
+                        {
+                            'identity': {'lead_id': 'lead-4', 'name': 'Missing LinkedIn', 'linkedin_url': ''},
+                            'historical_context': {'p1_evidence_urls': ['https://angel.co/u/missing-linkedin', 'https://crunchbase.com/person/missing-linkedin']},
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {
+                                'identity': {'lead_id': 'lead-4', 'name': 'Missing LinkedIn', 'linkedin_url': ''},
+                                'historical_context': {'p1_evidence_urls': ['https://angel.co/u/missing-linkedin', 'https://crunchbase.com/person/missing-linkedin']},
+                            },
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'evidence_urls': ['https://angel.co/u/missing-linkedin', 'https://crunchbase.com/person/missing-linkedin'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'lead_id': 'lead-4',
+                            'name': 'Missing LinkedIn',
+                            'linkedin_url': '',
+                            'text': 'Missing, ABRT/Limpid is mapping product-led operator angels with grounded evidence from your operating and angel investing work. Your public angel and product context fits the specific Limpid ICP we are studying. Would a quick 15-minute conversation next week make sense?',
+                            'evidence_urls': ['https://angel.co/u/missing-linkedin', 'https://crunchbase.com/person/missing-linkedin'],
+                            'claims': [{'text': 'Missing LinkedIn has operator and angel evidence.', 'source_url': 'https://angel.co/u/missing-linkedin'}],
+                        }
+                    ]
+                },
+            },
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': True, 'score': 1}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 1, 'normalized_leads': 1, 'triage_qualified': 1, 'dossiers': 1, 'gateway_approved': 1, 'drafted': 1},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    finding_codes = {item['code'] for item in audit['findings']}
+    assert 'missing_identity_linkedin' in finding_codes
+    assert 'missing_linkedin_url' in finding_codes
+    assert 'missing_evidence_urls' not in finding_codes
+    assert 'thin_source_diversity' not in finding_codes
+    improvements = audit['recommended_improvements']
+    assert len(improvements) == 1
+    assert improvements[0]['finding_code'] == 'missing_linkedin_identity'
+    assert improvements[0]['proposal_type'] == 'improve_worker'
+    assert improvements[0]['target_component'] == 'p1-lead-normalizer/p1-live-intel-gatherer'
+    assert {item['finding_code'] for item in improvements[0]['evidence']} == {'missing_identity_linkedin', 'missing_linkedin_url'}
+
+
+def test_p1_quality_audit_keeps_non_approved_missing_linkedin_separate() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-6',
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Rejected Missing LinkedIn'}]}},
+            {'artifact_type': 'p1_normalized_leads', 'payload': {'normalized_leads': [{'lead_id': 'lead-5', 'name': 'Rejected Missing LinkedIn', 'linkedin_url': ''}], 'rejected_leads': []}},
+            {'artifact_type': 'p1_triage_scores', 'payload': {'triage_scores': [{'lead_id': 'lead-5', 'name': 'Rejected Missing LinkedIn', 'triage': {'qualified': True, 'evidence_urls': ['https://angel.co/u/rejected']}}]}},
+            {'artifact_type': 'p1_dossiers', 'payload': {'p1_dossiers': [{'identity': {'lead_id': 'lead-5', 'name': 'Rejected Missing LinkedIn', 'linkedin_url': ''}, 'historical_context': {'p1_evidence_urls': ['https://angel.co/u/rejected']}}]}},
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'lead_id': 'lead-5', 'name': 'Rejected Missing LinkedIn', 'linkedin_url': ''}},
+                            'gateway': {'decision': 'rejected', 'evidence_urls': ['https://angel.co/u/rejected'], 'reasons': ['bandwidth_not_high:LOW']},
+                        }
+                    ]
+                },
+            },
+            {'artifact_type': 'p1_outreach_drafts', 'payload': {'outreach_drafts': []}},
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': True, 'score': 1}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 1, 'normalized_leads': 1, 'triage_qualified': 1, 'dossiers': 1, 'gateway_approved': 0, 'drafted': 0},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    finding_codes = {item['code'] for item in audit['findings']}
+    assert finding_codes == {'missing_linkedin_url'}
+    improvements = audit['recommended_improvements']
+    assert len(improvements) == 1
+    assert improvements[0]['finding_code'] == 'missing_linkedin_url'
+    assert improvements[0]['proposal_type'] == 'improve_observability'
+    assert improvements[0]['target_component'] == 'p1-dossier-draft-identity-contract'
+    assert 'gateway-approved' not in improvements[0]['problem']
+    assert 'gateway-approved' not in improvements[0]['proposed_change']
+
+
+def test_p1_quality_audit_splits_mixed_linkedin_gaps_by_lead_context() -> None:
+    module = _load_module('real-p1-quality-audit.py', 'real_p1_quality_audit')
+    run = {
+        'id': 'run-7',
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'artifacts': [
+            {'artifact_type': 'p1_lead_candidates', 'payload': {'lead_candidates': [{'name': 'Approved Missing'}, {'name': 'Rejected Missing'}]}},
+            {
+                'artifact_type': 'p1_normalized_leads',
+                'payload': {
+                    'normalized_leads': [
+                        {'lead_id': 'lead-approved', 'name': 'Approved Missing', 'linkedin_url': ''},
+                        {'lead_id': 'lead-rejected', 'name': 'Rejected Missing', 'linkedin_url': ''},
+                    ],
+                    'rejected_leads': [],
+                },
+            },
+            {
+                'artifact_type': 'p1_triage_scores',
+                'payload': {
+                    'triage_scores': [
+                        {'lead_id': 'lead-approved', 'name': 'Approved Missing', 'triage': {'qualified': True, 'evidence_urls': ['https://angel.co/u/approved', 'https://crunchbase.com/person/approved']}},
+                        {'lead_id': 'lead-rejected', 'name': 'Rejected Missing', 'triage': {'qualified': True, 'evidence_urls': ['https://angel.co/u/rejected']}},
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_dossiers',
+                'payload': {
+                    'p1_dossiers': [
+                        {'identity': {'lead_id': 'lead-approved', 'name': 'Approved Missing', 'linkedin_url': ''}, 'historical_context': {'p1_evidence_urls': ['https://angel.co/u/approved', 'https://crunchbase.com/person/approved']}},
+                        {'identity': {'lead_id': 'lead-rejected', 'name': 'Rejected Missing', 'linkedin_url': ''}, 'historical_context': {'p1_evidence_urls': ['https://angel.co/u/rejected']}},
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'lead_id': 'lead-approved', 'name': 'Approved Missing', 'linkedin_url': ''}, 'historical_context': {'p1_evidence_urls': ['https://angel.co/u/approved', 'https://crunchbase.com/person/approved']}},
+                            'gateway': {'decision': 'awaiting_outreach', 'evidence_urls': ['https://angel.co/u/approved', 'https://crunchbase.com/person/approved']},
+                        },
+                        {
+                            'dossier': {'identity': {'lead_id': 'lead-rejected', 'name': 'Rejected Missing', 'linkedin_url': ''}, 'historical_context': {'p1_evidence_urls': ['https://angel.co/u/rejected']}},
+                            'gateway': {'decision': 'rejected', 'evidence_urls': ['https://angel.co/u/rejected'], 'reasons': ['bandwidth_not_high:LOW']},
+                        },
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'lead_id': 'lead-approved',
+                            'name': 'Approved Missing',
+                            'linkedin_url': '',
+                            'text': 'Approved, ABRT/Limpid is mapping product-led operator angels with grounded evidence from your operating and angel investing work. Your public angel and product context fits the specific Limpid ICP we are studying. Would a quick 15-minute conversation next week make sense?',
+                            'evidence_urls': ['https://angel.co/u/approved', 'https://crunchbase.com/person/approved'],
+                            'claims': [{'text': 'Approved Missing has operator and angel evidence.', 'source_url': 'https://angel.co/u/approved'}],
+                        }
+                    ]
+                },
+            },
+            {'artifact_type': 'p1_outreach_approval_package', 'payload': {'passed': True, 'score': 1}},
+            {'artifact_type': 'p1_external_action_preview', 'payload': {'approval_required': True}},
+        ],
+        'evals': [],
+        'events': [],
+        'tasks': [],
+    }
+    summary = {
+        'status': 'completed',
+        'playbook_key': 'p1-operator-outreach',
+        'goal': 'audit',
+        'latest_metrics': {'raw_leads': 2, 'normalized_leads': 2, 'triage_qualified': 2, 'dossiers': 2, 'gateway_approved': 1, 'drafted': 1},
+        'artifact_counts': {
+            'p1_lead_candidates': 1,
+            'p1_normalized_leads': 1,
+            'p1_triage_scores': 1,
+            'p1_dossiers': 1,
+            'p1_gateway_evaluations': 1,
+            'p1_outreach_drafts': 1,
+            'p1_outreach_approval_package': 1,
+            'p1_external_action_preview': 1,
+        },
+        'task_status_counts': {'completed': 8},
+        'latest_eval_results': {},
+        'external_sync_status': {},
+        'pending_actions': [],
+    }
+
+    audit = module.build_quality_audit(run, summary)
+
+    improvements_by_code = {item['finding_code']: item for item in audit['recommended_improvements']}
+    assert set(improvements_by_code) == {'missing_linkedin_identity', 'missing_linkedin_url'}
+    assert improvements_by_code['missing_linkedin_identity']['affected_lead_ids'] == ['lead-approved']
+    assert improvements_by_code['missing_linkedin_url']['affected_lead_ids'] == ['lead-rejected']
+    assert improvements_by_code['missing_linkedin_identity']['target_component'] == 'p1-lead-normalizer/p1-live-intel-gatherer'
+    assert improvements_by_code['missing_linkedin_url']['target_component'] == 'p1-dossier-draft-identity-contract'
 
 
 def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monkeypatch) -> None:

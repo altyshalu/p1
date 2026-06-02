@@ -255,15 +255,12 @@ def evidence_findings(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], li
             "linkedin_url": linkedin_url(dossier),
         }
         records.append(record)
-        lead_findings: list[str] = []
         if not urls:
-            lead_findings.append("missing_evidence_urls")
+            findings.append({"severity": "review", "code": "missing_evidence_urls", "message": "Gateway-approved lead has no evidence URLs.", "lead_ids": [record["lead_id"]]})
         if len(domains) < 2:
-            lead_findings.append("thin_source_diversity")
+            findings.append({"severity": "review", "code": "thin_source_diversity", "message": "Gateway-approved lead has fewer than two canonical evidence domains.", "lead_ids": [record["lead_id"]]})
         if not record["linkedin_url"]:
-            lead_findings.append("missing_identity_linkedin")
-        if lead_findings:
-            findings.append({"severity": "review", "code": "weak_evidence", "message": ", ".join(lead_findings), "lead_ids": [record["lead_id"]]})
+            findings.append({"severity": "review", "code": "missing_identity_linkedin", "message": "Gateway-approved lead is missing a verified LinkedIn identity URL.", "lead_ids": [record["lead_id"]]})
     return records, findings
 
 
@@ -333,6 +330,129 @@ def classify_risk(run: dict[str, Any], findings: list[dict[str, Any]], counts: d
     return "looks healthy"
 
 
+def improvement_group_code(code: str) -> str:
+    if code in {"missing_evidence_urls", "thin_source_diversity"}:
+        return "weak_evidence_depth"
+    if code == "missing_identity_linkedin":
+        return "missing_linkedin_identity"
+    return code
+
+
+def improvement_candidates(findings: list[dict[str, Any]], run_id: str) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    approved_missing_linkedin_ids = {
+        lead
+        for finding in findings
+        if finding.get("code") == "missing_identity_linkedin"
+        for lead in finding.get("lead_ids", [])
+        if lead
+    }
+    for finding in findings:
+        code = clean_string(finding.get("code"))
+        if not code:
+            continue
+        if code == "missing_linkedin_url" and approved_missing_linkedin_ids:
+            lead_ids = [lead for lead in finding.get("lead_ids", []) if lead]
+            approved_lead_ids = [lead for lead in lead_ids if lead in approved_missing_linkedin_ids]
+            other_lead_ids = [lead for lead in lead_ids if lead not in approved_missing_linkedin_ids]
+            if approved_lead_ids:
+                grouped.setdefault("missing_linkedin_identity", []).append({**finding, "lead_ids": approved_lead_ids})
+            if other_lead_ids:
+                grouped.setdefault("missing_linkedin_url", []).append({**finding, "lead_ids": other_lead_ids})
+            continue
+        grouped.setdefault(improvement_group_code(code), []).append(finding)
+    candidates: list[dict[str, Any]] = []
+    for code, items in sorted(grouped.items()):
+        lead_ids = sorted({lead for item in items for lead in item.get("lead_ids", []) if lead})
+        evidence = [{"run_id": run_id, "finding_code": item.get("code"), "message": item.get("message"), "lead_ids": item.get("lead_ids", [])} for item in items]
+        candidates.append(_improvement_candidate_for_finding(code, items, lead_ids, evidence))
+    return candidates
+
+
+def _improvement_candidate_for_finding(
+    code: str,
+    findings: list[dict[str, Any]],
+    lead_ids: list[str],
+    evidence: list[dict[str, Any]],
+) -> dict[str, Any]:
+    affected = len(lead_ids)
+    common = {
+        "finding_code": code,
+        "affected_lead_ids": first_n(lead_ids, 25),
+        "evidence": evidence,
+        "behavior_change_requires_approval": True,
+    }
+    if code == "weak_evidence_depth":
+        return {
+            **common,
+            "proposal_type": "improve_eval",
+            "target_component": "p1-gateway-evaluator/p1-quality-audit",
+            "problem": f"Audit found weak evidence depth for {affected or len(findings)} approved P1 lead(s).",
+            "proposed_change": "Require gateway-approved leads to carry at least two canonical evidence domains or explicitly mark the lead as needing more evidence before outreach drafting.",
+            "risk": "A stricter evidence gate may reduce approved lead volume, but it prevents send-ready drafts from being built on thin evidence.",
+            "success_check": "Run a real P1 audit on a comparable run and verify missing_evidence_urls and thin_source_diversity are absent while gateway-approved leads still have send-ready drafts.",
+        }
+    if code == "missing_linkedin_identity":
+        return {
+            **common,
+            "proposal_type": "improve_worker",
+            "target_component": "p1-lead-normalizer/p1-live-intel-gatherer",
+            "problem": f"Audit found missing LinkedIn identity for {affected or len(findings)} P1 lead(s).",
+            "proposed_change": "Tighten identity enrichment and repair so gateway-approved leads must carry an evidence-backed person LinkedIn URL or be marked as needing more evidence before outreach drafting.",
+            "risk": "Stricter identity requirements may reduce approved lead volume, but they prevent outreach drafts for unverified people.",
+            "success_check": "Run a real P1 audit on a comparable run and verify missing_identity_linkedin and missing_linkedin_url are absent and every approved draft has a working person LinkedIn URL.",
+        }
+    if code == "missing_linkedin_url":
+        return {
+            **common,
+            "proposal_type": "improve_observability",
+            "target_component": "p1-dossier-draft-identity-contract",
+            "problem": f"Audit found dossier or draft records missing LinkedIn URLs for {affected or len(findings)} P1 lead(s).",
+            "proposed_change": "Make dossier and draft identity completeness explicit: either carry a LinkedIn URL, or record why LinkedIn is unavailable before the lead reaches approval-ready status.",
+            "risk": "This may add more review findings for incomplete leads, but it avoids confusing generic record completeness with approved-lead identity failures.",
+            "success_check": "Run a real P1 audit on a comparable run and verify missing_linkedin_url is absent or explicitly accepted before approval-ready drafting.",
+        }
+    if code == "weak_outreach_draft":
+        return {
+            **common,
+            "proposal_type": "improve_worker",
+            "target_component": "p1-outreach-draft-writer/p1-outreach-quality-judge",
+            "problem": f"Audit found weak outreach draft signals for {affected or len(findings)} P1 lead(s).",
+            "proposed_change": "Tighten the outreach writer and judge so every draft has recipient-specific wording, grounded claims, ABRT/Limpid relevance, and one clear CTA.",
+            "risk": "Stricter draft quality checks may block more runs at approval time, but they prevent low-quality outbound drafts.",
+            "success_check": "Run a real P1 audit on a comparable run and verify weak_outreach_draft is absent and outreach quality eval still passes.",
+        }
+    if code.startswith("missing_artifact"):
+        return {
+            **common,
+            "proposal_type": "improve_observability",
+            "target_component": "p1-runtime-artifact-contract",
+            "problem": f"Audit found missing required P1 artifact(s): {code}.",
+            "proposed_change": "Make the P1 runtime fail explicitly or emit a clear diagnostic when a required audit artifact is missing after its upstream stage runs.",
+            "risk": "This may surface more failed runs instead of allowing partial reports, but it makes proof-pack readiness trustworthy.",
+            "success_check": "Run the real P1 audit on a comparable run and verify required artifacts are present or the run fails with a precise diagnosis.",
+        }
+    if code.startswith("zero_"):
+        return {
+            **common,
+            "proposal_type": "fix_code",
+            "target_component": "p1-runtime-stage-contract",
+            "problem": f"Audit found a funnel stage collapse: {code}.",
+            "proposed_change": "Inspect the upstream/downstream stage contract and add a real regression proof for this zero-output-after-input case.",
+            "risk": "Fixing the stage contract may change worker inputs or stricter failure behavior, so it requires approval and before/after proof.",
+            "success_check": "Run a comparable real P1 pipeline and verify the same stage no longer collapses after nonzero input.",
+        }
+    return {
+        **common,
+        "proposal_type": "improve_process",
+        "target_component": "p1-quality-audit",
+        "problem": f"Audit found repeated quality signal `{code}` for {affected or len(findings)} P1 lead(s).",
+        "proposed_change": "Review the flagged leads and decide whether this should become a stricter runtime gate, worker instruction change, or eval improvement.",
+        "risk": "Changing the process without human review could overfit one run, so this candidate is advisory until approved.",
+        "success_check": "Run a real P1 audit on a comparable run and verify this finding is absent or explicitly accepted by the operator.",
+    }
+
+
 def build_quality_audit(run: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
     if run.get("playbook_key") != P1_PLAYBOOK_KEY:
         raise SystemExit(f"run {run.get('id')} is not a P1 operator outreach run: playbook_key={run.get('playbook_key')}")
@@ -346,6 +466,7 @@ def build_quality_audit(run: dict[str, Any], summary: dict[str, Any]) -> dict[st
     findings = funnel + evidence + outreach
     top_risks = [item["message"] for item in findings[:8]]
     review_focus = sorted({lead_id for item in findings for lead_id in item.get("lead_ids", []) if lead_id})
+    candidates = improvement_candidates(findings, str(run.get("id") or "unknown"))
     return {
         "audit_version": "2026-06-01.p1-quality-audit-pack.v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -369,11 +490,13 @@ def build_quality_audit(run: dict[str, Any], summary: dict[str, Any]) -> dict[st
         "evidence_records": evidence_records,
         "outreach_records": outreach_records,
         "findings": findings,
+        "recommended_improvements": candidates,
         "risk_summary": {
             "state": classify_risk(run, findings, counts),
             "top_risks": top_risks,
             "affected_leads": first_n(review_focus, 25),
             "recommended_human_review_focus": first_n(review_focus, 25),
+            "recommended_improvement_count": len(candidates),
         },
     }
 
@@ -437,6 +560,16 @@ def render_markdown(audit: dict[str, Any]) -> str:
             lines.append(f"| {item['name']} (`{item['lead_id']}`) | {item['word_count']} | {item['evidence_url_count']} | {item['unsupported_claim_count']} | {', '.join(item['flags']) or 'none'} |")
     else:
         lines.append("No outreach drafts were available for inspection.")
+    lines.extend(["", "## Recommended Improvements", ""])
+    improvements = audit.get("recommended_improvements", []) if isinstance(audit.get("recommended_improvements"), list) else []
+    if improvements:
+        lines.extend(["| Type | Target | Problem | Success Check |", "| --- | --- | --- | --- |"])
+        for item in improvements:
+            lines.append(
+                f"| `{item.get('proposal_type')}` | `{item.get('target_component')}` | {item.get('problem')} | {item.get('success_check')} |"
+            )
+    else:
+        lines.append("No improvement candidates were generated.")
     lines.extend(["", "## Human Review Focus", ""])
     if risk["recommended_human_review_focus"]:
         for lead in risk["recommended_human_review_focus"]:
