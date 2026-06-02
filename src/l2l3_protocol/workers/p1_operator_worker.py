@@ -1413,7 +1413,8 @@ def _normalize_outreach_text(text: str) -> str:
 
 
 def _remove_placeholder_signoff(text: str) -> str:
-    lines = text.rstrip().splitlines()
+    stripped = re.sub(r"(\s+|\n+)(best|thanks|regards),\s*$", "", text.rstrip(), flags=re.IGNORECASE)
+    lines = stripped.rstrip().splitlines()
     while lines and lines[-1].strip().lower() in {"best,", "thanks,", "regards,"}:
         lines.pop()
     return "\n".join(lines).rstrip()
