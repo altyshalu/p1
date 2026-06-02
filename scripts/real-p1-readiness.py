@@ -15,8 +15,8 @@ from p1_real_common import request_json, require_capabilities, require_health
 
 REQUIRED_KEYS_BY_MODE = {
     'existing_dossiers': ['GEMINI_API_KEY', 'EXA_API_KEY'],
-    'source_only': ['GEMINI_API_KEY', 'APIFY_API_TOKEN'],
-    'full_pipeline': ['GEMINI_API_KEY', 'APIFY_API_TOKEN'],
+    'source_only': ['GEMINI_API_KEY'],
+    'full_pipeline': ['GEMINI_API_KEY', 'EXA_API_KEY'],
 }
 OPTIONAL_WRITE_KEYS = {
     'allow_google_sheet_write': ['GOOGLE_SA_PATH', 'P1_GOOGLE_SHEET_ID'],
@@ -165,7 +165,7 @@ def readiness_report(
     hub = require_hub_seed(base_url, sync_yaml)
     env_map = load_env_map(env_file)
 
-    required_keys = list(REQUIRED_KEYS_BY_MODE[mode])
+    required_keys = _required_keys_for_inputs(mode, inputs)
     for flag, keys in OPTIONAL_WRITE_KEYS.items():
         if bool(inputs.get(flag)):
             required_keys.extend(keys)
@@ -190,6 +190,22 @@ def readiness_report(
         'path_checks': path_checks,
         'ready': not missing_required_keys and not missing_runtime_inputs and all(path_checks.values() or [True]),
     }
+
+
+def _required_keys_for_inputs(mode: str, inputs: dict[str, object]) -> list[str]:
+    required_keys = list(REQUIRED_KEYS_BY_MODE[mode])
+    if mode not in {'source_only', 'full_pipeline'}:
+        return required_keys
+    sources = inputs.get('sources')
+    if isinstance(sources, list) and [str(item).strip().lower() for item in sources if str(item).strip()]:
+        normalized_sources = {str(item).strip().lower() for item in sources if str(item).strip()}
+    else:
+        normalized_sources = {'exa', 'apify_funding', 'apify_crunchbase', 'apify_linkedin'}
+    if 'exa' in normalized_sources or 'apify_funding' in normalized_sources:
+        required_keys.append('EXA_API_KEY')
+    if any(source.startswith('apify_') for source in normalized_sources):
+        required_keys.append('APIFY_API_TOKEN')
+    return list(dict.fromkeys(required_keys))
 
 
 def main() -> int:

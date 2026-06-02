@@ -246,13 +246,27 @@ def test_p1_readiness_reports_missing_required_keys(monkeypatch, tmp_path: Path)
     report = module.readiness_report('http://api', str(env_path), 'source_only', {'sources': ['exa']}, True)
 
     assert report['ready'] is False
-    assert 'APIFY_API_TOKEN' in report['missing_required_keys']
+    assert 'EXA_API_KEY' in report['missing_required_keys']
+
+
+def test_p1_readiness_requires_apify_and_exa_for_funding_source(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
+    env_path = tmp_path / 'test.env'
+    env_path.write_text('GEMINI_API_KEY=test\n')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
+
+    report = module.readiness_report('http://api', str(env_path), 'source_only', {'sources': ['apify_funding']}, True)
+
+    assert report['ready'] is False
+    assert report['missing_required_keys'] == ['APIFY_API_TOKEN', 'EXA_API_KEY']
 
 
 def test_p1_readiness_reports_missing_runtime_inputs(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-readiness.py', 'real_p1_readiness')
     env_path = tmp_path / 'test.env'
-    env_path.write_text('GEMINI_API_KEY=test\nAPIFY_API_TOKEN=test\n')
+    env_path.write_text('GEMINI_API_KEY=test\nEXA_API_KEY=test\nAPIFY_API_TOKEN=test\n')
     monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
     monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
     monkeypatch.setattr(module, 'require_hub_seed', lambda _base_url, _sync_yaml: {'playbook_key': 'p1-operator-outreach'})
