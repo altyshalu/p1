@@ -30,6 +30,7 @@ dependencies = [
 [project.scripts]
 l2l3-protocol = "l2l3_protocol.api.main:main"
 l2l3-live = "l2l3_protocol.live.cli:main"
+l2l3-telegram = "l2l3_protocol.services.telegram_control:main"
 
 [build-system]
 requires = ["uv_build>=0.9.27,<0.10.0"]

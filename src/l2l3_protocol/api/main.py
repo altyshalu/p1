@@ -127,6 +127,17 @@ async def runtime_capabilities() -> dict[str, Any]:
     }
 
 
+@app.get("/runs")
+async def list_runs(
+    playbook_key: str | None = None,
+    limit: int = 20,
+    since_hours: int | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> list[dict]:
+    bounded_limit = max(1, min(limit, 100))
+    return await WorkingMemoryStore(session).list_recent_runs(limit=bounded_limit, playbook_key=playbook_key, since_hours=since_hours)
+
+
 def _build_run_summary(run: dict[str, Any]) -> dict[str, Any]:
     artifacts = run.get("artifacts", []) if isinstance(run.get("artifacts"), list) else []
     tasks = run.get("tasks", []) if isinstance(run.get("tasks"), list) else []
