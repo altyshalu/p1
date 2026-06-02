@@ -448,6 +448,7 @@ def gather_live_intelligence(work_order: dict[str, Any], context: dict[str, Any]
 def evaluate_gateway(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     client = _gemini_client()
     dossiers = require_list(work_order["inputs"].get("p1_dossiers"), "p1_dossiers")
+    verify_linkedin_live = bool(work_order["inputs"].get("verify_linkedin_live", False))
     evaluations = []
     for dossier in dossiers:
         response = _gemini_json(
@@ -474,7 +475,7 @@ Return JSON only with keys: identity_confidence, product_b2c_fit, product_leader
 """,
         )
         gateway = _normalize_gateway_result(response)
-        _apply_identity_quality_gate(dossier, gateway)
+        _apply_identity_quality_gate(dossier, gateway, verify_linkedin_live=verify_linkedin_live)
         evaluations.append({"dossier": dossier, "gateway": gateway})
     return {"gateway_evaluations": evaluations}
 
@@ -558,7 +559,7 @@ def _gateway_decision(
     return "needs_more_evidence", reasons
 
 
-def _apply_identity_quality_gate(dossier: dict[str, Any], gateway: dict[str, Any]) -> None:
+def _apply_identity_quality_gate(dossier: dict[str, Any], gateway: dict[str, Any], verify_linkedin_live: bool = False) -> None:
     identity = dossier.get("identity") if isinstance(dossier.get("identity"), dict) else {}
     linkedin_url = _clean_url(str(identity.get("linkedin_url") or ""))
     identity_status = str(identity.get("identity_status") or "").strip()
@@ -569,6 +570,8 @@ def _apply_identity_quality_gate(dossier: dict[str, Any], gateway: dict[str, Any
         reasons.append("missing_verified_person_linkedin")
     if identity_status != IDENTITY_STATUS_VERIFIED:
         reasons.append(f"identity_status_not_verified:{identity_status or IDENTITY_STATUS_REVIEW}")
+    if verify_linkedin_live and LINKEDIN_PERSON_RE.match(linkedin_url) and not _linkedin_profile_url_is_live(linkedin_url):
+        reasons.append("linkedin_profile_not_live")
     deduped_reasons = list(dict.fromkeys(str(reason) for reason in reasons if str(reason).strip()))
     if deduped_reasons:
         gateway["decision_reasons"] = deduped_reasons
