@@ -501,6 +501,21 @@ def test_p1_proof_pack_passes_verify_flags_to_full_proof(monkeypatch, tmp_path: 
     assert '--verify-data-lake' in command
     assert '/tmp/service-account.json' in command
 
+
+def test_full_proof_sheet_verification_uses_runtime_env(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setenv('P1_GOOGLE_SHEET_ID', 'sheet-from-env')
+    monkeypatch.setenv('GOOGLE_SA_PATH', '/secure/service-account.json')
+
+    config = module.sheet_verification_config({'google_sheets': {'tab_name': 'P1_L2L3_NEW_LEADS'}}, {}, None)
+
+    assert config == {
+        'spreadsheet_id': 'sheet-from-env',
+        'tab_name': 'P1_L2L3_NEW_LEADS',
+        'service_account_path': '/secure/service-account.json',
+    }
+
+
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     full_inputs = tmp_path / 'full.json'

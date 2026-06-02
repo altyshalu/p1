@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,23 @@ def artifact_payloads(run: dict[str, Any], artifact_type: str) -> list[dict[str,
         if isinstance(payload, dict):
             payloads.append(payload)
     return payloads
+
+
+def sheet_verification_config(preview: dict[str, Any], inputs: dict[str, Any], google_service_account_path: str | None) -> dict[str, str]:
+    spreadsheet_id = str(
+        (preview.get('google_sheets') or {}).get('spreadsheet_id')
+        or inputs.get('spreadsheet_id')
+        or os.environ.get('P1_GOOGLE_SHEET_ID')
+        or ''
+    )
+    tab_name = str((preview.get('google_sheets') or {}).get('tab_name') or inputs.get('google_sheet_tab') or 'P1_L2L3_NEW_LEADS')
+    service_account_path = str(
+        google_service_account_path
+        or inputs.get('google_service_account_path')
+        or os.environ.get('GOOGLE_SA_PATH')
+        or ''
+    )
+    return {'spreadsheet_id': spreadsheet_id, 'tab_name': tab_name, 'service_account_path': service_account_path}
 
 
 def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
@@ -179,9 +197,10 @@ def main() -> int:
     quality_verification = None
     preview = summary.get('latest_approval_preview', {}) if isinstance(summary.get('latest_approval_preview'), dict) else {}
     if args.verify_sheet and final_run['status'] == 'completed':
-        spreadsheet_id = str((preview.get('google_sheets') or {}).get('spreadsheet_id') or inputs.get('spreadsheet_id') or '')
-        tab_name = str((preview.get('google_sheets') or {}).get('tab_name') or inputs.get('google_sheet_tab') or 'P1_L2L3_NEW_LEADS')
-        service_account_path = args.google_service_account_path or inputs.get('google_service_account_path')
+        sheet_config = sheet_verification_config(preview, inputs, args.google_service_account_path)
+        spreadsheet_id = sheet_config['spreadsheet_id']
+        tab_name = sheet_config['tab_name']
+        service_account_path = sheet_config['service_account_path']
         if not spreadsheet_id or not service_account_path:
             raise SystemExit('verify-sheet requires spreadsheet_id and google_service_account_path')
         lead_ids = [str(row.get('lead_id')) for row in (preview.get('google_sheets') or {}).get('rows', []) if isinstance(row, dict) and row.get('lead_id')]
