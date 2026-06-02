@@ -144,7 +144,7 @@ def validate_runtime_inputs(mode: str, inputs: dict[str, object], env_map: dict[
             inputs,
             env_map,
             ['data_lake_dossier_path', 'dossier_output_path'],
-            ['P1_DOSSIER_OUTPUT_PATH', 'P1_DOSSIER_SOURCE_PATH'],
+            ['P1_DOSSIER_OUTPUT_PATH'],
         )
         if not data_lake_path:
             missing.append('data_lake_dossier_path or dossier_output_path or P1_DOSSIER_OUTPUT_PATH')
