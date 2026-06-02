@@ -532,6 +532,15 @@ def test_full_proof_loads_env_file_for_verification(monkeypatch, tmp_path: Path)
     assert config['service_account_path'] == '/secure/from-file.json'
 
 
+def test_full_proof_internal_paths_use_runtime_env(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setenv('P1_OUTREACH_MASTER_PATH', '/ops/Outreach_Drafts_Master.json')
+    monkeypatch.setenv('P1_DOSSIER_OUTPUT_PATH', '/data/dossiers')
+
+    assert module.outreach_master_path({'outreach_master': {}}, {}) == '/ops/Outreach_Drafts_Master.json'
+    assert module.data_lake_path({'data_lake': {}}, {}) == '/data/dossiers'
+
+
 def test_p1_proof_pack_summarizes_internal_failure(monkeypatch, tmp_path: Path) -> None:
     module = _load_module('real-p1-proof-pack.py', 'real_p1_proof_pack')
     full_inputs = tmp_path / 'full.json'

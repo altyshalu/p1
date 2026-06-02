@@ -117,6 +117,26 @@ def sheet_verification_config(preview: dict[str, Any], inputs: dict[str, Any], g
     return {'spreadsheet_id': spreadsheet_id, 'tab_name': tab_name, 'service_account_path': service_account_path}
 
 
+def outreach_master_path(preview: dict[str, Any], inputs: dict[str, Any]) -> str:
+    return str(
+        (preview.get('outreach_master') or {}).get('path')
+        or inputs.get('outreach_master_path')
+        or os.environ.get('P1_OUTREACH_MASTER_PATH')
+        or ''
+    )
+
+
+def data_lake_path(preview: dict[str, Any], inputs: dict[str, Any]) -> str:
+    return str(
+        (preview.get('data_lake') or {}).get('path')
+        or inputs.get('data_lake_dossier_path')
+        or inputs.get('dossier_output_path')
+        or os.environ.get('P1_DOSSIER_OUTPUT_PATH')
+        or os.environ.get('P1_DOSSIER_SOURCE_PATH')
+        or ''
+    )
+
+
 def verify_p1_quality(run: dict[str, Any]) -> dict[str, int]:
     gateway_items: list[dict[str, Any]] = []
     for payload in artifact_payloads(run, 'p1_gateway_evaluations'):
@@ -225,28 +245,28 @@ def main() -> int:
         sheet_verification = verify_sheet_rows(spreadsheet_id, tab_name, str(service_account_path), lead_ids)
 
     if args.verify_outreach_master and final_run['status'] == 'completed':
-        outreach_master_path = str((preview.get('outreach_master') or {}).get('path') or inputs.get('outreach_master_path') or '')
+        outreach_master_path_value = outreach_master_path(preview, inputs)
         rows = (preview.get('outreach_master') or {}).get('entries', []) if isinstance(preview.get('outreach_master'), dict) else []
         pairs = [
             (str(row.get('run_id')).strip(), str(row.get('lead_id')).strip())
             for row in rows
             if isinstance(row, dict) and row.get('run_id') and row.get('lead_id')
         ]
-        if not outreach_master_path:
+        if not outreach_master_path_value:
             raise SystemExit('verify-outreach-master requires outreach_master_path')
         if not pairs:
             raise SystemExit('verify-outreach-master requested but preview did not include any run_id/lead_id pairs')
-        outreach_master_verification = verify_outreach_master(outreach_master_path, pairs)
+        outreach_master_verification = verify_outreach_master(outreach_master_path_value, pairs)
 
     if args.verify_data_lake and final_run['status'] == 'completed':
-        data_lake_path = str((preview.get('data_lake') or {}).get('path') or inputs.get('data_lake_dossier_path') or inputs.get('dossier_output_path') or '')
+        data_lake_path_value = data_lake_path(preview, inputs)
         files = (preview.get('data_lake') or {}).get('files', []) if isinstance(preview.get('data_lake'), dict) else []
         lead_ids = [str(item.get('lead_id')).strip() for item in files if isinstance(item, dict) and item.get('lead_id')]
-        if not data_lake_path:
+        if not data_lake_path_value:
             raise SystemExit('verify-data-lake requires data_lake_dossier_path or dossier_output_path')
         if not lead_ids:
             raise SystemExit('verify-data-lake requested but preview did not include any lead_ids to validate')
-        data_lake_verification = verify_data_lake(data_lake_path, lead_ids)
+        data_lake_verification = verify_data_lake(data_lake_path_value, lead_ids)
 
     if args.verify_quality:
         quality_verification = verify_p1_quality(final_run)
