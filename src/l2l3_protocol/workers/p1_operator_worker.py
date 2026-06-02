@@ -911,10 +911,19 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
         if isinstance(item, dict) and isinstance(item.get("gateway"), dict) and item["gateway"].get("decision") != "awaiting_outreach"
     ]
     rejection_buckets: dict[str, int] = {}
+    gateway_rejection_buckets: dict[str, int] = {}
     for item in rejected_leads if isinstance(rejected_leads, list) else []:
         if isinstance(item, dict):
             reason = str(item.get("reason") or "unknown")
             rejection_buckets[reason] = rejection_buckets.get(reason, 0) + 1
+    for item in gateway_rejected:
+        gateway = item.get("gateway") if isinstance(item.get("gateway"), dict) else {}
+        reasons = gateway.get("decision_reasons") if isinstance(gateway.get("decision_reasons"), list) else []
+        if not reasons:
+            reasons = [gateway.get("decision") or "unknown"]
+        for reason_value in reasons:
+            reason = str(reason_value or "unknown").strip() or "unknown"
+            gateway_rejection_buckets[reason] = gateway_rejection_buckets.get(reason, 0) + 1
     source_counts: dict[str, int] = {}
     cache_hits = 0
     triage_cache_hits = 0
@@ -958,6 +967,7 @@ def build_metrics_report(work_order: dict[str, Any], context: dict[str, Any]) ->
         "outreach_master_written": int((sync_results.get("outreach_master") or {}).get("written_count") or 0),
         "outreach_master_duplicate_skipped": int((sync_results.get("outreach_master") or {}).get("skipped_duplicate_count") or 0),
         "rejection_buckets": rejection_buckets,
+        "gateway_rejection_buckets": gateway_rejection_buckets,
         "source_counts": source_counts,
         "source_quality_by_source": _source_quality_by_source(source_batches, normalized_leads, triage_scores, gateway_evaluations),
         "provider_cache_hits": cache_hits,

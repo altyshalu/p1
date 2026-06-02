@@ -40,6 +40,7 @@ def test_p1_defaults_are_demo_target_and_write_gated() -> None:
     assert inputs['allow_google_sheet_write'] is True
     assert inputs['allow_outreach_master_write'] is True
     assert inputs['use_triage_cache'] is True
+    assert inputs['verify_linkedin_live'] is True
     assert inputs['google_sheet_tab'] == 'P1_L2L3_NEW_LEADS'
 
 
@@ -63,9 +64,14 @@ def test_operator_dashboard_uses_real_api_endpoints() -> None:
     assert '/reports/system-learning?playbook_key=p1-operator-outreach&since_hours=168' in html
     assert 'Source Quality' in html
     assert 'Runtime Bottlenecks' in html
+    assert 'Gateway Rejections' in html
     assert 'source_quality_by_source' in html
     assert 'duration_by_worker_ms' in html
     assert 'triage_cache_hits' in html
+    assert 'gateway_rejection_buckets' in html
+    assert 'function renderGatewayRejections(gatewayRejectionBuckets)' in html
+    assert 'metricKeys = ["raw_leads","normalized_leads","rejected_leads","triage_qualified","dossiers","gateway_approved","gateway_rejected","drafted","eval_passed","sheet_written","data_lake_written","outreach_master_written","provider_cache_hits","triage_cache_hits"]' in html
+    assert '<td>${esc(reason)}</td><td>${esc(count)}</td>' in html
     assert 'function esc(value)' in html
     assert '<td>${esc(source)}</td>' in html
     assert '<tr><td>${esc(worker)}</td>' in html

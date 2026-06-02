@@ -1664,7 +1664,10 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
                 "p1_dossiers": [{"identity": {"name": "A"}}],
                 "gateway_evaluations": [
                     {"dossier": {"identity": {"name": "A"}, "historical_context": {"sources_found": ["exa"]}}, "gateway": {"decision": "awaiting_outreach"}},
-                    {"dossier": {"identity": {"name": "B"}, "historical_context": {"sources_found": ["apify_linkedin"]}}, "gateway": {"decision": "bypass"}},
+                    {
+                        "dossier": {"identity": {"name": "B"}, "historical_context": {"sources_found": ["apify_linkedin"]}},
+                        "gateway": {"decision": "bypass", "decision_reasons": ["linkedin_profile_not_live", "identity_status_not_verified:needs_review"]},
+                    },
                 ],
                 "outreach_drafts": [{"name": "A"}],
                 "quality_eval": {"passed": True, "score": 1.0},
@@ -1711,6 +1714,7 @@ def test_p1_metrics_report_counts_full_funnel() -> None:
         "outreach_master_written": 1,
         "outreach_master_duplicate_skipped": 0,
         "rejection_buckets": {"unknown": 1},
+        "gateway_rejection_buckets": {"linkedin_profile_not_live": 1, "identity_status_not_verified:needs_review": 1},
         "source_counts": {"exa": 2, "apify_linkedin": 1},
         "source_quality_by_source": {
             "exa": {

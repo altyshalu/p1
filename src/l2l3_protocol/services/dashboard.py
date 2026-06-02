@@ -205,6 +205,10 @@ def operator_dashboard_html() -> str:
           <strong>Runtime Bottlenecks</strong>
           <div id="bottlenecks" class="muted">No timing metrics yet.</div>
         </div>
+        <div class="panel">
+          <strong>Gateway Rejections</strong>
+          <div id="gatewayRejections" class="muted">No gateway rejection reasons yet.</div>
+        </div>
       </div>
       <div class="panel" style="margin-top: 12px;">
         <strong>Learning</strong>
@@ -265,6 +269,7 @@ def operator_dashboard_html() -> str:
       `).join("");
       renderSourceQuality(metrics.source_quality_by_source || {});
       renderBottlenecks(metrics.duration_by_worker_ms || {});
+      renderGatewayRejections(metrics.gateway_rejection_buckets || {});
     }
 
     function renderSourceQuality(sourceQuality) {
@@ -304,6 +309,24 @@ def operator_dashboard_html() -> str:
           <thead><tr><th>Worker</th><th>Seconds</th></tr></thead>
           <tbody>${rows.map(([worker, ms]) => `
             <tr><td>${esc(worker)}</td><td>${esc(Math.round(Number(ms || 0) / 100) / 10)}</td></tr>
+          `).join("")}</tbody>
+        </table>
+      `;
+    }
+
+    function renderGatewayRejections(gatewayRejectionBuckets) {
+      const rows = Object.entries(gatewayRejectionBuckets || {})
+        .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+      const target = document.getElementById("gatewayRejections");
+      if (!rows.length) {
+        target.innerHTML = `<div class="muted">No gateway rejection reasons yet.</div>`;
+        return;
+      }
+      target.innerHTML = `
+        <table>
+          <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+          <tbody>${rows.map(([reason, count]) => `
+            <tr><td>${esc(reason)}</td><td>${esc(count)}</td></tr>
           `).join("")}</tbody>
         </table>
       `;

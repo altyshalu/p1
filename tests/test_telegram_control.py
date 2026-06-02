@@ -26,6 +26,7 @@ def test_telegram_default_p1_inputs_use_real_demo_target() -> None:
     assert "title_keywords" in inputs
     assert "VP Product" in inputs["title_keywords"]
     assert "Independent Product Advisor" in inputs["title_keywords"]
+    assert inputs["verify_linkedin_live"] is True
 
 
 def test_telegram_access_check_requires_allowed_chat_id() -> None:
@@ -41,7 +42,14 @@ def test_telegram_format_summary_metrics_and_drafts() -> None:
         "goal": "prove p1",
         "pending_actions": [{"type": "approval"}],
         "latest_diagnosis": {"root_cause": "none"},
-        "latest_metrics": {"raw_leads": 20, "gateway_approved": 3, "drafted": 3, "eval_passed": True},
+        "latest_metrics": {
+            "raw_leads": 20,
+            "gateway_approved": 3,
+            "drafted": 3,
+            "eval_passed": True,
+            "triage_cache_hits": 2,
+            "gateway_rejection_buckets": {"linkedin_profile_not_live": 1},
+        },
     }
     run = {
         "output": {
@@ -59,6 +67,8 @@ def test_telegram_format_summary_metrics_and_drafts() -> None:
 
     assert "waiting_approval" in format_summary(summary)
     assert "gateway_approved: 3" in format_metrics(summary)
+    assert "triage_cache_hits: 2" in format_metrics(summary)
+    assert "gateway_rejection_buckets: {'linkedin_profile_not_live': 1}" in format_metrics(summary)
     assert "Arianna Simpson" in format_drafts(run)
 
 

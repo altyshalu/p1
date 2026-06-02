@@ -278,6 +278,8 @@ def format_metrics(summary: dict[str, Any]) -> str:
         "data_lake_written",
         "outreach_master_written",
         "provider_cache_hits",
+        "triage_cache_hits",
+        "gateway_rejection_buckets",
     ]
     return "\n".join(f"{key}: {metrics.get(key, 0)}" for key in keys)
 

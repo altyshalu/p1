@@ -26,6 +26,7 @@ def default_p1_inputs() -> dict[str, Any]:
         "google_sheet_tab": "P1_L2L3_NEW_LEADS",
         "use_provider_cache": True,
         "use_triage_cache": True,
+        "verify_linkedin_live": True,
         "apify_search_query": "AI fintech consumer pre-seed startup funding operator angels product founders",
         "days_back": 120,
         "linkedin_keywords": (
