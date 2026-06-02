@@ -643,6 +643,7 @@ Constraints:
 
 def judge_outreach_quality(work_order: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     drafts = require_list(work_order["inputs"].get("outreach_drafts"), "outreach_drafts")
+    verify_linkedin_live = bool(work_order["inputs"].get("verify_linkedin_live", False))
     reasons: list[str] = []
     checks = {
         "has_drafts": bool(drafts),
@@ -657,7 +658,10 @@ def judge_outreach_quality(work_order: dict[str, Any], context: dict[str, Any]) 
         "no_placeholder_signoff": all(not _has_placeholder_signoff(str(item.get("text", ""))) for item in drafts),
         "all_have_idempotency_key": all(str(item.get("idempotency_key") or "").strip() for item in drafts),
         "all_have_verified_person_linkedin": all(_draft_has_verified_person_linkedin(item) for item in drafts),
+        "all_linkedin_urls_are_evidence_backed": all(_draft_linkedin_has_evidence(item) for item in drafts),
     }
+    if verify_linkedin_live:
+        checks["all_have_live_linkedin_profile"] = all(_draft_has_live_linkedin_profile(item) for item in drafts)
     for key, passed in checks.items():
         if not passed:
             reasons.append(key)
@@ -1535,6 +1539,54 @@ def _draft_has_verified_person_linkedin(draft: dict[str, Any]) -> bool:
     linkedin_url = _clean_url(str(draft.get("linkedin_url") or ""))
     identity_status = str(draft.get("identity_status") or "").strip()
     return bool(LINKEDIN_PERSON_RE.match(linkedin_url)) and identity_status == IDENTITY_STATUS_VERIFIED
+
+
+def _draft_linkedin_has_evidence(draft: dict[str, Any]) -> bool:
+    linkedin_url = _canonical_linkedin_url(str(draft.get("linkedin_url") or ""))
+    if not linkedin_url:
+        return False
+    evidence_urls = draft.get("evidence_urls")
+    claim_urls = [
+        str(claim.get("source_url") or "")
+        for claim in (draft.get("claims") if isinstance(draft.get("claims"), list) else [])
+        if isinstance(claim, dict)
+    ]
+    urls = [*(evidence_urls if isinstance(evidence_urls, list) else []), *claim_urls]
+    return any(_canonical_linkedin_url(str(url)) == linkedin_url for url in urls)
+
+
+def _draft_has_live_linkedin_profile(draft: dict[str, Any]) -> bool:
+    linkedin_url = _clean_url(str(draft.get("linkedin_url") or ""))
+    return _linkedin_profile_url_is_live(linkedin_url)
+
+
+def _linkedin_profile_url_is_live(linkedin_url: str) -> bool:
+    url = _clean_url(linkedin_url)
+    if not LINKEDIN_PERSON_RE.match(url):
+        return False
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; ABRT-P1-LinkVerifier/1.0)"})
+    try:
+        with urlopen(request, timeout=15) as response:
+            status = int(getattr(response, "status", 0) or response.getcode())
+            body = response.read(750_000).decode("utf-8", errors="ignore").lower()
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return False
+    if status != 200:
+        return False
+    if "profile not found | linkedin" in body or "profile not found" in body:
+        return False
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", body, flags=re.IGNORECASE | re.DOTALL)
+    if not title_match:
+        return False
+    title = re.sub(r"\s+", " ", title_match.group(1)).strip().lower()
+    return bool(title and title != "linkedin" and "profile not found" not in title)
+
+
+def _canonical_linkedin_url(url: str) -> str:
+    cleaned = _clean_url(url).split("?")[0].rstrip("/")
+    if not LINKEDIN_PERSON_RE.match(cleaned):
+        return ""
+    return re.sub(r"^https?://(?:(?:www|[a-z]{2})\.)?linkedin\.com/", "linkedin.com/", cleaned, flags=re.IGNORECASE).lower()
 
 
 HANDLERS = {

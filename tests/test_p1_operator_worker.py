@@ -389,6 +389,95 @@ def test_p1_outreach_quality_rejects_unverified_linkedin_identity() -> None:
     assert "all_have_verified_person_linkedin" in result["reasons"]
 
 
+def test_p1_outreach_quality_rejects_linkedin_without_matching_evidence() -> None:
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Elad Gil",
+                        "linkedin_url": "https://www.linkedin.com/in/eladgil",
+                        "identity_status": "verified_linkedin",
+                        "text": "ABRT is building Limpid around operator-led investing. Would a quick 30-minute call next week make sense?",
+                        "evidence_urls": ["https://www.crunchbase.com/person/elad-gil"],
+                        "claims": [{"text": "Elad has operator-investor experience.", "source_url": "https://www.crunchbase.com/person/elad-gil"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "all_linkedin_urls_are_evidence_backed" in result["reasons"]
+
+
+def test_p1_outreach_quality_rejects_dead_live_linkedin_profile(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._linkedin_profile_url_is_live", lambda _url: False)
+
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "verify_linkedin_live": True,
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Naval Ravikant",
+                        "linkedin_url": "https://www.linkedin.com/in/navalr",
+                        "identity_status": "verified_linkedin",
+                        "text": "ABRT is building Limpid around operator-led investing. Would a quick 30-minute call next week make sense?",
+                        "evidence_urls": ["https://www.linkedin.com/in/navalr"],
+                        "claims": [{"text": "Naval has operator-investor experience.", "source_url": "https://www.linkedin.com/in/navalr"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is False
+    assert "all_have_live_linkedin_profile" in result["reasons"]
+
+
+def test_p1_outreach_quality_accepts_live_verified_evidence_backed_linkedin(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._linkedin_profile_url_is_live", lambda _url: True)
+
+    result = judge_outreach_quality(
+        {
+            "inputs": {
+                "verify_linkedin_live": True,
+                "outreach_drafts": [
+                    {
+                        "run_id": "run-1",
+                        "lead_id": "lead-1",
+                        "idempotency_key": "run-1:lead-1",
+                        "name": "Elad Gil",
+                        "linkedin_url": "https://www.linkedin.com/in/eladgil",
+                        "identity_status": "verified_linkedin",
+                        "text": "ABRT is building Limpid around operator-led investing. Would a quick 30-minute call next week make sense?",
+                        "evidence_urls": ["https://www.linkedin.com/in/eladgil"],
+                        "claims": [{"text": "Elad has operator-investor experience.", "source_url": "https://www.linkedin.com/in/eladgil"}],
+                        "status": "draft",
+                        "publish": False,
+                    }
+                ],
+            }
+        },
+        {},
+    )
+
+    assert result["passed"] is True
+
+
 def test_p1_outreach_quality_rejects_duplicate_meeting_cta() -> None:
     result = judge_outreach_quality(
         {

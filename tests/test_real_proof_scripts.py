@@ -524,6 +524,113 @@ def test_p1_full_proof_verify_quality_rejects_unverified_linkedin_identity() -> 
         raise AssertionError('expected unverified LinkedIn identity to fail P1 quality verification')
 
 
+def test_p1_full_proof_verify_quality_rejects_linkedin_without_matching_evidence() -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
+                            'text': 'ABRT/Limpid is mapping product-led angels. Would a quick 30-minute call next week make sense?',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.crunchbase.com/person/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.crunchbase.com/person/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run)
+    except SystemExit as exc:
+        assert 'linkedin_not_evidence_backed' in str(exc)
+    else:
+        raise AssertionError('expected unbacked LinkedIn URL to fail P1 quality verification')
+
+
+def test_p1_full_proof_verify_quality_rejects_dead_live_linkedin_profile(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'linkedin_profile_url_is_live', lambda _url: False)
+    run = {
+        'artifacts': [
+            {
+                'artifact_type': 'p1_gateway_evaluations',
+                'payload': {
+                    'gateway_evaluations': [
+                        {
+                            'dossier': {'identity': {'name': 'Product Angel'}},
+                            'gateway': {
+                                'decision': 'awaiting_outreach',
+                                'identity_confidence': 96,
+                                'product_b2c_fit': 'PASS',
+                                'product_leadership_fit': 'PASS',
+                                'verified_investor_fit': 'PASS',
+                                'bandwidth_signal': 'HIGH',
+                                'liquidity_signal': 'YES',
+                                'exclusion_signal': 'NO',
+                                'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            },
+                        }
+                    ]
+                },
+            },
+            {
+                'artifact_type': 'p1_outreach_drafts',
+                'payload': {
+                    'outreach_drafts': [
+                        {
+                            'name': 'Product Angel',
+                            'linkedin_url': 'https://www.linkedin.com/in/productangel',
+                            'identity_status': 'verified_linkedin',
+                            'text': 'ABRT/Limpid is mapping product-led angels. Would a quick 30-minute call next week make sense?',
+                            'status': 'draft',
+                            'publish': False,
+                            'evidence_urls': ['https://www.linkedin.com/in/productangel'],
+                            'claims': [{'text': 'Product angel.', 'source_url': 'https://www.linkedin.com/in/productangel'}],
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    try:
+        module.verify_p1_quality(run, verify_linkedin_live=True)
+    except SystemExit as exc:
+        assert 'linkedin_profile_not_live' in str(exc)
+    else:
+        raise AssertionError('expected dead live LinkedIn URL to fail P1 quality verification')
+
+
 def test_p1_full_proof_verify_quality_rejects_missing_investor_fit() -> None:
     module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
     run = {

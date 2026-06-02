@@ -591,7 +591,15 @@ class ProcessRuntime:
             await self._fail_p1_if_needed(run_id, "p1 outreach drafting failed")
             return
         drafts = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_DRAFTS)
-        if not await run_task("p1-outreach-quality-judge", "judge_outreach_quality", {"outreach_drafts": drafts.get("outreach_drafts", [])}, ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE):
+        if not await run_task(
+            "p1-outreach-quality-judge",
+            "judge_outreach_quality",
+            {
+                "outreach_drafts": drafts.get("outreach_drafts", []),
+                "verify_linkedin_live": bool(inputs.get("verify_linkedin_live", True)),
+            },
+            ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE,
+        ):
             await self._fail_p1_if_needed(run_id, "p1 outreach quality failed")
             return
         approval_package = self._latest_payload(await self._require_run(run_id), ArtifactType.P1_OUTREACH_APPROVAL_PACKAGE)
