@@ -162,6 +162,119 @@ def test_p1_full_proof_reports_waiting_approval_without_sheet_verification(monke
     assert 'waiting_approval' in stdout.getvalue()
 
 
+def test_p1_full_proof_accepts_existing_run_id_without_creating_run(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    created = False
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+
+    def create_run_should_not_be_called(*_args, **_kwargs):
+        nonlocal created
+        created = True
+        raise AssertionError('create_run should not be called for --existing-run-id')
+
+    monkeypatch.setattr(module, 'create_run', create_run_should_not_be_called)
+    monkeypatch.setattr(
+        module,
+        'request_json',
+        lambda _url: {
+            'id': 'run-existing',
+            'status': 'completed',
+            'playbook_key': 'p1-operator-outreach',
+            'input': {'inputs': {'mode': 'existing_dossiers'}},
+            'diagnosis': None,
+        },
+    )
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'status': 'completed', 'playbook_key': 'p1-operator-outreach', 'goal': 'proof', 'latest_metrics': {'drafted': 1}, 'artifact_counts': {}, 'task_status_counts': {}, 'pending_actions': [], 'latest_approval_preview': {}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json', '--existing-run-id', 'run-existing'])
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', stdout)
+
+    exit_code = module.main()
+
+    assert exit_code == 0
+    assert created is False
+    assert '"run_id": "run-existing"' in stdout.getvalue()
+
+
+def test_p1_full_proof_rejects_existing_run_input_mismatch(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'full_pipeline'})
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(
+        module,
+        'request_json',
+        lambda _url: {
+            'id': 'run-existing',
+            'status': 'completed',
+            'playbook_key': 'p1-operator-outreach',
+            'input': {'inputs': {'mode': 'existing_dossiers'}},
+            'diagnosis': None,
+        },
+    )
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--inputs-json', '/tmp/in.json', '--existing-run-id', 'run-existing'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'existing run inputs do not match --inputs-json' in str(exc)
+    else:
+        raise AssertionError('expected mismatched existing-run proof to fail')
+
+
+def test_p1_full_proof_rejects_existing_run_wrong_playbook(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(
+        module,
+        'request_json',
+        lambda _url: {
+            'id': 'run-existing',
+            'status': 'completed',
+            'playbook_key': 'build-in-public-trend-radar',
+            'input': {'inputs': {'query': 'agent memory'}},
+            'diagnosis': None,
+        },
+    )
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--existing-run-id', 'run-existing'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert 'not a P1 operator outreach run' in str(exc)
+    else:
+        raise AssertionError('expected wrong playbook proof reuse to fail')
+
+
+def test_p1_full_proof_requires_write_verification_from_existing_run_inputs(monkeypatch) -> None:
+    module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
+    monkeypatch.setattr(module, 'require_health', lambda _base_url: {'status': 'ok'})
+    monkeypatch.setattr(module, 'require_capabilities', lambda _base_url: {'hermes': {'available': True}})
+    monkeypatch.setattr(
+        module,
+        'request_json',
+        lambda _url: {
+            'id': 'run-existing',
+            'status': 'completed',
+            'playbook_key': 'p1-operator-outreach',
+            'input': {'inputs': {'mode': 'existing_dossiers', 'allow_google_sheet_write': True}},
+            'diagnosis': None,
+        },
+    )
+    monkeypatch.setattr(module, 'get_summary', lambda _base_url, _run_id: {'status': 'completed', 'playbook_key': 'p1-operator-outreach', 'goal': 'proof', 'latest_metrics': {'drafted': 1}, 'artifact_counts': {}, 'task_status_counts': {}, 'pending_actions': [], 'latest_approval_preview': {}})
+    monkeypatch.setattr(sys, 'argv', ['real-p1-full-proof.py', '--existing-run-id', 'run-existing'])
+
+    try:
+        module.main()
+    except SystemExit as exc:
+        assert '--verify-sheet' in str(exc)
+    else:
+        raise AssertionError('expected existing write-enabled run without physical verification to fail')
+
+
 def test_p1_full_proof_rejects_waiting_approval_when_external_writes_requested(monkeypatch) -> None:
     module = _load_module('real-p1-full-proof.py', 'real_p1_full_proof')
     monkeypatch.setattr(module, 'load_inputs', lambda _path: {'mode': 'existing_dossiers', 'allow_google_sheet_write': True})

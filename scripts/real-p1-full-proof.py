@@ -15,10 +15,35 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from p1_real_common import approve_run, assert_status, assert_summary_shape, create_run, get_summary, load_inputs, require_capabilities, require_health, wait_for_run
+from p1_real_common import approve_run, assert_status, assert_summary_shape, create_run, get_summary, load_inputs, request_json, require_capabilities, require_health, wait_for_run
 
 
 LINKEDIN_PERSON_RE = re.compile(r"^https?://(?:(?:www|[a-z]{2})\.)?linkedin\.com/in/[A-Za-z0-9%_\-]+$", re.IGNORECASE)
+
+
+def log_step(message: str) -> None:
+    print(f'[p1-proof] {message}', file=sys.stderr, flush=True)
+
+
+def stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+
+
+def stored_p1_inputs(run: dict[str, Any]) -> dict[str, Any]:
+    if run.get('playbook_key') != 'p1-operator-outreach':
+        raise SystemExit(f'existing run is not a P1 operator outreach run: playbook_key={run.get("playbook_key")}')
+    run_input = run.get('input')
+    if not isinstance(run_input, dict):
+        raise SystemExit('existing run is missing persisted input payload')
+    inputs = run_input.get('inputs')
+    if not isinstance(inputs, dict):
+        raise SystemExit('existing run is missing persisted input.inputs payload')
+    return inputs
+
+
+def assert_inputs_match_file(stored_inputs: dict[str, Any], loaded_inputs: dict[str, Any]) -> None:
+    if stable_json(stored_inputs) != stable_json(loaded_inputs):
+        raise SystemExit('existing run inputs do not match --inputs-json; refusing to certify a different proof target')
 
 
 def load_env_file(path_value: str | None) -> None:
@@ -318,9 +343,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description='Run a real full P1 proof with health/capabilities/summary verification.')
     parser.add_argument('--base-url', default='http://127.0.0.1:8000')
     parser.add_argument('--goal', default='Run the full real P1 operator outreach proof.')
-    parser.add_argument('--inputs-json', required=True)
+    parser.add_argument('--inputs-json')
     parser.add_argument('--env-file')
     parser.add_argument('--timeout-seconds', type=int, default=1800)
+    parser.add_argument('--existing-run-id', help='Verify an already-created real P1 run instead of creating a new one.')
     parser.add_argument('--approve', action='store_true', help='Approve external writes if the run stops at waiting_approval')
     parser.add_argument('--verify-sheet', action='store_true')
     parser.add_argument('--verify-outreach-master', action='store_true')
@@ -330,19 +356,42 @@ def main() -> int:
     args = parser.parse_args()
 
     load_env_file(args.env_file)
-    inputs = load_inputs(args.inputs_json)
+    log_step(f'checking API health at {args.base_url}')
     require_health(args.base_url)
+    log_step('checking runtime capabilities')
     capabilities = require_capabilities(args.base_url)
-    created = create_run(args.base_url, args.goal, inputs)
-    run = wait_for_run(args.base_url, created['id'], args.timeout_seconds)
-    summary = get_summary(args.base_url, created['id'])
+
+    if args.existing_run_id:
+        run_id = str(args.existing_run_id).strip()
+        if not run_id:
+            raise SystemExit('--existing-run-id cannot be empty')
+        log_step(f'loading existing real run {run_id}')
+        run = request_json(f'{args.base_url}/runs/{run_id}')
+        inputs = stored_p1_inputs(run)
+        if args.inputs_json:
+            log_step('checking --inputs-json against existing run persisted inputs')
+            assert_inputs_match_file(inputs, load_inputs(args.inputs_json))
+    else:
+        if not args.inputs_json:
+            raise SystemExit('--inputs-json is required when creating a new proof run')
+        inputs = load_inputs(args.inputs_json)
+        log_step('creating real P1 run')
+        created = create_run(args.base_url, args.goal, inputs)
+        run_id = str(created['id'])
+        log_step(f'created run {run_id}; waiting for terminal state')
+        run = wait_for_run(args.base_url, run_id, args.timeout_seconds)
+    log_step(f'run {run_id} reached status={run.get("status")}')
+    summary = get_summary(args.base_url, run_id)
     assert_summary_shape(summary)
 
     final_run = run
     if run['status'] == 'waiting_approval' and args.approve:
-        approve_run(args.base_url, created['id'])
-        final_run = wait_for_run(args.base_url, created['id'], args.timeout_seconds)
-        summary = get_summary(args.base_url, created['id'])
+        log_step(f'approving run {run_id}')
+        approve_run(args.base_url, run_id)
+        log_step(f'waiting for approved run {run_id} to finish')
+        final_run = wait_for_run(args.base_url, run_id, args.timeout_seconds)
+        log_step(f'approved run {run_id} reached status={final_run.get("status")}')
+        summary = get_summary(args.base_url, run_id)
         assert_summary_shape(summary)
 
     assert_status(final_run, {'completed', 'waiting_approval', 'waiting_user'})
@@ -369,6 +418,7 @@ def main() -> int:
     quality_verification = None
     preview = summary.get('latest_approval_preview', {}) if isinstance(summary.get('latest_approval_preview'), dict) else {}
     if args.verify_sheet and final_run['status'] == 'completed':
+        log_step('verifying Google Sheet physical rows')
         sheet_config = sheet_verification_config(preview, inputs, args.google_service_account_path)
         spreadsheet_id = sheet_config['spreadsheet_id']
         tab_name = sheet_config['tab_name']
@@ -385,8 +435,10 @@ def main() -> int:
         if not sheet_pairs:
             raise SystemExit('verify-sheet requested but run did not include any expected run_id/lead_id pairs to validate')
         sheet_verification = verify_sheet_rows(spreadsheet_id, tab_name, str(service_account_path), sheet_pairs)
+        log_step('Google Sheet verification passed')
 
     if args.verify_outreach_master and final_run['status'] == 'completed':
+        log_step('verifying Outreach Master physical JSON')
         outreach_master_path_value = outreach_master_path(preview, inputs)
         rows = (preview.get('outreach_master') or {}).get('entries', []) if isinstance(preview.get('outreach_master'), dict) else []
         pairs = [
@@ -401,8 +453,10 @@ def main() -> int:
         if not pairs:
             raise SystemExit('verify-outreach-master requested but run did not include any expected run_id/lead_id pairs')
         outreach_master_verification = verify_outreach_master(outreach_master_path_value, pairs)
+        log_step('Outreach Master verification passed')
 
     if args.verify_data_lake and final_run['status'] == 'completed':
+        log_step('verifying Data Lake physical dossier files')
         data_lake_path_value = data_lake_path(preview, inputs)
         files = (preview.get('data_lake') or {}).get('files', []) if isinstance(preview.get('data_lake'), dict) else []
         lead_ids = [str(item.get('lead_id')).strip() for item in files if isinstance(item, dict) and item.get('lead_id')]
@@ -413,12 +467,15 @@ def main() -> int:
         if not lead_ids:
             raise SystemExit('verify-data-lake requested but run did not include any expected lead_ids to validate')
         data_lake_verification = verify_data_lake(data_lake_path_value, lead_ids)
+        log_step('Data Lake verification passed')
 
     if args.verify_quality:
+        log_step('verifying P1 quality gates')
         quality_verification = verify_p1_quality(final_run, verify_linkedin_live=True)
+        log_step('P1 quality verification passed')
 
     report = {
-        'run_id': created['id'],
+        'run_id': run_id,
         'status': final_run['status'],
         'health': 'ok',
         'capabilities': capabilities,
