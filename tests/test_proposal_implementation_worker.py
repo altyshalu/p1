@@ -5,13 +5,19 @@ import pytest
 
 from l2l3_protocol.core.schemas import ImprovementProposal, ImprovementProposalStatus, WorkOrder
 from l2l3_protocol.runtime.l3_executor import L3SandboxExecutor
+from l2l3_protocol.workers import proposal_implementation_worker as worker_module
 from l2l3_protocol.workers.build_in_public_worker import approved_provider_auto_repairs
 from l2l3_protocol.workers.proposal_implementation_worker import (
     ProposalImplementationError,
+    _assert_codex_auth_ready,
+    _raise_codex_auth_or_runtime_error,
+    _run_codex_reviewer,
+    _run_command,
     build_autonomous_codex_plan,
     build_codex_implementer_command,
     build_codex_reviewer_command,
     check_changed_files_within_bounds,
+    codex_reviewer_output_schema,
     implement_approved_proposal,
 )
 
@@ -170,6 +176,10 @@ def test_autonomous_codex_implementer_command_is_write_capable() -> None:
 
     assert command[command.index("-s") + 1] == "workspace-write"
     assert command[command.index("-m") + 1] == "gpt-5.5"
+    assert "-a" not in command
+    assert "--ignore-user-config" in command
+    assert "--ephemeral" in command
+    assert command[command.index("--color") + 1] == "never"
 
 
 def test_autonomous_codex_reviewer_command_is_read_only() -> None:
@@ -187,6 +197,115 @@ def test_autonomous_codex_reviewer_command_is_read_only() -> None:
 
     assert command[command.index("-s") + 1] == "read-only"
     assert command[command.index("-m") + 1] == "gpt-5.4"
+    assert "-a" not in command
+    assert "--ignore-user-config" in command
+    assert "--ephemeral" in command
+    assert command[command.index("--color") + 1] == "never"
+
+
+def test_codex_auth_error_is_explicit_relogin_failure() -> None:
+    result = {
+        "command": "codex exec ...",
+        "returncode": 1,
+        "stdout": "",
+        "stderr": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+        "stdout_tail": "",
+        "stderr_tail": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+    }
+
+    with pytest.raises(ProposalImplementationError, match="codex login --device-auth"):
+        _raise_codex_auth_or_runtime_error(result, "codex command failed")
+
+
+def test_codex_auth_ready_fails_closed_when_status_is_not_logged_in(monkeypatch, tmp_path) -> None:
+    def fake_run_command(command, *, cwd, timeout, shell=False, check=True):
+        return {
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "Not logged in",
+            "stdout_tail": "",
+            "stderr_tail": "Not logged in",
+        }
+
+    monkeypatch.setattr(worker_module, "_run_command", fake_run_command)
+
+    with pytest.raises(ProposalImplementationError, match="codex login --device-auth"):
+        _assert_codex_auth_ready(tmp_path, {"coder_model": "gpt-5.5", "reasoning_effort": "medium"})
+
+
+def test_codex_auth_ready_fails_closed_when_exec_probe_has_expired_token(monkeypatch, tmp_path) -> None:
+    def fake_run_command(command, *, cwd, timeout, shell=False, check=True):
+        command_text = " ".join(command) if isinstance(command, list) else command
+        if command_text == "codex login status":
+            return {
+                "command": command_text,
+                "returncode": 0,
+                "stdout": "",
+                "stderr": "Logged in using ChatGPT",
+                "stdout_tail": "",
+                "stderr_tail": "Logged in using ChatGPT",
+            }
+        return {
+            "command": command_text,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+            "stdout_tail": "",
+            "stderr_tail": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+        }
+
+    monkeypatch.setattr(worker_module, "_run_command", fake_run_command)
+
+    with pytest.raises(ProposalImplementationError, match="codex login --device-auth"):
+        _assert_codex_auth_ready(tmp_path, {"coder_model": "gpt-5.5", "reasoning_effort": "medium"})
+
+
+def test_codex_reviewer_auth_failure_raises_relogin_guidance(monkeypatch, tmp_path) -> None:
+    def fake_run_command(command, *, cwd, timeout, shell=False, check=True):
+        return {
+            "command": " ".join(command) if isinstance(command, list) else command,
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+            "stdout_tail": "",
+            "stderr_tail": "401 Unauthorized: Your authentication token has been invalidated. Please try signing in again.",
+        }
+
+    monkeypatch.setattr(worker_module, "_run_command", fake_run_command)
+    plan = {
+        "reviewer_model": "gpt-5.4",
+        "reasoning_effort": "medium",
+        "allowed_paths": ["docs/overall-system-improvement-plan.md"],
+        "forbidden_paths": [],
+    }
+
+    with pytest.raises(ProposalImplementationError, match="codex login --device-auth"):
+        _run_codex_reviewer({}, plan, tmp_path, ["docs/overall-system-improvement-plan.md"], [], 1)
+
+
+def test_run_command_closes_stdin_for_subprocess(monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_subprocess_run(command, **kwargs):
+        captured["input"] = kwargs.get("input")
+        captured["env_term"] = kwargs.get("env", {}).get("TERM")
+        return worker_module.subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(worker_module.subprocess, "run", fake_subprocess_run)
+
+    result = _run_command(["echo", "ok"], cwd=tmp_path, timeout=10)
+
+    assert result["returncode"] == 0
+    assert captured["input"] == ""
+    assert captured["env_term"]
+
+
+def test_codex_reviewer_schema_is_strict_for_responses_api() -> None:
+    schema = codex_reviewer_output_schema()
+
+    assert schema["additionalProperties"] is False
+    assert set(schema["required"]) == {"approved", "feedback", "blocking_findings", "scope_ok", "proof_ok"}
 
 
 def test_autonomous_codex_worker_fails_closed_when_runtime_not_enabled(monkeypatch) -> None:

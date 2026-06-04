@@ -63,7 +63,8 @@ The system should:
 - have the reviewer check scope, diff, tests, proof, and whether the implementer stayed inside bounds;
 - send factual review feedback back to the implementer when changes are needed;
 - retry the implement-review loop up to a fixed limit, for example 3 iterations;
-- merge automatically when the reviewer approves and all required real checks pass.
+- create a merge-ready PR when the reviewer approves and all required real checks pass;
+- enable automatic merge only after canonical real before/after proof becomes a first-class gate.
 
 ### Approval Boundary
 
@@ -71,6 +72,7 @@ The final result does not require manual approval when the task stays inside the
 
 The system must fail closed when:
 
+- Codex device-auth preflight fails or reports expired credentials;
 - the implementer changes files outside bounds;
 - required real tests fail;
 - proof commands are missing or weak;
@@ -96,4 +98,6 @@ Humans should mostly see final proof, merged changes, and clear logs. Human atte
 - The reviewer runs independently from the implementer.
 - Failed reviews produce actionable feedback and another implementation iteration.
 - The loop stops after the configured retry limit.
-- Successful bounded fixes merge automatically only after real checks pass.
+- Successful bounded fixes produce merge-ready PRs after real checks pass.
+- Automatic merge remains disabled until canonical real before/after proof is recorded.
+- Codex device-auth readiness is checked before autonomous implementation, and expired credentials fail closed instead of being hidden behind fallbacks.

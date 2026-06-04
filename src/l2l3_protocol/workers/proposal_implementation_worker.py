@@ -15,6 +15,14 @@ DEFAULT_CODEX_CODER_MODEL = "gpt-5.5"
 DEFAULT_CODEX_REVIEWER_MODEL = "gpt-5.4"
 DEFAULT_CODEX_REASONING_EFFORT = "medium"
 DEFAULT_AUTONOMOUS_MAX_ITERATIONS = 3
+CODEX_AUTH_ERROR_MARKERS = (
+    "token_invalidated",
+    "401 Unauthorized",
+    "authentication token has been invalidated",
+    "Please try signing in again",
+    "not logged in",
+    "login required",
+)
 
 
 class ProposalImplementationError(ValueError):
@@ -161,6 +169,7 @@ def _run_autonomous_codex_implementation(proposal: dict[str, Any], config: dict[
     if worktree_path.exists():
         raise ProposalImplementationError(f"autonomous worktree already exists; remove or choose another branch: {worktree_path}")
 
+    _assert_codex_auth_ready(repo_root, plan)
     _run_command(["git", "fetch", "origin", plan["base_branch"]], cwd=repo_root, timeout=120)
     _run_command(["git", "worktree", "add", "-B", plan["branch"], str(worktree_path), f"origin/{plan['base_branch']}"], cwd=repo_root, timeout=120)
     iterations: list[dict[str, Any]] = []
@@ -262,7 +271,9 @@ def build_codex_implementer_command(plan: dict[str, Any], worktree_path: Path, o
         f'model_reasoning_effort="{plan["reasoning_effort"]}"',
         "-s",
         "workspace-write",
-        "-a",
+        "--ignore-user-config",
+        "--ephemeral",
+        "--color",
         "never",
         "-o",
         str(output_path),
@@ -281,27 +292,13 @@ def _run_codex_reviewer(
     temp_dir = Path(tempfile.mkdtemp(prefix="l2l3-codex-review-"))
     output_path = temp_dir / "reviewer.json"
     schema_path = temp_dir / "review-schema.json"
-    schema_path.write_text(
-        json.dumps(
-            {
-                "type": "object",
-                "required": ["approved", "feedback", "blocking_findings", "scope_ok", "proof_ok"],
-                "properties": {
-                    "approved": {"type": "boolean"},
-                    "feedback": {"type": "string"},
-                    "blocking_findings": {"type": "array", "items": {"type": "string"}},
-                    "scope_ok": {"type": "boolean"},
-                    "proof_ok": {"type": "boolean"},
-                },
-                "additionalProperties": True,
-            }
-        ),
-        encoding="utf-8",
-    )
+    schema_path.write_text(json.dumps(codex_reviewer_output_schema()), encoding="utf-8")
     prompt = _reviewer_prompt(proposal, plan, changed_files, proof_results, iteration)
     command = build_codex_reviewer_command(plan, worktree_path, schema_path, output_path, prompt)
-    result = _run_command(command, cwd=worktree_path, timeout=1800)
+    result = _run_command(command, cwd=worktree_path, timeout=1800, check=False)
     if result["returncode"] != 0:
+        if _codex_result_has_auth_error(result):
+            _raise_codex_auth_or_runtime_error(result, "codex reviewer failed")
         return {
             "approved": False,
             "feedback": "Reviewer execution failed.",
@@ -343,7 +340,9 @@ def build_codex_reviewer_command(
         f'model_reasoning_effort="{plan["reasoning_effort"]}"',
         "-s",
         "read-only",
-        "-a",
+        "--ignore-user-config",
+        "--ephemeral",
+        "--color",
         "never",
         "--output-schema",
         str(schema_path),
@@ -351,6 +350,21 @@ def build_codex_reviewer_command(
         str(output_path),
         prompt,
     ]
+
+
+def codex_reviewer_output_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "required": ["approved", "feedback", "blocking_findings", "scope_ok", "proof_ok"],
+        "properties": {
+            "approved": {"type": "boolean"},
+            "feedback": {"type": "string"},
+            "blocking_findings": {"type": "array", "items": {"type": "string"}},
+            "scope_ok": {"type": "boolean"},
+            "proof_ok": {"type": "boolean"},
+        },
+        "additionalProperties": False,
+    }
 
 
 def _implementer_prompt(proposal: dict[str, Any], plan: dict[str, Any], feedback: str, iteration: int) -> str:
@@ -386,6 +400,48 @@ def _reviewer_prompt(
         f"Proposal: {json.dumps(proposal, ensure_ascii=False)}\n"
         "Approve only if the diff stays within bounds, the proposal is actually addressed, and required proof passed."
     )
+
+
+def _assert_codex_auth_ready(repo_root: Path, plan: dict[str, Any]) -> None:
+    status = _run_command(["codex", "login", "status"], cwd=repo_root, timeout=30, check=False)
+    status_output = f"{status['stdout']}\n{status['stderr']}"
+    if status["returncode"] != 0 or "Logged in" not in status_output:
+        raise ProposalImplementationError(
+            "codex auth is not ready. Run `codex login --device-auth` and complete the browser login before using autonomous implementation."
+        )
+    output_path = Path(tempfile.mkdtemp(prefix="l2l3-codex-auth-")) / "auth-check.txt"
+    result = _run_command(
+        [
+            "codex",
+            "exec",
+            "-C",
+            str(repo_root),
+            "-m",
+            plan["coder_model"],
+            "-c",
+            f'model_reasoning_effort="{plan["reasoning_effort"]}"',
+            "-s",
+            "read-only",
+            "--ignore-user-config",
+            "--ephemeral",
+            "--color",
+            "never",
+            "-o",
+            str(output_path),
+            "Reply exactly: CODEX_AUTH_READY",
+        ],
+        cwd=repo_root,
+        timeout=180,
+        check=False,
+    )
+    if result["returncode"] != 0:
+        _raise_codex_auth_or_runtime_error(result, "codex auth readiness check failed")
+    try:
+        response = output_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ProposalImplementationError(f"codex auth readiness check did not write output: {exc}") from exc
+    if response != "CODEX_AUTH_READY":
+        raise ProposalImplementationError(f"codex auth readiness check returned unexpected output: {response[:200]}")
 
 
 def _run_proof_commands(commands: list[str], cwd: Path) -> list[dict[str, Any]]:
@@ -454,14 +510,33 @@ def _run_command(
     shell: bool = False,
     check: bool = True,
 ) -> dict[str, Any]:
-    completed = subprocess.run(
-        command,
-        cwd=str(cwd),
-        timeout=timeout,
-        shell=shell,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(cwd),
+            timeout=timeout,
+            shell=shell,
+            text=True,
+            input="",
+            capture_output=True,
+            env={**os.environ, "TERM": os.environ.get("TERM") or "xterm-256color"},
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout if isinstance(exc.stdout, str) else ""
+        stderr = exc.stderr if isinstance(exc.stderr, str) else ""
+        result = {
+            "command": command if isinstance(command, str) else " ".join(command),
+            "returncode": 124,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_tail": stdout[-4000:],
+            "stderr_tail": stderr[-4000:],
+        }
+        if _is_codex_command(command):
+            _raise_codex_auth_or_runtime_error(result, "codex command timed out")
+        if check:
+            raise ProposalImplementationError(f"command timed out: {result['command']}\n{result['stderr_tail'] or result['stdout_tail']}") from exc
+        return result
     result = {
         "command": command if isinstance(command, str) else " ".join(command),
         "returncode": completed.returncode,
@@ -471,8 +546,31 @@ def _run_command(
         "stderr_tail": completed.stderr[-4000:],
     }
     if check and completed.returncode != 0:
+        if _is_codex_command(command):
+            _raise_codex_auth_or_runtime_error(result, "codex command failed")
         raise ProposalImplementationError(f"command failed: {result['command']}\n{result['stderr_tail'] or result['stdout_tail']}")
     return result
+
+
+def _is_codex_command(command: list[str] | str) -> bool:
+    if isinstance(command, str):
+        return command.strip().startswith("codex ")
+    return bool(command) and command[0] == "codex"
+
+
+def _raise_codex_auth_or_runtime_error(result: dict[str, Any], prefix: str) -> None:
+    if _codex_result_has_auth_error(result):
+        raise ProposalImplementationError(
+            f"{prefix}: Codex credentials are missing, expired, or invalid. "
+            "Run `codex logout` and then `codex login --device-auth`, complete the browser login, and retry.\n"
+            f"{result.get('stderr_tail') or result.get('stdout_tail')}"
+        )
+    raise ProposalImplementationError(f"{prefix}: {result['command']}\n{result['stderr_tail'] or result['stdout_tail']}")
+
+
+def _codex_result_has_auth_error(result: dict[str, Any]) -> bool:
+    combined = f"{result.get('stderr', '')}\n{result.get('stdout', '')}"
+    return any(marker.lower() in combined.lower() for marker in CODEX_AUTH_ERROR_MARKERS)
 
 
 def _require_string_list(value: Any, key: str) -> list[str]:
