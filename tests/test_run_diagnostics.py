@@ -423,3 +423,77 @@ def test_invalid_provider_proposal_targets_trend_radar_inputs() -> None:
     assert proposals[0].proposal_type == "improve_policy"
     assert proposals[0].target_component == "trend-radar/input.providers"
     assert proposals[0].failure_signature == "input_validation:trend-radar/input.providers"
+
+
+def test_unknown_failure_auto_creates_stable_diagnosis_category() -> None:
+    task_id = str(uuid4())
+    base_run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "new-worker", "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "new-worker",
+                    "failure_type": "vendor_limit_shape_changed",
+                    "error": "Vendor limit response changed shape for request 81237 and object 9f8a7c6b5d4e3f2a",
+                },
+            }
+        ],
+    }
+    comparable_run = {
+        **base_run,
+        "id": str(uuid4()),
+        "events": [
+            {
+                **base_run["events"][0],
+                "payload": {
+                    **base_run["events"][0]["payload"],
+                    "error": "Vendor limit response changed shape for request 44444 and object aaaaaaaaaaaaaaaa",
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(base_run)
+    comparable_diagnosis, comparable_proposals = analyze_run(comparable_run)
+
+    assert diagnosis.payload["root_cause"] == "runtime_failed"
+    category = diagnosis.payload["diagnosis_category"]
+    assert category["auto_created"] is True
+    assert category["source"] == "auto_created"
+    assert category["key"].startswith("auto:new-worker:vendor-limit-shape-changed:")
+    assert proposals[0].failure_signature == category["key"]
+    assert comparable_diagnosis.payload["diagnosis_category"]["key"] == category["key"]
+    assert comparable_proposals[0].failure_signature == proposals[0].failure_signature
+
+
+def test_auto_created_failure_signature_fits_storage_limit() -> None:
+    task_id = str(uuid4())
+    run = {
+        "id": str(uuid4()),
+        "status": "failed",
+        "tasks": [{"id": task_id, "worker_profile": "worker-" + "x" * 120, "status": "failed"}],
+        "artifacts": [],
+        "evals": [],
+        "events": [
+            {
+                "event_type": "incident_brief",
+                "task_id": task_id,
+                "payload": {
+                    "worker_profile": "worker-" + "x" * 120,
+                    "failure_type": "failure-" + "y" * 120,
+                    "error": "Vendor contract changed with " + ("z" * 240),
+                },
+            }
+        ],
+    }
+
+    diagnosis, proposals = analyze_run(run)
+
+    assert len(diagnosis.payload["diagnosis_category"]["key"]) <= 160
+    assert len(proposals[0].failure_signature) <= 160

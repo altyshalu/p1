@@ -1,11 +1,11 @@
 key: improvement-implementation-worker
-description: Apply approved self-improvement proposals through controlled runtime implementation handlers.
+description: Apply approved self-improvement proposals through controlled handlers or bounded autonomous Codex implementation loops.
 worker_type: sandboxed_subprocess
 entrypoint: l2l3_protocol.workers.proposal_implementation_worker
 allowed_tools: []
 compatible_tools: []
 budget:
-  max_seconds: 30
+  max_seconds: 5400
 input_schema:
   type: object
   required: [proposal]
@@ -20,4 +20,8 @@ stop_conditions:
 memory_policy:
   writes: artifact_only
 external_action_policy:
-  external_actions: none
+  external_actions:
+    - git_branch_create
+    - git_push
+    - github_pr_create
+    - github_pr_merge_when_proven

@@ -17,7 +17,7 @@ def proof_spec_for_proposal(
     root_cause: str | None,
     success_check: str,
 ) -> dict[str, Any]:
-    return {
+    proof_spec = {
         "real_run_required": True,
         "mocks_allowed": False,
         "fallbacks_allowed": False,
@@ -30,6 +30,78 @@ def proof_spec_for_proposal(
         "success_check": success_check,
         "proof_command": f"uv run python scripts/real-before-after-proof.py --baseline-run-id {baseline_run_id}",
     }
+    autonomous = autonomous_implementation_config(
+        target_component=target_component,
+        failure_signature=failure_signature,
+        root_cause=root_cause,
+    )
+    if autonomous is not None:
+        proof_spec["autonomous_implementation"] = autonomous
+    return proof_spec
+
+
+def autonomous_implementation_config(
+    *,
+    target_component: str,
+    failure_signature: str,
+    root_cause: str | None,
+) -> dict[str, Any] | None:
+    if root_cause in {"missing_runtime_dependency", "external_action_policy_violation"}:
+        return None
+    allowed_paths = autonomous_allowed_paths(target_component=target_component, failure_signature=failure_signature)
+    if not allowed_paths:
+        return None
+    return {
+        "enabled": True,
+        "allowed_paths": allowed_paths,
+        "forbidden_paths": [
+            ".env",
+            ".env.local",
+            "taskforce-landing",
+        ],
+        "proof_commands": autonomous_proof_commands(allowed_paths),
+        "max_iterations": 3,
+        "coder_model": "gpt-5.5",
+        "reviewer_model": "gpt-5.4",
+        "reasoning_effort": "medium",
+        "create_pr": True,
+        "auto_merge": False,
+        "require_canonical_real_proof_before_merge": True,
+    }
+
+
+def autonomous_allowed_paths(*, target_component: str, failure_signature: str) -> list[str]:
+    paths: list[str] = []
+    if target_component.startswith("p1-quality-audit") or "p1-quality-audit" in target_component:
+        paths.extend(["scripts/real-p1-quality-audit.py", "tests/test_real_proof_scripts.py"])
+    if target_component.startswith("diagnostics") or failure_signature.startswith("auto:"):
+        paths.extend(["src/l2l3_protocol/runtime/diagnostics.py", "tests/test_run_diagnostics.py"])
+    if target_component.startswith("runtime:") or target_component.startswith("p1-runtime"):
+        paths.extend(["src/l2l3_protocol/runtime", "tests/test_process_runtime.py", "tests/test_run_diagnostics.py"])
+    if target_component.startswith("p1-"):
+        paths.extend(["src/l2l3_protocol/workers/p1_operator_worker.py", "tests/test_p1_operator_worker.py", "tests/test_real_proof_scripts.py"])
+    if target_component.startswith("docs:"):
+        paths.append("docs")
+    deduped: list[str] = []
+    for path in paths:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def autonomous_proof_commands(allowed_paths: list[str]) -> list[str]:
+    commands = ["uv run pytest -q"]
+    if any(path.endswith("diagnostics.py") or "test_run_diagnostics.py" in path for path in allowed_paths):
+        commands.insert(0, "uv run pytest tests/test_run_diagnostics.py -q")
+    if any("real-p1-quality-audit.py" in path or "test_real_proof_scripts.py" in path for path in allowed_paths):
+        commands.insert(0, "uv run pytest tests/test_real_proof_scripts.py -q")
+    if any("p1_operator_worker.py" in path or "test_p1_operator_worker.py" in path for path in allowed_paths):
+        commands.insert(0, "uv run pytest tests/test_p1_operator_worker.py -q")
+    deduped: list[str] = []
+    for command in commands:
+        if command not in deduped:
+            deduped.append(command)
+    return deduped
 
 
 def build_failure_learnings(

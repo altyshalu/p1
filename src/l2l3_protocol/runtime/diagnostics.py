@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 from uuid import UUID
@@ -32,6 +33,7 @@ def analyze_run(state: dict[str, Any]) -> tuple[Artifact, list[ImprovementPropos
     outcome = _outcome(state)
     root_cause = _root_cause(state, evidence)
     low_quality = _low_quality_evals(state)
+    diagnosis_category = _diagnosis_category(root_cause, evidence, low_quality)
     repeated_repair = _repeated_repair(state)
     improvement_needed = root_cause != "none" or bool(low_quality) or repeated_repair
     summary = _summary(state, outcome, root_cause, evidence, low_quality, repeated_repair)
@@ -40,6 +42,7 @@ def analyze_run(state: dict[str, Any]) -> tuple[Artifact, list[ImprovementPropos
         "playbook_key": state.get("playbook_key"),
         "outcome": outcome,
         "root_cause": root_cause,
+        "diagnosis_category": diagnosis_category,
         "summary": summary,
         "evidence": evidence,
         "low_quality_evals": low_quality,
@@ -240,7 +243,7 @@ def _proposal_from_diagnosis(run_id: str, diagnosis: dict[str, Any]) -> Improvem
     evidence = diagnosis.get("evidence", [])
     proposal_type = _proposal_type(root_cause)
     target_component = _target_component(root_cause, evidence, diagnosis.get("low_quality_evals", []))
-    failure_signature = _failure_signature(root_cause, evidence)
+    failure_signature = _failure_signature(root_cause, evidence, diagnosis.get("diagnosis_category", {}))
     success_check = "Repeat a comparable real run and verify the same root cause is absent while required evals still pass."
     return ImprovementProposal(
         run_id=UUID(run_id),
@@ -296,9 +299,13 @@ def _target_component(root_cause: str, evidence: list[dict[str, Any]], low_quali
     return worker
 
 
-def _failure_signature(root_cause: str, evidence: list[dict[str, Any]]) -> str:
+def _failure_signature(root_cause: str, evidence: list[dict[str, Any]], diagnosis_category: dict[str, Any] | None = None) -> str:
     if not evidence:
         return root_cause
+    if root_cause == "runtime_failed" and isinstance(diagnosis_category, dict):
+        category_key = str(diagnosis_category.get("key") or "").strip()
+        if category_key.startswith("auto:"):
+            return category_key
     primary = _primary_evidence(root_cause, evidence)
     missing_env_item = _primary_missing_env_evidence(evidence)
     missing_env_key = _missing_env_key_from_evidence(missing_env_item or primary)
@@ -310,6 +317,92 @@ def _failure_signature(root_cause: str, evidence: list[dict[str, Any]]) -> str:
         return f"{failure_type}:trend-radar/input.providers"
     worker = str(primary.get("worker_profile") or "unknown-worker")
     return f"{failure_type}:{worker}"
+
+
+def _diagnosis_category(root_cause: str, evidence: list[dict[str, Any]], low_quality: list[dict[str, Any]]) -> dict[str, Any]:
+    if root_cause == "none":
+        return {
+            "key": "none",
+            "label": "No diagnosis category",
+            "source": "existing",
+            "auto_created": False,
+            "evidence_refs": [],
+        }
+    if root_cause == "quality_gate_failed" and low_quality:
+        eval_key = str(low_quality[0].get("eval_key") or "unknown-eval")
+        return {
+            "key": f"quality_gate_failed:{eval_key}",
+            "label": f"Quality gate failed: {eval_key}",
+            "source": "existing",
+            "auto_created": False,
+            "evidence_refs": [{"eval_key": item.get("eval_key")} for item in low_quality[:3]],
+        }
+    if root_cause != "runtime_failed" or not evidence:
+        return {
+            "key": root_cause,
+            "label": root_cause.replace("_", " ").title(),
+            "source": "existing",
+            "auto_created": False,
+            "evidence_refs": _category_evidence_refs(evidence),
+        }
+    primary = _primary_evidence(root_cause, evidence)
+    worker = _category_slug(str(primary.get("worker_profile") or "unknown-worker"), limit=42)
+    failure_type = _category_slug(str(primary.get("failure_type") or primary.get("event_type") or "unknown-failure"), limit=42)
+    error_family = _category_slug(_error_family(primary), limit=42)
+    category_key = f"auto:{worker}:{failure_type}:{error_family}"
+    return {
+        "key": category_key,
+        "label": f"Auto-created category for {worker}/{failure_type}",
+        "source": "auto_created",
+        "auto_created": True,
+        "grouping_basis": {
+            "worker_profile": primary.get("worker_profile"),
+            "failure_type": primary.get("failure_type"),
+            "error_family": error_family,
+        },
+        "evidence_refs": _category_evidence_refs(evidence),
+    }
+
+
+def _category_evidence_refs(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "event_type": item.get("event_type"),
+            "task_id": item.get("task_id"),
+            "worker_profile": item.get("worker_profile"),
+            "failure_type": item.get("failure_type"),
+        }
+        for item in evidence[:5]
+    ]
+
+
+def _error_family(item: dict[str, Any]) -> str:
+    payload = item.get("payload", {})
+    if isinstance(payload, dict):
+        structured = payload.get("structured_error")
+        if isinstance(structured, dict):
+            error_type = structured.get("error_type")
+            if isinstance(error_type, str) and error_type.strip():
+                return error_type
+        error_type = payload.get("error_type")
+        if isinstance(error_type, str) and error_type.strip():
+            return error_type
+    haystack = _evidence_haystack(item)
+    if haystack:
+        normalized = re.sub(r"https?://\S+", " url ", haystack.lower())
+        normalized = re.sub(r"\b[0-9a-f]{8,}\b", " id ", normalized)
+        normalized = re.sub(r"\d+", " n ", normalized)
+        words = re.findall(r"[a-z_][a-z0-9_]+", normalized)
+        meaningful = [word for word in words if word not in {"error", "failed", "failure", "real", "request"}]
+        if meaningful:
+            digest = hashlib.sha1(" ".join(meaningful[:16]).encode("utf-8")).hexdigest()[:8]
+            return f"{meaningful[0]}-{digest}"
+    return "unknown-error"
+
+
+def _category_slug(value: str, limit: int = 64) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
+    return slug[:limit] or "unknown"
 
 
 def _is_provider_input_validation(item: dict[str, Any]) -> bool:

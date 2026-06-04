@@ -31,11 +31,15 @@ class L3SandboxExecutor:
             raise L3WorkerExecutionError(f"worker profile missing entrypoint: {work_order.worker_profile}")
         timeout = float(work_order.budget.get("max_seconds", 30))
         env = {
+            "HOME": os.environ.get("HOME", ""),
             "PATH": os.environ.get("PATH", ""),
             "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
             "L2L3_SANDBOX": "1",
         }
         for key in (
+            "CODEX_HOME",
+            "OPENAI_API_KEY",
+            "L2L3_ENABLE_CODEX_IMPLEMENTER",
             "GEMINI_API_KEY",
             "DEEPSEEK_API_KEY",
             "DEEPSEEK_BASE_URL",

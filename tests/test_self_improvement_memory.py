@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from l2l3_protocol.core.schemas import ImprovementProposal
 from l2l3_protocol.runtime.self_improvement import (
+    autonomous_implementation_config,
     build_failure_learnings,
     build_recent_system_review,
     build_regression_case,
@@ -105,6 +106,25 @@ def test_review_can_turn_repeated_learning_into_behavior_gated_proposal() -> Non
     assert proposal.behavior_change_requires_approval is True
     assert proposal.proof_spec["baseline_run_id"] == run_id
     assert proposal.proof_spec["expected_absent_signature"] == "eval_failed:claim-grounding-judge"
+
+
+def test_auto_diagnosis_failure_gets_bounded_autonomous_implementation_config() -> None:
+    config = autonomous_implementation_config(
+        target_component="diagnostics:auto-categories",
+        failure_signature="auto:new-worker:vendor-limit-shape-changed:vendor-12345678",
+        root_cause="runtime_failed",
+    )
+
+    assert config is not None
+    assert config["enabled"] is True
+    assert config["coder_model"] == "gpt-5.5"
+    assert config["reviewer_model"] == "gpt-5.4"
+    assert config["reasoning_effort"] == "medium"
+    assert config["auto_merge"] is False
+    assert config["require_canonical_real_proof_before_merge"] is True
+    assert "src/l2l3_protocol/runtime/diagnostics.py" in config["allowed_paths"]
+    assert "tests/test_run_diagnostics.py" in config["allowed_paths"]
+    assert "uv run pytest tests/test_run_diagnostics.py -q" in config["proof_commands"]
 
 
 def test_proven_failure_becomes_regression_case_and_report_stays_evidence_backed() -> None:
