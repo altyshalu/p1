@@ -134,15 +134,16 @@ Reject:
 - Legal-only background.
 - Academic-only background.
 
-### Gate 3: Product Leadership
+### Gate 3: Product / Growth Mechanics Ownership
 
-The lead must have had real product ownership, not only general management.
+The lead must have operated close enough to the product to understand growth mechanics. This can be product leadership, growth engineering, growth marketing, product architecture, marketplace/growth analytics, or founder-level product ownership. Do not require a formal product title when the evidence shows bottom-up adoption, viral loops, self-serve UX, or other PLG/B2C mechanics.
 
 Pass:
 
 - CPO, VP Product, Head of Product, Lead PM.
 - Founder/co-founder where product ownership is explicit.
 - Growth/product leader responsible for product mechanics.
+- Growth engineer, growth marketer, or product architect responsible for PLG loops.
 - Marketplace/product analytics/monetization leader with clear product influence.
 
 Secondary:
@@ -155,11 +156,11 @@ Reject or down-rank:
 - Corporate manager with no direct product responsibility.
 - Investor-only profile with no operator background.
 
-### Gate 4: Verified Angel or Check-Writer Activity
+### Gate 4: Investor Priority
 
-The lead must have evidence of personally deploying capital.
+The lead should either be an active check-writer or have credible capital potential. Active check-writing is the strongest signal, but senior operators at elite tech companies can still qualify when Vector A and Vector C are strong.
 
-Pass evidence:
+Tier 1 active check-writer evidence:
 
 - AngelList investor profile.
 - Crunchbase personal investor profile.
@@ -171,6 +172,12 @@ Pass evidence:
 - Micro-fund or specialized fund founded by the person.
 - Publicly listed angel investments.
 - Founder/operator with clear personal portfolio.
+
+Tier 2 capital potential evidence:
+
+- Senior director, VP, or executive role at a tech giant or elite high-growth company.
+- Senior engineering, product, or growth leadership with likely cash-flow or equity upside.
+- Strong PLG/B2C operator signal plus credible ecosystem access, even before public angel activity.
 
 Strong investor patterns:
 
@@ -270,113 +277,66 @@ The old server triage used a 100-point score:
 - Investor priority: 0-35 points.
 - Systematic investing signal: 0-20 points.
 
-That score is useful, but the updated ICP is stricter. The merged production score should separate the strongest business requirements more clearly.
+That score is now the production Scorer V2 rubric. The scorer must reason about growth mechanics, not keyword labels. Enterprise SaaS is rejected when it is sales-led, heavy, or top-down; PLG and SMB SaaS is allowed only when the company clearly uses consumer-like mechanics.
 
-### Recommended Production Score
+### Production Scorer V2 Score
 
 Total: 100 points.
 
-#### 1. B2C / PLG Product DNA: 0-30 points
+#### Vector A. Viral B2C / PLG DNA: 0-45 points
 
-30 points:
+35-45 points:
 
 - Scaled mass-market consumer, mobile, social, gaming, marketplace, consumer fintech, or viral product.
 - Clear evidence of growth, monetization, retention, marketplace dynamics, or user-scale product mechanics.
+- Examples: Uber, TikTok, Revolut, Airbnb.
 
-20-25 points:
+25-35 points:
 
-- Strong PLG or bottom-up product-led background with consumer-like adoption.
-- Examples: Notion, Figma, Slack, Dropbox, Wise, Trello, Superhuman, Box-like product-led companies.
+- PLG or SMB B2B exception with consumer-like adoption mechanics.
+- Evidence can include bottom-up adoption, self-serve onboarding, viral invites, community loops, creator/user growth, high-velocity UX, or product-led expansion.
+- Examples: HubSpot, Trello, Wise, Notion, Figma, Slack, Dropbox, Superhuman, Box.
 
 10-15 points:
 
 - Mixed product background with some consumer or PLG evidence, but not the core career story.
 
-0-5 points:
+0 points:
 
-- Enterprise-only, corporate, consulting, finance, heavy industry, legal, biotech, or unclear product DNA.
+- Enterprise noise: careers spent in heavy Enterprise B2B SaaS, Oracle/SAP/Workday-style sales-led software, consulting, commercial banking, biotech, defense/military, heavy industry, legal, corporate finance, or unclear product DNA.
 
-#### 2. Product Leadership: 0-20 points
+#### Vector B. Investor Priority: 0-35 points
 
-20 points:
+25-35 points:
 
-- CPO, VP Product, Head of Product, Lead PM, or product-owning founder at a scaled relevant company.
+- Active check-writer.
+- Explicit signals include Sequoia Scout, syndicate lead, angel investor, micro-fund founder, or public personal startup portfolio.
 
-15 points:
+10-20 points:
 
-- Senior PM, growth/product lead, marketplace/product analytics lead, or monetization lead with clear ownership.
+- Capital potential.
+- Senior directors, VPs, engineering leaders, product leaders, and senior operators at tech giants or elite high-growth companies who plausibly have cash-flow/equity upside to invest, even without explicit angel history.
 
-10 points:
+0 points:
 
-- Founder/CEO with some product evidence but no explicit product title.
+- Pure employee profile.
+- Mid-level employees with no equity upside, investment signal, or capital potential.
 
-0-5 points:
-
-- General business, strategy, investing, finance, or advisory role without product ownership.
-
-#### 3. Verified Angel / Check-Writer Activity: 0-25 points
-
-25 points:
-
-- Public personal portfolio, AngelList/Crunchbase/Dealroom/PitchBook/NfX Signal evidence, syndicate lead profile, or micro-fund founder evidence.
+#### Vector C. Systematic / Quant Signal: 0-20 points
 
 15-20 points:
 
-- Strong public angel/investor claims with some portfolio evidence, but not fully complete.
+- Explicit data-driven, algorithmic, quant, ML, analytics, thesis-driven, signal-based, metrics-based, evidence-based, or framework-based language.
+- Strong examples include thesis-driven, conviction, risk-adjusted, systematic, algorithmic, metrics-based, quant, or evidence-based investing/product work.
 
 5-10 points:
 
-- Investing interest, advisory activity, or ecosystem participation without clear check-writing proof.
-
-0 points:
-
-- No personal investing evidence.
-- Corporate VC only.
-- Investor relations only.
-- Mentor/advisor only.
-
-#### 4. Liquidity / Elite Ecosystem Signal: 0-10 points
-
-10 points:
-
-- Major exit, unicorn equity path, or senior role at elite scaled company.
-- Examples: Amazon, ByteDance/TikTok, Binance, Uber, Tesla, Yahoo, Yandex, Meta, Airbnb, Stripe, Revolut, Wise, Carta, AngelList.
-
-5 points:
-
-- Strong high-growth startup or known ecosystem, but no clear liquidity event.
-
-0 points:
-
-- No evidence of liquidity or elite ecosystem access.
-
-#### 5. Systematic Product / Investing Fit: 0-10 points
-
-10 points:
-
-- Explicit data-driven, algorithmic, quant, ML, analytics, thesis-driven, signal-based, metrics-based, evidence-based, or framework-based language.
-
-5 points:
-
 - Background implies strong structured thinking: analytics leader, data scientist, product ops, growth analytics, investment/product infrastructure.
+- Growth engineers, heads of analytics, data scientists, product ops, and product infrastructure leaders can score here even when their public profile is less explicit.
 
 0 points:
 
-- Purely qualitative profile with no systematic signal.
-
-#### 6. Geography and Language Fit: 0-5 points
-
-5 points:
-
-- Priority hub and English-language profile.
-
-3 points:
-
-- English-language profile outside priority hubs but still reachable/relevant.
-
-0 points:
-
-- Excluded geography or non-English profile.
+- Purely qualitative profile focused on brand, qualitative sales, or emotional storytelling without analytical signal.
 
 ## Score Interpretation
 

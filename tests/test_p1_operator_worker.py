@@ -823,16 +823,16 @@ def test_p1_request_json_retries_transient_get_http_errors(monkeypatch) -> None:
     assert calls["count"] == 2
 
 
-def test_p1_triage_blocks_high_score_without_check_writer_proof(monkeypatch) -> None:
+def test_p1_triage_allows_capital_potential_without_check_writer_proof(monkeypatch) -> None:
     monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
     monkeypatch.setattr(
         "l2l3_protocol.workers.p1_operator_worker._gemini_json",
         lambda _client, _prompt: {
-            "b2c_plg_dna_score": 30,
+            "b2c_plg_dna_score": 45,
             "product_leadership_score": 20,
             "verified_angel_score": 20,
             "liquidity_ecosystem_score": 10,
-            "systematic_fit_score": 10,
+            "systematic_fit_score": 15,
             "geography_language_score": 5,
             "hard_gates": {
                 "b2c_or_plg_product_experience": True,
@@ -843,7 +843,7 @@ def test_p1_triage_blocks_high_score_without_check_writer_proof(monkeypatch) -> 
                 "excluded_profile_type": False,
             },
             "evidence_urls": ["https://www.linkedin.com/in/operator"],
-            "reasoning": "Strong product operator, but no personal angel portfolio proof.",
+            "reasoning": "Strong consumer product operator with capital potential, but no personal angel portfolio proof.",
         },
     )
 
@@ -864,10 +864,11 @@ def test_p1_triage_blocks_high_score_without_check_writer_proof(monkeypatch) -> 
     )
 
     triage = scored["triage_scores"][0]["triage"]
-    assert triage["total_score"] == 95
-    assert triage["qualified"] is False
-    assert triage["status"] == "needs_enrichment"
-    assert triage["missing_required_gates"] == ["verified_angel_or_check_writer"]
+    assert triage["total_score"] == 80
+    assert triage["verified_angel_score"] == 20
+    assert triage["qualified"] is True
+    assert triage["status"] == "gateway_eligible"
+    assert triage["missing_required_gates"] == []
 
 
 def test_p1_triage_allows_only_gateway_eligible_golden_icp(monkeypatch) -> None:
@@ -875,11 +876,11 @@ def test_p1_triage_allows_only_gateway_eligible_golden_icp(monkeypatch) -> None:
     monkeypatch.setattr(
         "l2l3_protocol.workers.p1_operator_worker._gemini_json",
         lambda _client, _prompt: {
-            "b2c_plg_dna_score": 28,
+            "b2c_plg_dna_score": 45,
             "product_leadership_score": 20,
-            "verified_angel_score": 25,
+            "verified_angel_score": 35,
             "liquidity_ecosystem_score": 8,
-            "systematic_fit_score": 8,
+            "systematic_fit_score": 20,
             "geography_language_score": 5,
             "hard_gates": {
                 "b2c_or_plg_product_experience": True,
@@ -918,6 +919,99 @@ def test_p1_triage_allows_only_gateway_eligible_golden_icp(monkeypatch) -> None:
     assert dossiers["p1_dossiers"][0]["historical_context"]["p1_hard_gates"]["verified_angel_or_check_writer"] is True
 
 
+def test_p1_triage_allows_plg_smb_exception(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "b2c_plg_dna_score": 35,
+            "product_leadership_score": 20,
+            "verified_angel_score": 20,
+            "liquidity_ecosystem_score": 8,
+            "systematic_fit_score": 15,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": True,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": False,
+                "geography_language_fit": True,
+                "excluded_industry": False,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/plgoperator"],
+            "reasoning": "Bottom-up PLG operator from Notion/Figma-style SaaS with viral product mechanics and capital potential.",
+        },
+    )
+
+    scored = score_triage(
+        {
+            "inputs": {
+                "normalized_leads": [
+                    {
+                        "lead_id": "lead-plg",
+                        "name": "PLG Operator",
+                        "headline": "Growth product architect at Notion-style PLG SaaS",
+                        "linkedin_url": "https://www.linkedin.com/in/plgoperator",
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    triage = scored["triage_scores"][0]["triage"]
+    assert triage["total_score"] == 70
+    assert triage["qualified"] is True
+    assert triage["status"] == "gateway_eligible"
+
+
+def test_p1_triage_rejects_heavy_enterprise_saas_noise(monkeypatch) -> None:
+    monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
+    monkeypatch.setattr(
+        "l2l3_protocol.workers.p1_operator_worker._gemini_json",
+        lambda _client, _prompt: {
+            "b2c_plg_dna_score": 0,
+            "product_leadership_score": 20,
+            "verified_angel_score": 20,
+            "liquidity_ecosystem_score": 10,
+            "systematic_fit_score": 20,
+            "geography_language_score": 5,
+            "hard_gates": {
+                "b2c_or_plg_product_experience": False,
+                "product_leadership": True,
+                "verified_angel_or_check_writer": False,
+                "geography_language_fit": True,
+                "excluded_industry": True,
+                "excluded_profile_type": False,
+            },
+            "evidence_urls": ["https://www.linkedin.com/in/enterpriseoperator"],
+            "reasoning": "Sales-led enterprise SaaS background without PLG or consumer-like growth mechanics.",
+        },
+    )
+
+    scored = score_triage(
+        {
+            "inputs": {
+                "normalized_leads": [
+                    {
+                        "lead_id": "lead-enterprise",
+                        "name": "Enterprise Operator",
+                        "headline": "Enterprise SaaS sales leader at Oracle/SAP-style company",
+                        "linkedin_url": "https://www.linkedin.com/in/enterpriseoperator",
+                    }
+                ]
+            }
+        },
+        {},
+    )
+
+    triage = scored["triage_scores"][0]["triage"]
+    assert triage["b2c_plg_dna_score"] == 0
+    assert triage["blocking_gates"] == ["excluded_industry"]
+    assert triage["qualified"] is False
+    assert triage["status"] == "reject"
+
+
 def test_p1_triage_cache_reuses_real_scoring_by_evidence_hash(monkeypatch, tmp_path: Path) -> None:
     calls = {"count": 0}
     monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
@@ -925,11 +1019,11 @@ def test_p1_triage_cache_reuses_real_scoring_by_evidence_hash(monkeypatch, tmp_p
     def fake_gemini_json(_client, _prompt):
         calls["count"] += 1
         return {
-            "b2c_plg_dna_score": 28,
+            "b2c_plg_dna_score": 45,
             "product_leadership_score": 20,
-            "verified_angel_score": 25,
+            "verified_angel_score": 35,
             "liquidity_ecosystem_score": 8,
-            "systematic_fit_score": 8,
+            "systematic_fit_score": 20,
             "geography_language_score": 5,
             "hard_gates": {
                 "b2c_or_plg_product_experience": True,
@@ -975,11 +1069,11 @@ def test_p1_triage_cache_hit_does_not_require_gemini_client(monkeypatch, tmp_pat
     def fake_gemini_json(_client, _prompt):
         calls["count"] += 1
         return {
-            "b2c_plg_dna_score": 28,
+            "b2c_plg_dna_score": 45,
             "product_leadership_score": 20,
-            "verified_angel_score": 25,
+            "verified_angel_score": 35,
             "liquidity_ecosystem_score": 8,
-            "systematic_fit_score": 8,
+            "systematic_fit_score": 20,
             "geography_language_score": 5,
             "hard_gates": {
                 "b2c_or_plg_product_experience": True,
@@ -1087,12 +1181,12 @@ def test_p1_triage_cache_fails_on_semantically_invalid_payload(monkeypatch, tmp_
     cache_dir = tmp_path / "triage-cache"
     cache_dir.mkdir()
     triage = {
-        "b2c_plg_dna_score": 28,
-        "product_leadership_score": 20,
-        "verified_angel_score": 25,
-        "liquidity_ecosystem_score": 8,
-        "systematic_fit_score": 8,
-        "geography_language_score": 5,
+        "b2c_plg_dna_score": 45,
+        "product_leadership_score": 0,
+        "verified_angel_score": 35,
+        "liquidity_ecosystem_score": 0,
+        "systematic_fit_score": 20,
+        "geography_language_score": 0,
         "hard_gates": {
             "b2c_or_plg_product_experience": True,
             "product_leadership": True,
@@ -1103,7 +1197,7 @@ def test_p1_triage_cache_fails_on_semantically_invalid_payload(monkeypatch, tmp_
         },
         "evidence_urls": ["https://www.linkedin.com/in/productangel"],
         "reasoning": "Product leader with public angel portfolio.",
-        "total_score": 88,
+        "total_score": 100,
         "quality_band": "gold",
         "missing_required_gates": [],
         "blocking_gates": [],
@@ -1140,12 +1234,12 @@ def test_p1_triage_cache_fails_on_inconsistent_gate_lists(monkeypatch, tmp_path:
     cache_dir = tmp_path / "triage-cache"
     cache_dir.mkdir()
     triage = {
-        "b2c_plg_dna_score": 28,
-        "product_leadership_score": 20,
-        "verified_angel_score": 25,
-        "liquidity_ecosystem_score": 8,
-        "systematic_fit_score": 8,
-        "geography_language_score": 5,
+        "b2c_plg_dna_score": 45,
+        "product_leadership_score": 0,
+        "verified_angel_score": 35,
+        "liquidity_ecosystem_score": 0,
+        "systematic_fit_score": 20,
+        "geography_language_score": 0,
         "hard_gates": {
             "b2c_or_plg_product_experience": True,
             "product_leadership": True,
@@ -1156,14 +1250,14 @@ def test_p1_triage_cache_fails_on_inconsistent_gate_lists(monkeypatch, tmp_path:
         },
         "evidence_urls": ["https://www.linkedin.com/in/productangel"],
         "reasoning": "Product leader with public angel portfolio.",
-        "total_score": 88,
+        "total_score": 100,
         "quality_band": "gold",
-        "missing_required_gates": ["verified_angel_or_check_writer"],
+        "missing_required_gates": ["b2c_or_plg_product_experience"],
         "blocking_gates": [],
         "qualified": False,
         "datalake_eligible": False,
         "status": "reject",
-        "reject_reason": "missing_required_gates:verified_angel_or_check_writer",
+        "reject_reason": "missing_required_gates:b2c_or_plg_product_experience",
     }
     (cache_dir / f"{cache_key}.json").write_text(
         json.dumps({"version": P1_TRIAGE_CACHE_VERSION, "cache_key": cache_key, "triage": triage}),
@@ -1193,12 +1287,12 @@ def test_p1_triage_cache_fails_on_unknown_gate_names(monkeypatch, tmp_path: Path
     cache_dir = tmp_path / "triage-cache"
     cache_dir.mkdir()
     triage = {
-        "b2c_plg_dna_score": 28,
-        "product_leadership_score": 20,
-        "verified_angel_score": 25,
-        "liquidity_ecosystem_score": 8,
-        "systematic_fit_score": 8,
-        "geography_language_score": 5,
+        "b2c_plg_dna_score": 45,
+        "product_leadership_score": 0,
+        "verified_angel_score": 35,
+        "liquidity_ecosystem_score": 0,
+        "systematic_fit_score": 20,
+        "geography_language_score": 0,
         "hard_gates": {
             "b2c_or_plg_product_experience": True,
             "product_leadership": True,
@@ -1209,7 +1303,7 @@ def test_p1_triage_cache_fails_on_unknown_gate_names(monkeypatch, tmp_path: Path
         },
         "evidence_urls": ["https://www.linkedin.com/in/productangel"],
         "reasoning": "Product leader with public angel portfolio.",
-        "total_score": 88,
+        "total_score": 100,
         "quality_band": "gold",
         "missing_required_gates": ["totally_fake_gate"],
         "blocking_gates": [],
@@ -1261,7 +1355,7 @@ def test_p1_dossiers_require_strict_true_qualification() -> None:
         raise AssertionError("expected non-boolean qualified value to fail dossier creation")
 
 
-def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch) -> None:
+def test_p1_gateway_requires_investor_priority_product_and_evidence(monkeypatch) -> None:
     monkeypatch.setattr("l2l3_protocol.workers.p1_operator_worker._gemini_client", lambda: object())
     monkeypatch.setattr(
         "l2l3_protocol.workers.p1_operator_worker._gemini_json",
@@ -1276,7 +1370,7 @@ def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch)
             "exclusion_signal": "NO",
             "current_role_verified": "Independent product advisor",
             "evidence_urls": ["https://www.linkedin.com/in/operator"],
-            "mythos_dossier": "Strong operator, but no personal investing evidence.",
+            "mythos_dossier": "Strong operator, but no investor priority evidence.",
         },
     )
 
@@ -1299,7 +1393,7 @@ def test_p1_gateway_requires_verified_investor_product_and_evidence(monkeypatch)
 
     gateway = result["gateway_evaluations"][0]["gateway"]
     assert gateway["decision"] == "needs_more_evidence"
-    assert gateway["decision_reasons"] == ["missing_verified_angel_or_check_writer_fit"]
+    assert gateway["decision_reasons"] == ["missing_investor_priority_fit"]
 
 
 def test_p1_gateway_approves_full_golden_icp(monkeypatch) -> None:

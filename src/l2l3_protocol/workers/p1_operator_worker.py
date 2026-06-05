@@ -20,7 +20,7 @@ HTTP_TIMEOUT_SECONDS = 30
 HTTP_GET_RETRY_DELAYS_SECONDS = (3, 8, 15)
 USER_AGENT = "l2l3-protocol/0.1 real-p1-operator-outreach"
 P1_PROVIDER_CACHE_VERSION = "p1-provider-cache-v1"
-P1_TRIAGE_CACHE_VERSION = "p1-triage-cache-v1"
+P1_TRIAGE_CACHE_VERSION = "p1-triage-cache-v2"
 P1_PROVIDER_CACHE_TTL_SECONDS = 7 * 24 * 60 * 60
 P1_DATALAKE_MIN_SCORE = 50
 P1_STRONG_MIN_SCORE = 70
@@ -50,8 +50,6 @@ IDENTITY_STATUS_REVIEW = "needs_review"
 
 P1_REQUIRED_TRIAGE_GATES = (
     "b2c_or_plg_product_experience",
-    "product_leadership",
-    "verified_angel_or_check_writer",
     "geography_language_fit",
 )
 
@@ -292,18 +290,28 @@ Lead:
 {json.dumps(lead, ensure_ascii=False)}
 
 Rules:
-- Use the canonical P1 Golden ICP: B2C/PLG product leader AND verified angel/check-writer.
-- b2c_plg_dna_score: 0-30 for consumer, PLG, mobile, social, gaming, marketplace, fintech, viral, product-led, user-scale DNA.
-- product_leadership_score: 0-20 for CPO, VP Product, Head of Product, Lead PM, product-owning founder, growth/product owner.
-- verified_angel_score: 0-25 for explicit personal angel investing, syndicate, portfolio, AngelList, Crunchbase, Dealroom, PitchBook, NfX Signal, or micro-fund proof.
-- liquidity_ecosystem_score: 0-10 for unicorn/major exit/elite product ecosystem.
-- systematic_fit_score: 0-10 for data-driven, AI, ML, quant, systematic, framework, evidence, metrics, analytics.
-- geography_language_score: 0-5 for priority hub and English-language fit.
+- Use Scorer V2 semantic triage: score the growth mechanics of the person's companies, not keyword lists.
+- Reject heavy Enterprise SaaS and other slow-cycle B2B profiles. Keep Viral B2C and PLG/SMB operators.
+- b2c_plg_dna_score: 0-45 for Viral B2C and PLG DNA.
+  - 35-45: mass-market mobile apps, consumer internet, gaming, viral fintech, social media, marketplaces, D2C, or other high-velocity consumer products such as Uber, TikTok, Revolut, Airbnb.
+  - 25-35: PLG and SMB B2B exception with viral consumer-like mechanics: bottom-up adoption, self-serve UX, viral invites, community loops, or high-velocity product-led growth. Examples: HubSpot, Trello, Wise, Notion, Figma, Slack, Dropbox, Superhuman, Box.
+  - 0: Enterprise Noise: heavy enterprise B2B such as Oracle, SAP, Workday, Salesforce-style sales-led enterprise, consulting, commercial banking, biotech, defense/military, heavy industry, legal, or corporate finance.
+- product_leadership_score: deprecated compatibility field; return 0.
+- verified_angel_score: 0-35 for Investor Priority.
+  - 25-35: active check-writer: Sequoia Scout, syndicate lead, angel investor, micro-fund founder, or public personal startup portfolio.
+  - 10-20: capital potential: senior directors, VPs, engineering/product leaders at tech giants or elite high-growth companies with plausible investable cash flow, even without explicit angel history.
+  - 0: pure employee, mid-level employee, or no investment/capital signal.
+- liquidity_ecosystem_score: deprecated compatibility field; return 0.
+- systematic_fit_score: 0-20 for Systematic/Quant Signal.
+  - 15-20: explicit words or evidence like thesis-driven, conviction, risk-adjusted, systematic, algorithmic, metrics-based, quant, evidence-based, AI/ML, or data-driven.
+  - 5-10: analytical background such as data scientist, head of analytics, product ops, growth engineer, growth analytics, or infrastructure/product systems.
+  - 0: purely qualitative brand, sales, or emotional storytelling profile.
+- geography_language_score: deprecated compatibility field; return 0 unless current P1 geography/language policy is explicitly relevant.
 - hard_gates.b2c_or_plg_product_experience true only when real product-led B2C/PLG evidence exists.
-- hard_gates.product_leadership true only when real product ownership exists.
+- hard_gates.product_leadership true when real product, growth engineering, growth marketing, or product architecture ownership exists.
 - hard_gates.verified_angel_or_check_writer true only when personal investing/check-writing evidence exists, not advisor/mentor/VC title alone.
 - hard_gates.geography_language_fit false for India, LATAM, or non-English profiles under current P1 policy.
-- hard_gates.excluded_industry true for enterprise-only B2B SaaS, defense/military, biotech, heavy industry, legal, corporate finance, academic-only, consulting-only.
+- hard_gates.excluded_industry true for enterprise-only B2B SaaS, sales-led enterprise software, defense/military, biotech, heavy industry, legal, corporate finance, commercial banking, academic-only, consulting-only.
 - hard_gates.excluded_profile_type true for mentor-only, advisor-only, investor relations, corporate VC only, traditional VC partner without personal portfolio, or investor-only without operator history.
 - evidence_urls must include the source URLs supporting the score when available.
 Return JSON only with keys: b2c_plg_dna_score, product_leadership_score, verified_angel_score, liquidity_ecosystem_score, systematic_fit_score, geography_language_score, hard_gates, evidence_urls, reasoning.
@@ -311,12 +319,12 @@ Return JSON only with keys: b2c_plg_dna_score, product_leadership_score, verifie
 
 
 def _normalize_triage_result(response: dict[str, Any]) -> dict[str, Any]:
-    b2c_score = _bounded_int(response.get("b2c_plg_dna_score", response.get("b2c_dna_score")), 0, 30)
-    product_score = _bounded_int(response.get("product_leadership_score"), 0, 20)
-    angel_score = _bounded_int(response.get("verified_angel_score", response.get("investor_score")), 0, 25)
-    liquidity_score = _bounded_int(response.get("liquidity_ecosystem_score"), 0, 10)
-    systematic_score = _bounded_int(response.get("systematic_fit_score", response.get("systematic_score")), 0, 10)
-    geography_score = _bounded_int(response.get("geography_language_score"), 0, 5)
+    b2c_score = _bounded_int(response.get("b2c_plg_dna_score", response.get("b2c_dna_score")), 0, 45)
+    product_score = 0
+    angel_score = _bounded_int(response.get("verified_angel_score", response.get("investor_score")), 0, 35)
+    liquidity_score = 0
+    systematic_score = _bounded_int(response.get("systematic_fit_score", response.get("systematic_score")), 0, 20)
+    geography_score = 0
     hard_gates = response.get("hard_gates") if isinstance(response.get("hard_gates"), dict) else {}
     normalized_gates = {
         "b2c_or_plg_product_experience": _bool_gate(hard_gates.get("b2c_or_plg_product_experience")),
@@ -502,14 +510,14 @@ Dossier:
 
 Rules:
 - identity_confidence 0-100.
-- product_b2c_fit PASS only when the dossier has B2C/PLG product-building evidence.
-- product_leadership_fit PASS only when the person owned product as CPO, VP Product, Head of Product, Lead PM, or product-owning founder/operator.
-- verified_investor_fit PASS only when there is personal angel/check-writing, syndicate, portfolio, AngelList, Crunchbase, Dealroom, PitchBook, NfX Signal, or micro-fund proof.
+- product_b2c_fit PASS only when the dossier has B2C/PLG product-building evidence, including PLG/SMB companies with bottom-up, viral, self-serve, or consumer-like growth mechanics.
+- product_leadership_fit PASS when the person owned product, growth engineering, growth marketing, product architecture, marketplace/product analytics, or founder-level product mechanics.
+- verified_investor_fit PASS when there is Investor Priority: either active personal angel/check-writing evidence or capital potential from senior product/engineering/growth leadership at tech giants or elite high-growth companies.
 - bandwidth_signal HIGH only for advisors, angel investors, solo/fractional/stealth builders, independent operators, or not currently overloaded.
 - bandwidth_signal LOW for active C-suite/VP/Director/Partner/GP at substantial operating company.
 - liquidity_signal YES when unicorn/major exit/known high-growth operator/investor evidence exists.
 - systematic_alignment YES when data/AI/product/scaling/systematic evidence exists.
-- exclusion_signal YES when the profile is enterprise-only, corporate finance, defense/military, biotech, heavy industry, legal, academic-only, consulting-only, India, LATAM, non-English, mentor-only, advisor-only, corporate VC-only, or traditional VC-only without personal portfolio.
+- exclusion_signal YES when the profile is enterprise-only or sales-led enterprise SaaS, corporate finance, commercial banking, defense/military, biotech, heavy industry, legal, academic-only, consulting-only, India, LATAM, non-English, mentor-only, advisor-only, corporate VC-only, or traditional VC-only without personal portfolio.
 - evidence_urls must include the URLs used to support the decision.
 Return JSON only with keys: identity_confidence, product_b2c_fit, product_leadership_fit, verified_investor_fit, bandwidth_signal, liquidity_signal, systematic_alignment, exclusion_signal, current_role_verified, evidence_urls, mythos_dossier.
 """,
@@ -585,7 +593,7 @@ def _gateway_decision(
     if not product_leadership:
         reasons.append("missing_product_leadership_fit")
     if not verified_investor:
-        reasons.append("missing_verified_angel_or_check_writer_fit")
+        reasons.append("missing_investor_priority_fit")
     if bandwidth != "HIGH":
         reasons.append(f"bandwidth_not_high:{bandwidth}")
     if liquidity != "YES":
@@ -1166,12 +1174,12 @@ def _validate_cached_triage_payload(triage: dict[str, Any], path: Path) -> None:
     if missing:
         raise P1WorkerInputError(f"P1 triage cache has invalid payload: {path}; missing keys: {','.join(missing)}")
     score_ranges = {
-        "b2c_plg_dna_score": (0, 30),
-        "product_leadership_score": (0, 20),
-        "verified_angel_score": (0, 25),
-        "liquidity_ecosystem_score": (0, 10),
-        "systematic_fit_score": (0, 10),
-        "geography_language_score": (0, 5),
+        "b2c_plg_dna_score": (0, 45),
+        "product_leadership_score": (0, 0),
+        "verified_angel_score": (0, 35),
+        "liquidity_ecosystem_score": (0, 0),
+        "systematic_fit_score": (0, 20),
+        "geography_language_score": (0, 0),
         "total_score": (0, 100),
     }
     for key, (minimum, maximum) in score_ranges.items():
