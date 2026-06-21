@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P1 Ops Local - 2D Office Game</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Inter:wght@500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles/p1-ops-office-game.css" />
+  </head>
+  <body>
+    <main class="ops-shell">
+      <header class="topbar" aria-label="Run status">
+        <section class="brand">
+          <div class="gear-mark" aria-hidden="true">P1</div>
+          <div>
+            <p>P1 Ops Local</p>
+            <span>altyshalu/p1 operator cockpit</span>
+          </div>
+        </section>
+        <section class="run-meta">
+          <div><span>Run ID</span><strong>RUN-P1-2026-06-21-0042</strong></div>
+          <div><span>Playbook</span><strong>p1-operator-outreach</strong></div>
+          <div><span>Strategy</span><strong class="good">deterministic</strong></div>
+        </section>
+        <section class="metric-row" aria-label="Run metrics">
+          <div><span>Completed</span><strong id="completedCount">24</strong></div>
+          <div><span>Pending</span><strong id="pendingCount">9</strong></div>
+          <div><span>Failed</span><strong id="failedCount">2</strong></div>
+          <div><span>Pass Rate</span><strong id="passRate">78.6%</strong></div>
+          <div><span>Proof Script</span><strong class="good">READY</strong></div>
+        </section>
+        <section class="clock">
+          <strong id="opsClock">10:42:18</strong>
+          <span>LOCAL UTC+06:00</span>
+        </section>
+      </header>
+
+      <section class="workbench">
+        <aside class="runs-panel" aria-label="Runs">
+          <div class="panel-title">
+            <strong>Runs</strong>
+            <button id="newIncidentButton" type="button" title="Inject incident">!</button>
+          </div>
+          <input class="search" value="Search runs..." aria-label="Search runs" readonly />
+          <div class="run-list" id="runList"></div>
+          <div class="hint-card">
+            <span class="target-box"></span>
+            <strong>Controls</strong>
+            <p>Click an agent or station. Press 1-5 to dispatch worker-01 through worker-05. Space pauses the floor.</p>
+          </div>
+        </aside>
+
+        <section class="floor-wrap" aria-label="P1 operations floor game">
+          <div class="game-toolbar">
+            <div>
+              <p>P1 Operator Outreach Floor</p>
+              <strong id="selectedLabel">Selected: p1-source-collector</strong>
+            </div>
+            <div class="toolbar-actions">
+              <button class="tool active" id="pauseButton" type="button">Pause</button>
+              <button class="tool" id="speedButton" type="button">1x</button>
+              <button class="tool warn" id="assignButton" type="button">Dispatch Task</button>
+            </div>
+          </div>
+          <canvas id="opsCanvas" width="1280" height="720" aria-label="Animated office with working agents"></canvas>
+        </section>
+
+        <aside class="details-panel" aria-label="Selected work order">
+          <div class="panel-title">
+            <strong id="selectedTitle">Selected: WO-00124</strong>
+            <span id="selectedState">In Progress</span>
+          </div>
+          <section class="agent-card">
+            <div class="portrait" id="agentPortrait"></div>
+            <div>
+              <strong id="agentName">p1-source-collector</strong>
+              <span id="agentDesk">Stage: Source Batches</span>
+              <span id="agentTask">collect_source_batch</span>
+            </div>
+          </section>
+          <section class="data-card">
+            <h2>Work Order</h2>
+            <p id="workOrderId">WO-00124</p>
+            <span id="workOrderText">Outreach - Initial Contact</span>
+            <div class="progress-track"><i id="workProgress"></i></div>
+          </section>
+          <section class="data-card files">
+            <h2>Inputs</h2>
+            <span>mode: full_pipeline</span>
+            <span>limit: required</span>
+            <span>sources: exa, apify_*</span>
+          </section>
+          <section class="data-card output">
+            <h2>Output Artifact</h2>
+            <p id="artifactName">draft_outreach_email.md</p>
+            <span id="artifactSize">412 B generated</span>
+          </section>
+          <section class="data-card result">
+            <h2>Eval Result</h2>
+            <div class="result-grid">
+              <div><span>Pass Rate</span><strong id="evalRate">66.7%</strong></div>
+              <div><span>Checks</span><strong id="evalChecks">4 / 6</strong></div>
+            </div>
+          </section>
+          <section class="data-card incident">
+            <h2>Incident Brief</h2>
+            <p id="incidentText">Missing credentials, tools, inputs, or permissions fail explicitly.</p>
+            <span>No demo leads. No hidden fallback.</span>
+          </section>
+        </aside>
+      </section>
+
+      <footer class="timeline" aria-label="Chronological events">
+        <div class="timeline-head">
+          <strong>Timeline</strong>
+          <span>Chronological Events</span>
+        </div>
+        <div class="event-row" id="eventRow"></div>
+      </footer>
+    </main>
+
+    <script src="scripts/p1-ops-office-game.js"></script>
+  </body>
+</html>
