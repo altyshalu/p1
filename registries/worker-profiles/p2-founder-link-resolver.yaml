@@ -1,0 +1,20 @@
+key: p2-founder-link-resolver
+description: Split multiple founder LinkedIn URLs into separate fields without creating extra startup rows.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [normalized_startups]
+  properties:
+    normalized_startups: {type: array}
+output_schema:
+  type: object
+  required: [founder_links_resolved]
+  properties:
+    founder_links_resolved: {type: array}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

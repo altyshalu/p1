@@ -1,0 +1,21 @@
+key: p2-icp-scorer
+description: Compute Ohio/VC Score startup ICP fit and separate evidence quality from fit.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [sector_classification]
+  properties:
+    sector_classification: {type: array}
+output_schema:
+  type: object
+  required: [icp_scores, score_summary]
+  properties:
+    icp_scores: {type: array}
+    score_summary: {type: object}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

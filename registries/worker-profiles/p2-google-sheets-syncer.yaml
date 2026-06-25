@@ -1,0 +1,27 @@
+key: p2-google-sheets-syncer
+description: Approval-gated replacement sync for the P2 Suitable Startups Google Sheets tab.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: [google-sheets-write-tool]
+compatible_tools: [google-sheets-write-tool]
+budget: {max_seconds: 120}
+input_schema:
+  type: object
+  required: [allow_google_sheet_write]
+  properties:
+    allow_google_sheet_write: {type: boolean}
+    spreadsheet_id: {type: string}
+    google_service_account_path: {type: string}
+    approval_package: {type: object}
+    output_tab: {type: string}
+output_schema:
+  type: object
+  required: [sync_result, external_actions]
+  properties:
+    sync_result: {type: object}
+    external_actions: {type: array}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy:
+  external_actions: google_sheets_write
+  publish_allowed: true

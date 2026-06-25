@@ -1,0 +1,53 @@
+key: p2-startup-sourcing
+name: P2 Startup Sourcing
+version: 0.1.0
+purpose: Build a verified, deduped, ICP-approved Suitable Startups list from Google Sheets tabs.
+execution_strategy: deterministic_p2_startup_sourcing
+max_supervisor_turns: 16
+max_tasks_per_turn: 2
+allowed_workers:
+  - p2-sheet-reader
+  - p2-startup-normalizer
+  - p2-founder-link-resolver
+  - p2-website-verifier
+  - p2-sector-classifier
+  - p2-icp-scorer
+  - p2-synthetic-benchmarker
+  - p2-startup-judge
+  - p2-suitable-list-builder
+  - p2-quality-judge
+  - p2-google-sheets-syncer
+  - p2-metrics-reporter
+allowed_tools:
+  - google-sheets-read-tool
+  - google-sheets-write-tool
+  - url-verification-tool
+  - exa-search-tool
+completion_criteria:
+  - source Sheet rows are read and sheet drift is surfaced
+  - startup rows are normalized into canonical company profiles
+  - founder LinkedIn URLs are split into separate columns without creating extra rows
+  - company websites are verified or marked Needs manual verification with notes
+  - sectors and Ohio/VC Score fit are assigned with evidence quality separated from fit score
+  - synthetic benchmark values are clearly labeled as synthetic benchmark data
+  - only approved startups enter Suitable Startups
+  - Suitable Startups has no overlap against New / External
+  - Google Sheets write is approval-gated and replaces the output tab
+required_inputs:
+  - mode
+  - spreadsheet_id
+external_actions:
+  google_sheets_write:
+    default: disabled
+    approval_required: true
+  outreach_send:
+    default: disabled
+    approval_required: true
+  vc_score_api_write:
+    default: disabled
+    approval_required: true
+memory_policy:
+  l3_direct_writes: false
+  l2_curates_episodic: true
+  l2_curates_semantic: true
+  procedural_changes: candidate_only

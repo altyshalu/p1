@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>P1 Ops Local - Live Agent Cockpit</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles/p1-ops-office-game.css" />
+  </head>
+  <body>
+    <main class="cockpit-shell">
+      <canvas
+        id="opsCanvas"
+        width="1563"
+        height="1006"
+        aria-label="P1 live operator cockpit with detailed office agents"
+      ></canvas>
+      <div class="connection-strip" aria-label="P1 API connection">
+        <span id="connectionStatus">Connecting to P1 API...</span>
+        <button id="toggleIdle" type="button">Idle Walk</button>
+      </div>
+    </main>
+
+    <script src="scripts/p1-ops-office-game.js"></script>
+  </body>
+</html>

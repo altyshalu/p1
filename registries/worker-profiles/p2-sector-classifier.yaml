@@ -1,0 +1,21 @@
+key: p2-sector-classifier
+description: Assign P2 startup Direction categories such as AI, Enterprise SaaS, DeepTech, EdTech, and FinTech.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [website_verification]
+  properties:
+    website_verification: {type: array}
+output_schema:
+  type: object
+  required: [sector_classification, direction_counts]
+  properties:
+    sector_classification: {type: array}
+    direction_counts: {type: object}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

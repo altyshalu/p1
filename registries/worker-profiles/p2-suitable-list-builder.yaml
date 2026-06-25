@@ -1,0 +1,24 @@
+key: p2-suitable-list-builder
+description: Build deduped Suitable Startups rows in New / External-compatible format.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [judge_results]
+  properties:
+    judge_results: {type: array}
+output_schema:
+  type: object
+  required: [suitable_startups, headers, excluded_duplicates, rejected_startups, duplicates_removed]
+  properties:
+    suitable_startups: {type: array}
+    headers: {type: array}
+    excluded_duplicates: {type: array}
+    rejected_startups: {type: array}
+    duplicates_removed: {type: number}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

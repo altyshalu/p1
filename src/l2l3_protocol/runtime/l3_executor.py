@@ -47,6 +47,7 @@ class L3SandboxExecutor:
             "APIFY_API_TOKEN",
             "GOOGLE_SA_PATH",
             "P1_GOOGLE_SHEET_ID",
+            "P2_GOOGLE_SHEET_ID",
             "P1_DOSSIER_SOURCE_PATH",
             "P1_DOSSIER_OUTPUT_PATH",
             "P1_OUTREACH_MASTER_PATH",

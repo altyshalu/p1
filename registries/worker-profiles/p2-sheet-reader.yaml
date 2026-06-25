@@ -1,0 +1,25 @@
+key: p2-sheet-reader
+description: Read P2 startup source rows from configured Google Sheets tabs and surface sheet drift.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: [google-sheets-read-tool]
+compatible_tools: [google-sheets-read-tool]
+budget: {max_seconds: 120}
+input_schema:
+  type: object
+  required: []
+  properties:
+    spreadsheet_id: {type: string}
+    source_tabs: {type: array}
+    sheet_rows_by_tab: {type: object}
+    limit: {type: number}
+output_schema:
+  type: object
+  required: [raw_startup_rows, sheet_metadata, drift_report]
+  properties:
+    raw_startup_rows: {type: array}
+    sheet_metadata: {type: array}
+    drift_report: {type: array}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

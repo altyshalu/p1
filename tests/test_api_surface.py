@@ -1,4 +1,13 @@
-from l2l3_protocol.api.main import _build_run_summary, _cors_allow_origins, _is_operator_authorized, app
+import os
+
+from l2l3_protocol.api.main import (
+    _build_run_summary,
+    _cors_allow_origins,
+    _hydrate_runtime_env_from_dotenv,
+    _is_operator_authorized,
+    _p1_readiness_payload,
+    app,
+)
 from l2l3_protocol.services.dashboard import operator_dashboard_html
 from l2l3_protocol.services.p1_defaults import default_p1_inputs
 from l2l3_protocol.core.schemas import ProcessRunCreate, RecentSystemReviewCreate
@@ -30,6 +39,7 @@ def test_generic_runtime_api_routes_are_registered() -> None:
     assert ('/reports/system-learning', 'GET') in routes
     assert ('/regression-cases', 'GET') in routes
     assert ('/runtime/capabilities', 'GET') in routes
+    assert ('/p1/readiness', 'GET') in routes
 
 
 def test_p1_defaults_are_demo_target_and_write_gated() -> None:
@@ -48,6 +58,38 @@ def test_operator_auth_accepts_bearer_or_api_key_header() -> None:
     assert _is_operator_authorized({'authorization': 'Bearer secret'}, 'secret') is True
     assert _is_operator_authorized({'x-l2l3-api-key': 'secret'}, 'secret') is True
     assert _is_operator_authorized({'authorization': 'Bearer wrong'}, 'secret') is False
+
+
+def test_p1_readiness_reports_missing_default_runtime_keys(monkeypatch) -> None:
+    for key in [
+        'GEMINI_API_KEY',
+        'EXA_API_KEY',
+        'APIFY_API_TOKEN',
+        'GOOGLE_SA_PATH',
+        'P1_GOOGLE_SHEET_ID',
+        'P1_DOSSIER_OUTPUT_PATH',
+        'P1_OUTREACH_MASTER_PATH',
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+    report = _p1_readiness_payload()
+
+    assert report['ready'] is False
+    assert 'GEMINI_API_KEY' in report['missing_required_keys']
+    assert 'EXA_API_KEY' in report['missing_required_keys']
+    assert 'APIFY_API_TOKEN' in report['missing_required_keys']
+
+
+def test_runtime_env_hydrates_from_dotenv_for_subprocess_workers(monkeypatch, tmp_path) -> None:
+    env_path = tmp_path / '.env'
+    env_path.write_text('EXA_API_KEY=from-env-file\nIGNORED_KEY=nope\n', encoding='utf-8')
+    monkeypatch.delenv('EXA_API_KEY', raising=False)
+    monkeypatch.delenv('IGNORED_KEY', raising=False)
+
+    _hydrate_runtime_env_from_dotenv(env_path)
+
+    assert os.environ['EXA_API_KEY'] == 'from-env-file'
+    assert 'IGNORED_KEY' not in os.environ
 
 
 def test_cors_origins_are_not_wildcard() -> None:

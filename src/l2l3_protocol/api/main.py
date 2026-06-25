@@ -3,6 +3,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from contextlib import asynccontextmanager
 import json
+import os
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 from uuid import UUID
@@ -53,8 +55,78 @@ from l2l3_protocol.services.dashboard import operator_dashboard_html
 from l2l3_protocol.services.p1_defaults import DEFAULT_P1_GOAL, P1_PLAYBOOK_KEY, default_p1_inputs
 
 
+P1_RUNTIME_ENV_KEYS = (
+    "GEMINI_API_KEY",
+    "EXA_API_KEY",
+    "APIFY_API_TOKEN",
+    "GOOGLE_SA_PATH",
+    "P1_GOOGLE_SHEET_ID",
+    "P1_DOSSIER_SOURCE_PATH",
+    "P1_DOSSIER_OUTPUT_PATH",
+    "P1_OUTREACH_MASTER_PATH",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+)
+
+
+def _runtime_env_files() -> list[Path]:
+    configured = os.environ.get("L2L3_RUNTIME_ENV_FILES", "")
+    paths = [Path(item).expanduser() for item in configured.split(",") if item.strip()]
+    paths.append(Path(".env"))
+    return paths
+
+
+def _hydrate_runtime_env_from_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        clean_key = key.strip()
+        clean_value = value.strip().strip('"').strip("'")
+        if clean_key in P1_RUNTIME_ENV_KEYS and clean_value and not os.environ.get(clean_key):
+            os.environ[clean_key] = clean_value
+
+
+def _p1_required_env_keys(inputs: dict[str, Any]) -> list[str]:
+    required = ["GEMINI_API_KEY"]
+    sources = inputs.get("sources")
+    normalized_sources = {str(item).strip().lower() for item in sources if str(item).strip()} if isinstance(sources, list) else set()
+    if not normalized_sources:
+        normalized_sources = {"exa", "apify_funding", "apify_crunchbase", "apify_linkedin"}
+    if "exa" in normalized_sources or "apify_funding" in normalized_sources:
+        required.append("EXA_API_KEY")
+    if any(source.startswith("apify_") for source in normalized_sources):
+        required.append("APIFY_API_TOKEN")
+    if inputs.get("allow_google_sheet_write"):
+        required.extend(["GOOGLE_SA_PATH", "P1_GOOGLE_SHEET_ID"])
+    if inputs.get("allow_outreach_master_write"):
+        required.append("P1_OUTREACH_MASTER_PATH")
+    if inputs.get("allow_data_lake_write"):
+        required.append("P1_DOSSIER_OUTPUT_PATH")
+    return list(dict.fromkeys(required))
+
+
+def _p1_readiness_payload(inputs: dict[str, Any] | None = None) -> dict[str, Any]:
+    run_inputs = inputs or default_p1_inputs()
+    required_keys = _p1_required_env_keys(run_inputs)
+    missing_required_keys = [key for key in required_keys if not os.environ.get(key)]
+    return {
+        "ready": not missing_required_keys,
+        "playbook_key": P1_PLAYBOOK_KEY,
+        "mode": run_inputs.get("mode", "full_pipeline"),
+        "required_keys": required_keys,
+        "missing_required_keys": missing_required_keys,
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    for env_file in _runtime_env_files():
+        _hydrate_runtime_env_from_dotenv(env_file)
+    get_settings.cache_clear()
     settings = get_settings()
     configure_logging(settings.log_dir, settings.log_level)
     await asyncio.to_thread(run_upgrade_head, settings)
@@ -170,6 +242,11 @@ async def runtime_capabilities() -> dict[str, Any]:
     }
 
 
+@app.get("/p1/readiness")
+async def p1_readiness() -> dict[str, Any]:
+    return _p1_readiness_payload()
+
+
 @app.get("/runs")
 async def list_runs(
     playbook_key: str | None = None,
@@ -183,6 +260,9 @@ async def list_runs(
 
 @app.post("/p1/runs")
 async def create_default_p1_run(background_tasks: BackgroundTasks, _: None = OperatorAuth, session: AsyncSession = Depends(get_session)) -> dict:
+    readiness = _p1_readiness_payload()
+    if not readiness["ready"]:
+        raise HTTPException(status_code=409, detail=readiness)
     store = WorkingMemoryStore(session)
     run = ProcessRun(
         playbook_key=P1_PLAYBOOK_KEY,

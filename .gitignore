@@ -4,6 +4,8 @@
 .antigravitycli/
 logs/*.jsonl
 logs/*.log
+runtime/*
+!runtime/.gitkeep
 docs/codex-session-*.md
 docs/*.md.save
 __pycache__/

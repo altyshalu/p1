@@ -1,0 +1,21 @@
+key: p2-startup-judge
+description: Assign Approve, Reject, or Needs manual verification with concise judge reasons.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [synthetic_benchmarks]
+  properties:
+    synthetic_benchmarks: {type: array}
+output_schema:
+  type: object
+  required: [judge_results, judge_summary]
+  properties:
+    judge_results: {type: array}
+    judge_summary: {type: object}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

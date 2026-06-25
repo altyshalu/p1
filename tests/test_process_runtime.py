@@ -475,6 +475,121 @@ async def test_p1_force_rerun_ignores_existing_checkpoint(monkeypatch: pytest.Mo
     assert not any(event["event_type"] == "p1_checkpoint_reused" for event in store.events)
 
 
+def _p2_payload_for_artifact(artifact_type: ArtifactType) -> dict[str, Any]:
+    startup = {
+        "Company Name": "Acme AI",
+        "Website URL": "https://acme.ai",
+        "Website Final URL": "https://acme.ai",
+        "Founder LinkedIn URL(s)": "https://linkedin.com/in/acme-founder",
+        "Founder LinkedIn Count": 1,
+        "Country of Incorporation": "US",
+        "Startup Stage": "Seed",
+        "Additional Decision-Useful Info": "B2B AI workflow automation with early ARR.",
+        "Direction": "AI / Generative Tech",
+        "Ohio Fit Score": "84",
+        "Evidence Quality Score": 70,
+        "Website Verification Status": "Verified",
+        "Website Verification Note": "Official website verified.",
+        "Judge Tag": "Approve",
+        "Judge Reason": "Strong ICP fit.",
+        "Source Tab": "From Database",
+        "ICP Version": "p2-ohio-v1",
+    }
+    return {
+        ArtifactType.P2_RAW_STARTUP_ROWS: {"raw_startup_rows": [startup], "sheet_metadata": [], "drift_report": []},
+        ArtifactType.P2_NORMALIZED_STARTUPS: {"normalized_startups": [startup], "rejected_startups": []},
+        ArtifactType.P2_FOUNDER_LINKS_RESOLVED: {"founder_links_resolved": [startup]},
+        ArtifactType.P2_WEBSITE_VERIFICATION: {"website_verification": [startup], "verification_summary": {"corrected_urls": 0, "tbc_urls": 0}},
+        ArtifactType.P2_SECTOR_CLASSIFICATION: {"sector_classification": [startup], "direction_counts": {"AI / Generative Tech": 1}},
+        ArtifactType.P2_ICP_SCORES: {"icp_scores": [startup], "score_summary": {"high_fit_count": 1}},
+        ArtifactType.P2_SYNTHETIC_BENCHMARKS: {"synthetic_benchmarks": [{**startup, "Data Type": "synthetic benchmark data"}], "synthetic_summary": {"synthetic_fields_filled": 12}},
+        ArtifactType.P2_JUDGE_RESULTS: {"judge_results": [startup], "judge_summary": {"input_count": 1, "Approve": 1, "Reject": 0, "Needs manual verification": 0}},
+        ArtifactType.P2_SUITABLE_STARTUPS: {"suitable_startups": [startup], "headers": list(startup.keys()), "excluded_duplicates": [], "rejected_startups": [], "duplicates_removed": 0},
+        ArtifactType.P2_APPROVAL_PACKAGE: {
+            "passed": True,
+            "score": 1.0,
+            "checks": {"all_approved": True, "no_duplicates": True},
+            "reasons": [],
+            "approval_package": {"approval_required": True, "output_tab": "Suitable Startups", "headers": list(startup.keys()), "suitable_startups": [startup], "row_count": 1, "reasons": []},
+            "suitable_startups": [startup],
+        },
+        ArtifactType.P2_GOOGLE_SHEETS_SYNC_RESULT: {"sync_result": {"output_tab": "Suitable Startups", "row_count": 1, "mode": "replace"}, "external_actions": [{"type": "google_sheets_write", "status": "completed"}]},
+        ArtifactType.P2_METRICS_REPORT: {"metrics": {"input_rows": 1, "normalized_rows": 1, "approved_startups": 1, "suitable_rows": 1, "duplicates_removed": 0}, "summary": "ok"},
+    }[artifact_type]
+
+
+@pytest.mark.asyncio
+async def test_p2_sheet_pipeline_completes_without_google_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = ProcessRun(
+        playbook_key="p2-startup-sourcing",
+        goal="Build suitable startups",
+        status=RunStatus.CREATED,
+        input={
+            "playbook_key": "p2-startup-sourcing",
+            "l2_mode": "execution",
+            "goal": "Build suitable startups",
+            "inputs": {"mode": "sheet_pipeline", "spreadsheet_id": "sheet-1", "allow_google_sheet_write": False},
+            "require_human_approval": True,
+        },
+    )
+    store = FakeStore(run)
+    runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
+    executed: list[str] = []
+
+    async def fake_execute_task(run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
+        executed.append(task["worker_profile"])
+        artifact_type = ArtifactType(task["artifact_type"])
+        await store.add_artifact(Artifact(run_id=run_id, artifact_type=artifact_type, payload=_p2_payload_for_artifact(artifact_type)))
+
+    monkeypatch.setattr(runtime, "_execute_task", fake_execute_task)
+
+    output = await runtime.run_until_blocked_or_done(run.id)
+
+    assert output["status"] == "completed"
+    assert output["output"]["external_sync_requested"] is False
+    assert "p2-google-sheets-syncer" not in executed
+    assert executed[:3] == ["p2-sheet-reader", "p2-startup-normalizer", "p2-founder-link-resolver"]
+    assert any(artifact.artifact_type == ArtifactType.P2_EXTERNAL_ACTION_PREVIEW for artifact in store.artifacts)
+
+
+@pytest.mark.asyncio
+async def test_p2_google_sheet_write_waits_for_approval_then_syncs(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = ProcessRun(
+        playbook_key="p2-startup-sourcing",
+        goal="Build and sync suitable startups",
+        status=RunStatus.CREATED,
+        input={
+            "playbook_key": "p2-startup-sourcing",
+            "l2_mode": "execution",
+            "goal": "Build and sync suitable startups",
+            "inputs": {"mode": "sheet_pipeline", "spreadsheet_id": "sheet-1", "allow_google_sheet_write": True},
+            "require_human_approval": True,
+        },
+    )
+    store = FakeStore(run)
+    runtime = ProcessRuntime(store, ProceduralRegistry(Path("registries")), FakeMemory(), FakeHermes([]))
+    executed: list[str] = []
+
+    async def fake_execute_task(run_id: UUID, task: dict[str, Any], profile: dict[str, Any]) -> None:
+        executed.append(task["worker_profile"])
+        artifact_type = ArtifactType(task["artifact_type"])
+        await store.add_artifact(Artifact(run_id=run_id, artifact_type=artifact_type, payload=_p2_payload_for_artifact(artifact_type)))
+
+    monkeypatch.setattr(runtime, "_execute_task", fake_execute_task)
+
+    waiting = await runtime.run_until_blocked_or_done(run.id)
+    assert waiting["status"] == "waiting_approval"
+    assert waiting["output"]["external_sync_requested"] is True
+    assert "p2-google-sheets-syncer" not in executed
+
+    final = await runtime.apply_control(run.id, "approve", {})
+
+    assert final["status"] == "completed"
+    assert final["output"]["external_sync_performed"] is True
+    assert final["output"]["external_sync_result"]["row_count"] == 1
+    assert "p2-google-sheets-syncer" in executed
+
+
 def test_worker_error_classification_preserves_real_provider_failures() -> None:
     error = L3WorkerExecutionError(
         '{"error_type":"WorkerInputError","message":"trend providers failed","provider_failures":{"arxiv":"Rate exceeded"}}'

@@ -1,0 +1,23 @@
+key: p2-website-verifier
+description: Verify or mark startup company websites and record final URL status notes.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: [url-verification-tool, exa-search-tool]
+compatible_tools: [url-verification-tool, exa-search-tool]
+budget: {max_seconds: 180}
+input_schema:
+  type: object
+  required: [founder_links_resolved]
+  properties:
+    founder_links_resolved: {type: array}
+    verify_urls_live: {type: boolean}
+    website_verification_overrides: {type: object}
+output_schema:
+  type: object
+  required: [website_verification, verification_summary]
+  properties:
+    website_verification: {type: array}
+    verification_summary: {type: object}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

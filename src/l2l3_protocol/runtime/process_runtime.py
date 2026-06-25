@@ -65,6 +65,10 @@ class ProcessRuntime:
             await self._run_p1_operator_workflow(run_id, playbook, worker_profiles)
             await self._record_run_diagnosis(run_id)
             return await self._require_run(run_id)
+        if playbook.get("execution_strategy") == "deterministic_p2_startup_sourcing":
+            await self._run_p2_startup_workflow(run_id, playbook, worker_profiles)
+            await self._record_run_diagnosis(run_id)
+            return await self._require_run(run_id)
 
         for turn in range(max_turns):
             current_status = await self.store.get_run_status(run_id)
@@ -141,6 +145,8 @@ class ProcessRuntime:
             await self.store.set_run_status(run_id, RunStatus.CANCELLED)
         elif action == "approve":
             await self.store.add_event(run_id, "run_control", {"action": action, "payload": payload})
+            if await self._run_p2_external_sync_after_approval(run_id, payload):
+                return await self._require_run(run_id)
             if await self._run_p1_external_sync_after_approval(run_id, payload):
                 return await self._require_run(run_id)
             await self.store.set_run_status(run_id, RunStatus.COMPLETED)
@@ -237,6 +243,62 @@ class ProcessRuntime:
         await self._record_run_diagnosis(run_id)
         return True
 
+    async def _run_p2_external_sync_after_approval(self, run_id: UUID, payload: dict[str, Any]) -> bool:
+        state = await self._require_run(run_id)
+        if state.get("playbook_key") != "p2-startup-sourcing":
+            return False
+        output = state.get("output", {})
+        if not isinstance(output, dict):
+            return False
+        sheet_requested = output.get("external_sync_requested") is True and output.get("external_sync_performed") is not True
+        if not sheet_requested:
+            return False
+        inputs = state.get("input", {}).get("inputs", {})
+        if not isinstance(inputs, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "p2 inputs must be an object for approved external sync"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "p2 inputs must be an object for approved external sync"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        approval_package = output.get("approval_package", {})
+        if not isinstance(approval_package, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "approved P2 sync requires approval_package output"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "approved P2 sync requires approval_package output"})
+            await self._record_run_diagnosis(run_id)
+            return True
+        playbook = await self._load_playbook(state["playbook_key"])
+        worker_profiles = await self._allowed_worker_profiles(playbook)
+        output_update = dict(output)
+        if not self._latest_payload(state, ArtifactType.P2_GOOGLE_SHEETS_SYNC_RESULT):
+            ok = await self._run_p1_approved_sync_worker(
+                run_id,
+                worker_profiles,
+                worker="p2-google-sheets-syncer",
+                task_type="sync_google_sheets",
+                artifact_type=ArtifactType.P2_GOOGLE_SHEETS_SYNC_RESULT,
+                event_prefix="p2_google_sheets_sync",
+                external_action="google_sheets_write",
+                sync_inputs={**inputs, **payload, "approval_package": approval_package, "allow_google_sheet_write": True},
+            )
+            if not ok:
+                await self.store.set_run_status(
+                    run_id,
+                    RunStatus.FAILED,
+                    {**output, "external_sync_performed": False, "reason": "approved P2 Google Sheets sync failed"},
+                )
+                await self.store.add_event(run_id, "run_failed", {"reason": "approved P2 Google Sheets sync failed"})
+                await self._record_run_diagnosis(run_id)
+                return True
+            sync_result = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_GOOGLE_SHEETS_SYNC_RESULT)
+            output_update["external_sync_performed"] = True
+            output_update["external_sync_result"] = sync_result.get("sync_result", sync_result)
+        metrics = await self._run_p2_metrics_report(run_id, worker_profiles)
+        if metrics:
+            output_update["metrics"] = metrics.get("metrics", metrics)
+        await self.store.set_run_status(run_id, RunStatus.COMPLETED, output_update)
+        await self.store.add_event(run_id, "run_finished", {"status": RunStatus.COMPLETED.value})
+        await self._record_run_diagnosis(run_id)
+        return True
+
     async def _run_p1_approved_sync_worker(
         self,
         run_id: UUID,
@@ -260,7 +322,7 @@ class ProcessRuntime:
             {
                 "task_type": task_type,
                 "worker_profile": worker,
-                "goal": profile.get("description", f"Approval-gated P1 sync: {worker}."),
+                "goal": profile.get("description", f"Approval-gated sync: {worker}."),
                 "inputs": sync_inputs,
                 "artifact_type": artifact_type.value,
                 "allowed_tools": profile.get("allowed_tools", []),
@@ -676,6 +738,266 @@ class ProcessRuntime:
             },
         )
         await self.store.add_event(run_id, "run_finished", {"status": (await self.store.get_run_status(run_id)).value})
+
+    async def _run_p2_startup_workflow(
+        self,
+        run_id: UUID,
+        playbook: dict[str, Any],
+        worker_profiles: dict[str, dict[str, Any]],
+    ) -> None:
+        state = await self._require_run(run_id)
+        inputs = state.get("input", {}).get("inputs", {})
+        if not isinstance(inputs, dict):
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "p2 inputs must be an object"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "p2 inputs must be an object"})
+            return
+        mode = str(inputs.get("mode") or "sheet_pipeline")
+        await self.store.add_event(run_id, "p2_workflow_started", {"mode": mode})
+
+        async def run_task(worker: str, task_type: str, task_inputs: dict[str, Any], artifact_type: ArtifactType) -> bool:
+            profile = worker_profiles[worker]
+            if not bool(inputs.get("force_rerun", False)):
+                checkpoint = self._latest_payload(await self._require_run(run_id), artifact_type)
+                if checkpoint:
+                    await self.store.add_event(
+                        run_id,
+                        "p2_checkpoint_reused",
+                        {
+                            "worker_profile": worker,
+                            "task_type": task_type,
+                            "artifact_type": artifact_type.value,
+                            "reason": "Existing artifact found on this run; skipping worker execution.",
+                        },
+                    )
+                    return True
+            state_before = await self._require_run(run_id)
+            existing_task_ids = {task.get("id") for task in state_before.get("tasks", []) if isinstance(task, dict)}
+            await self._execute_task(
+                run_id,
+                {
+                    "task_type": task_type,
+                    "worker_profile": worker,
+                    "goal": profile.get("description", task_type),
+                    "inputs": task_inputs,
+                    "artifact_type": artifact_type.value,
+                    "allowed_tools": profile.get("allowed_tools", []),
+                },
+                profile,
+            )
+            latest = await self._require_run(run_id)
+            failed = [
+                task
+                for task in latest.get("tasks", [])
+                if task.get("id") not in existing_task_ids
+                and task.get("worker_profile") == worker
+                and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+            ]
+            return not failed
+
+        if mode not in {"sheet_pipeline", "verify_only", "suitable_only"}:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": f"unsupported p2 mode: {mode}"})
+            await self.store.add_event(run_id, "run_failed", {"reason": f"unsupported p2 mode: {mode}"})
+            return
+
+        if mode in {"sheet_pipeline", "verify_only"}:
+            reader_inputs = {
+                **inputs,
+                "source_tabs": inputs.get("source_tabs") or ["From Database", "New / External"],
+                "output_tab": inputs.get("output_tab") or "Suitable Startups",
+                "limit": inputs.get("limit", 1000),
+            }
+            if not await run_task("p2-sheet-reader", "read_sheets", reader_inputs, ArtifactType.P2_RAW_STARTUP_ROWS):
+                await self._fail_p2_if_needed(run_id, "p2 sheet read failed")
+                return
+            raw = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_RAW_STARTUP_ROWS)
+            if not await run_task("p2-startup-normalizer", "normalize_startups", {**inputs, "raw_startup_rows": raw.get("raw_startup_rows", [])}, ArtifactType.P2_NORMALIZED_STARTUPS):
+                await self._fail_p2_if_needed(run_id, "p2 startup normalization failed")
+                return
+            normalized = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_NORMALIZED_STARTUPS)
+            if not await run_task("p2-founder-link-resolver", "resolve_founder_links", {"normalized_startups": normalized.get("normalized_startups", [])}, ArtifactType.P2_FOUNDER_LINKS_RESOLVED):
+                await self._fail_p2_if_needed(run_id, "p2 founder link resolution failed")
+                return
+            founder_links = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_FOUNDER_LINKS_RESOLVED)
+            if not await run_task(
+                "p2-website-verifier",
+                "verify_websites",
+                {
+                    **inputs,
+                    "founder_links_resolved": founder_links.get("founder_links_resolved", []),
+                    "verify_urls_live": bool(inputs.get("verify_urls_live", False)),
+                },
+                ArtifactType.P2_WEBSITE_VERIFICATION,
+            ):
+                await self._fail_p2_if_needed(run_id, "p2 website verification failed")
+                return
+            websites = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_WEBSITE_VERIFICATION)
+            if not await run_task("p2-sector-classifier", "classify_sectors", {"website_verification": websites.get("website_verification", [])}, ArtifactType.P2_SECTOR_CLASSIFICATION):
+                await self._fail_p2_if_needed(run_id, "p2 sector classification failed")
+                return
+            sectors = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_SECTOR_CLASSIFICATION)
+            if not await run_task("p2-icp-scorer", "score_icp", {"sector_classification": sectors.get("sector_classification", [])}, ArtifactType.P2_ICP_SCORES):
+                await self._fail_p2_if_needed(run_id, "p2 ICP scoring failed")
+                return
+            scores = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_ICP_SCORES)
+            if not await run_task("p2-synthetic-benchmarker", "fill_synthetic_benchmarks", {"icp_scores": scores.get("icp_scores", [])}, ArtifactType.P2_SYNTHETIC_BENCHMARKS):
+                await self._fail_p2_if_needed(run_id, "p2 synthetic benchmark fill failed")
+                return
+            synthetic = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_SYNTHETIC_BENCHMARKS)
+            if not await run_task("p2-startup-judge", "judge_startups", {"synthetic_benchmarks": synthetic.get("synthetic_benchmarks", [])}, ArtifactType.P2_JUDGE_RESULTS):
+                await self._fail_p2_if_needed(run_id, "p2 startup judge failed")
+                return
+            if mode == "verify_only":
+                metrics = await self._run_p2_metrics_report(run_id, worker_profiles)
+                await self.store.set_run_status(run_id, RunStatus.COMPLETED, {"mode": mode, "message": "P2 verify-only workflow completed without Google Sheets sync.", "metrics": metrics.get("metrics", metrics)})
+                await self.store.add_event(run_id, "run_finished", {"status": RunStatus.COMPLETED.value})
+                return
+        else:
+            if not self._latest_payload(await self._require_run(run_id), ArtifactType.P2_JUDGE_RESULTS):
+                await self._fail_p2_if_needed(run_id, "p2 suitable_only requires existing P2 judge results")
+                return
+
+        judge = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_JUDGE_RESULTS)
+        if not await run_task("p2-suitable-list-builder", "build_suitable_list", {**inputs, "judge_results": judge.get("judge_results", [])}, ArtifactType.P2_SUITABLE_STARTUPS):
+            await self._fail_p2_if_needed(run_id, "p2 suitable list build failed")
+            return
+        suitable = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_SUITABLE_STARTUPS)
+        if not await run_task(
+            "p2-quality-judge",
+            "judge_quality",
+            {
+                **inputs,
+                "suitable_startups": suitable.get("suitable_startups", []),
+                "output_tab": inputs.get("output_tab") or "Suitable Startups",
+            },
+            ArtifactType.P2_APPROVAL_PACKAGE,
+        ):
+            await self._fail_p2_if_needed(run_id, "p2 quality judge failed")
+            return
+        approval = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_APPROVAL_PACKAGE)
+        if not approval.get("passed", False):
+            await self._fail_p2_if_needed(run_id, "p2 quality judge did not pass")
+            return
+        approval_package = approval.get("approval_package", {})
+        allow_sheet_write = bool(inputs.get("allow_google_sheet_write", False))
+        approval_preview = self._build_p2_approval_preview(run_id, inputs, approval_package, allow_sheet_write)
+        await self.store.add_artifact(Artifact(run_id=run_id, artifact_type=ArtifactType.P2_EXTERNAL_ACTION_PREVIEW, payload=approval_preview))
+        if allow_sheet_write:
+            await self.store.add_event(
+                run_id,
+                "p2_google_sheets_sync_waiting_approval",
+                {
+                    "reason": "Google Sheets write is an external action and requires approval before replacing Suitable Startups.",
+                    "requested_worker": "p2-google-sheets-syncer",
+                },
+            )
+        metrics = await self._run_p2_metrics_report(run_id, worker_profiles)
+        await self.store.set_run_status(
+            run_id,
+            RunStatus.WAITING_APPROVAL if allow_sheet_write else RunStatus.COMPLETED,
+            {
+                "mode": mode,
+                "approval_package": approval_package,
+                "approval_preview": approval_preview,
+                "external_sync_requested": allow_sheet_write,
+                "external_sync_performed": False,
+                "external_sync_result": None,
+                "metrics": metrics.get("metrics", metrics),
+            },
+        )
+        await self.store.add_event(run_id, "run_finished", {"status": (await self.store.get_run_status(run_id)).value})
+
+    def _build_p2_approval_preview(
+        self,
+        run_id: UUID,
+        inputs: dict[str, Any],
+        approval_package: dict[str, Any],
+        allow_sheet_write: bool,
+    ) -> dict[str, Any]:
+        rows = approval_package.get("suitable_startups", []) if isinstance(approval_package.get("suitable_startups"), list) else []
+        preview_rows = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            preview_rows.append(
+                {
+                    "run_id": str(run_id),
+                    "company_name": row.get("Company Name"),
+                    "website_url": row.get("Website URL"),
+                    "direction": row.get("Direction"),
+                    "judge_tag": row.get("Judge Tag"),
+                    "website_status": row.get("Website Verification Status"),
+                }
+            )
+        return {
+            "approval_required": True,
+            "google_sheets": {
+                "requested": allow_sheet_write,
+                "spreadsheet_id": str(inputs.get("spreadsheet_id") or ""),
+                "tab_name": approval_package.get("output_tab") or inputs.get("output_tab") or "Suitable Startups",
+                "mode": "replace",
+                "rows": preview_rows,
+            },
+            "vc_score_api": {"requested": False, "reason": "P2 v1 does not write to VC Score API."},
+            "outreach": {"requested": False},
+            "risk_summary": approval_package.get("reasons", []),
+        }
+
+    async def _run_p2_metrics_report(self, run_id: UUID, worker_profiles: dict[str, dict[str, Any]]) -> dict[str, Any]:
+        if "p2-metrics-reporter" not in worker_profiles:
+            return {}
+        worker = "p2-metrics-reporter"
+        profile = worker_profiles[worker]
+        state = await self._require_run(run_id)
+        metrics_inputs = self._p2_metrics_inputs(state)
+        await self._execute_task(
+            run_id,
+            {
+                "task_type": "build_metrics_report",
+                "worker_profile": worker,
+                "goal": profile.get("description", "Build P2 funnel metrics."),
+                "inputs": metrics_inputs,
+                "artifact_type": ArtifactType.P2_METRICS_REPORT.value,
+                "allowed_tools": profile.get("allowed_tools", []),
+            },
+            profile,
+        )
+        latest = await self._require_run(run_id)
+        failed = [
+            task
+            for task in latest.get("tasks", [])
+            if task.get("worker_profile") == worker and task.get("status") in {TaskStatus.FAILED.value, TaskStatus.NEEDS_REPAIR.value}
+        ]
+        if failed:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": "P2 metrics report failed"})
+            await self.store.add_event(run_id, "run_failed", {"reason": "P2 metrics report failed"})
+            return {}
+        metrics = self._latest_payload(await self._require_run(run_id), ArtifactType.P2_METRICS_REPORT)
+        await self.store.add_event(run_id, "p2_metrics_report_created", metrics)
+        return metrics
+
+    def _p2_metrics_inputs(self, state: dict[str, Any]) -> dict[str, Any]:
+        raw = self._latest_payload(state, ArtifactType.P2_RAW_STARTUP_ROWS)
+        normalized = self._latest_payload(state, ArtifactType.P2_NORMALIZED_STARTUPS)
+        websites = self._latest_payload(state, ArtifactType.P2_WEBSITE_VERIFICATION)
+        judge = self._latest_payload(state, ArtifactType.P2_JUDGE_RESULTS)
+        suitable = self._latest_payload(state, ArtifactType.P2_SUITABLE_STARTUPS)
+        sync = self._latest_payload(state, ArtifactType.P2_GOOGLE_SHEETS_SYNC_RESULT)
+        return {
+            "raw_startup_rows": raw.get("raw_startup_rows", []),
+            "normalized_startups": normalized.get("normalized_startups", []),
+            "rejected_startups": normalized.get("rejected_startups", []),
+            "verification_summary": websites.get("verification_summary", {}),
+            "judge_summary": judge.get("judge_summary", {}),
+            "suitable_startups": suitable.get("suitable_startups", []),
+            "duplicates_removed": suitable.get("duplicates_removed", 0),
+            "sync_result": sync.get("sync_result", {}),
+        }
+
+    async def _fail_p2_if_needed(self, run_id: UUID, reason: str) -> None:
+        current = await self.store.get_run_status(run_id)
+        if current not in {RunStatus.FAILED, RunStatus.CANCELLED}:
+            await self.store.set_run_status(run_id, RunStatus.FAILED, {"reason": reason})
+            await self.store.add_event(run_id, "run_failed", {"reason": reason})
 
     @staticmethod
     def _latest_payload(state: dict[str, Any], artifact_type: ArtifactType) -> dict[str, Any]:

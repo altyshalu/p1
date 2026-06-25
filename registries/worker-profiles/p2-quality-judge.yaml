@@ -1,0 +1,26 @@
+key: p2-quality-judge
+description: Validate Suitable Startups schema, approvals, dedupe, split founder links, and TBC notes before sync.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [suitable_startups]
+  properties:
+    suitable_startups: {type: array}
+    output_tab: {type: string}
+output_schema:
+  type: object
+  required: [passed, score, checks, reasons, approval_package, suitable_startups]
+  properties:
+    passed: {type: boolean}
+    score: {type: number}
+    checks: {type: object}
+    reasons: {type: array}
+    approval_package: {type: object}
+    suitable_startups: {type: array}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}

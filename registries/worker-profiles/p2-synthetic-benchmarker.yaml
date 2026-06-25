@@ -1,0 +1,21 @@
+key: p2-synthetic-benchmarker
+description: Fill missing decision metrics with labeled synthetic benchmark data.
+worker_type: sandboxed_subprocess
+entrypoint: l2l3_protocol.workers.p2_startup_worker
+allowed_tools: []
+compatible_tools: []
+budget: {max_seconds: 60}
+input_schema:
+  type: object
+  required: [icp_scores]
+  properties:
+    icp_scores: {type: array}
+output_schema:
+  type: object
+  required: [synthetic_benchmarks, synthetic_summary]
+  properties:
+    synthetic_benchmarks: {type: array}
+    synthetic_summary: {type: object}
+retry_policy: {max_attempts: 1, retryable_failure_types: []}
+memory_policy: {writes: artifact_only}
+external_action_policy: {external_actions: none}
