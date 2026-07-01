@@ -158,6 +158,8 @@ The TUI shows run status, Work Orders, evals, Incident Briefs, approval prompts,
 
 `p1-operator-outreach` is the hardened ABRT/Limpid operator and angel outreach pipeline. It now supports source-level resume, approval preview artifacts, idempotent external writes, compact run summaries, and real operator proof scripts.
 
+For the shared team path to find suitable angel investors, start with [docs/p1-team-runbook.md](docs/p1-team-runbook.md). It pins the standard server start, readiness check, source-only discovery run, full approval-gated run, and Europe angel-search input examples.
+
 Useful real proof commands:
 
 ```sh

@@ -1,0 +1,19 @@
+{
+  "mode": "full_pipeline",
+  "sources": ["exa", "apify_linkedin"],
+  "query": "Europe angel investor founder operator B2B SaaS AI fintech marketplace LinkedIn -Cyprus",
+  "linkedin_keywords": "angel investor founder operator B2B SaaS AI fintech marketplace Europe -Cyprus",
+  "limit": 100,
+  "minimum_score": 60,
+  "channels": ["linkedin"],
+  "use_provider_cache": true,
+  "provider_cache_ttl_seconds": 604800,
+  "use_triage_cache": true,
+  "force_rerun": false,
+  "allow_google_sheet_write": true,
+  "google_sheet_tab": "P1_L2L3_NEW_LEADS",
+  "allow_outreach_master_write": true,
+  "allow_data_lake_write": true,
+  "verify_linkedin_live": true,
+  "require_human_approval": true
+}
