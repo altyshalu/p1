@@ -1,0 +1,15 @@
+{
+  "candidates": [
+    {
+      "name": "Example Operator Angel",
+      "linkedin_url": "https://www.linkedin.com/in/example",
+      "city": "London",
+      "country": "United Kingdom",
+      "headline": "Consumer fintech founder, active angel investor, ex-growth/product lead.",
+      "evidence": [
+        "Use source snippets here: founder/operator proof, angel/check-writer proof, and B2C/PLG proof.",
+        "Do not submit VC-only, advisor-only, B2B SaaS-only, consulting-only, Cyprus, or US-only candidates."
+      ]
+    }
+  ]
+}

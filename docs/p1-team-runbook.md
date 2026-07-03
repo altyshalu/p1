@@ -96,6 +96,8 @@ Use `full_pipeline` only when you also need live intelligence, gateway evaluatio
 
 For Europe searches, keep the query explicit about Europe and exclude Cyprus in the query when Cyprus must not be included. Keep `use_provider_cache=true` so repeated team runs reuse provider responses instead of spending credits unnecessarily. Set `force_rerun=true` only when you intentionally want fresh provider calls.
 
+For manual or web-sourced angel lists, screen candidates with [p1-strict-angel-screener.md](p1-strict-angel-screener.md). It applies the same red-row avoidance policy: no VC-only, advisor-only, B2B SaaS-only, consulting-only, Cyprus, or US-only profiles, and it outputs only `gateway_eligible` rows.
+
 ## Output Review
 
 Every run exposes a compact summary:
