@@ -14,6 +14,7 @@ import time
 from typing import Any
 import urllib.parse
 import urllib.request
+import urllib.error
 from zoneinfo import ZoneInfo
 
 
@@ -112,10 +113,14 @@ class TelegramClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=90) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=90) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise TelegramError(exc.code, f"Telegram {method} HTTP {exc.code}: {body[:500]}") from exc
         if data.get("ok") is not True:
-            raise RuntimeError(f"Telegram {method} failed: {data}")
+            raise TelegramError(0, f"Telegram {method} failed: {data}")
         return data.get("result")
 
     def get_updates(self, offset: int | None) -> list[dict[str, Any]]:
@@ -138,6 +143,12 @@ class TelegramClient:
         if text:
             payload["text"] = text
         self.request("answerCallbackQuery", payload)
+
+
+class TelegramError(RuntimeError):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def state_path(config: Config) -> Path:
@@ -807,17 +818,20 @@ def run() -> None:
     config.out_dir.mkdir(parents=True, exist_ok=True)
     telegram = TelegramClient(config.telegram_token)
     state = load_state(config)
-    telegram.send_message(config.chat_id, "P1 Telegram angel agent is online. Use /send_today or /p1_status.", config.message_thread_id)
     while True:
-        if next_daily_due(config, state):
-            send_daily_batch(config, state, telegram)
-        for update in telegram.get_updates(state.get("offset")):
-            state["offset"] = int(update["update_id"]) + 1
-            if isinstance(update.get("callback_query"), dict):
-                handle_callback(config, state, telegram, update["callback_query"])
-            elif isinstance(update.get("message"), dict):
-                handle_message(config, state, telegram, update["message"])
-            save_state(config, state)
+        try:
+            if next_daily_due(config, state):
+                send_daily_batch(config, state, telegram)
+            for update in telegram.get_updates(state.get("offset")):
+                state["offset"] = int(update["update_id"]) + 1
+                if isinstance(update.get("callback_query"), dict):
+                    handle_callback(config, state, telegram, update["callback_query"])
+                elif isinstance(update.get("message"), dict):
+                    handle_message(config, state, telegram, update["message"])
+                save_state(config, state)
+        except TelegramError as exc:
+            print(f"telegram polling warning: {exc}", flush=True)
+            time.sleep(30 if exc.status_code == 409 else 10)
         time.sleep(2)
 
 
