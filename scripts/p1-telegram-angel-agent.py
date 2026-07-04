@@ -138,6 +138,10 @@ class TelegramClient:
             payload["reply_markup"] = reply_markup
         return self.request("sendMessage", payload)
 
+    def edit_reply_markup(self, chat_id: str, message_id: int, reply_markup: dict[str, Any]) -> None:
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "reply_markup": reply_markup}
+        self.request("editMessageReplyMarkup", payload)
+
     def answer_callback(self, callback_id: str, text: str = "") -> None:
         payload: dict[str, Any] = {"callback_query_id": callback_id}
         if text:
@@ -159,8 +163,12 @@ def load_state(config: Config) -> dict[str, Any]:
     config.state_dir.mkdir(parents=True, exist_ok=True)
     path = state_path(config)
     if not path.exists():
-        return {"offset": None, "sent_dates": [], "angels": {}, "pending_reject_comments": {}, "seen_keys": []}
-    return json.loads(path.read_text(encoding="utf-8"))
+        return {"offset": None, "sent_dates": [], "angels": {}, "pending_reject_comments": {}, "seen_keys": [], "decisions": {}}
+    state = json.loads(path.read_text(encoding="utf-8"))
+    state.setdefault("decisions", {})
+    state.setdefault("pending_reject_comments", {})
+    state.setdefault("angels", {})
+    return state
 
 
 def save_state(config: Config, state: dict[str, Any]) -> None:
@@ -535,6 +543,11 @@ def buttons(angel_id_value: str) -> dict[str, Any]:
     }
 
 
+def status_button(status: str) -> dict[str, Any]:
+    label = "Approved" if status == "approved" else "Rejected"
+    return {"inline_keyboard": [[{"text": label, "callback_data": f"p1a:noop:{status}"}]]}
+
+
 def send_daily_batch(config: Config, state: dict[str, Any], telegram: TelegramClient, force: bool = False) -> None:
     now = datetime.now(ZoneInfo(config.timezone))
     today = now.date().isoformat()
@@ -545,7 +558,9 @@ def send_daily_batch(config: Config, state: dict[str, Any], telegram: TelegramCl
     state.setdefault("angels", {})
     for index, angel in enumerate(angels, start=1):
         state["angels"][angel["id"]] = angel
-        telegram.send_message(config.chat_id, angel_message(index, angel), config.message_thread_id, buttons(angel["id"]))
+        sent = telegram.send_message(config.chat_id, angel_message(index, angel), config.message_thread_id, buttons(angel["id"]))
+        if isinstance(sent, dict) and sent.get("message_id"):
+            state["angels"][angel["id"]]["telegram_message_id"] = sent["message_id"]
     if not force:
         state.setdefault("sent_dates", []).append(today)
     save_state(config, state)
@@ -748,23 +763,60 @@ def handle_callback(config: Config, state: dict[str, Any], telegram: TelegramCli
     if len(parts) != 3 or parts[0] != "p1a":
         return
     action, sid = parts[1], parts[2]
+    if action == "noop":
+        telegram.answer_callback(callback_id, "Already handled.")
+        return
     angel = state.get("angels", {}).get(sid)
     if not isinstance(angel, dict):
         telegram.answer_callback(callback_id, "Angel not found in state.")
         return
+    decisions = state.setdefault("decisions", {})
+    existing_decision = decisions.get(sid)
+    if isinstance(existing_decision, dict):
+        status = str(existing_decision.get("status") or "handled")
+        telegram.answer_callback(callback_id, f"Already {status}.")
+        message_id = callback_message_id(query)
+        if message_id:
+            try:
+                telegram.edit_reply_markup(config.chat_id, message_id, status_button(status))
+            except TelegramError as exc:
+                print(f"telegram edit warning: {exc}", flush=True)
+        return
     if action == "approve":
         message = approve_angel(config, angel)
+        decisions[sid] = {"status": "approved", "time": datetime.utcnow().isoformat()}
         telegram.answer_callback(callback_id, "Approved")
+        message_id = callback_message_id(query)
+        if message_id:
+            try:
+                telegram.edit_reply_markup(config.chat_id, message_id, status_button("approved"))
+            except TelegramError as exc:
+                print(f"telegram edit warning: {exc}", flush=True)
         telegram.send_message(config.chat_id, f"{angel.get('name')}: {message}", config.message_thread_id)
         save_state(config, state)
         return
     if action == "reject":
         user = query.get("from") if isinstance(query.get("from"), dict) else {}
         key = str(user.get("id") or "unknown")
+        decisions[sid] = {"status": "rejected", "time": datetime.utcnow().isoformat(), "comment_pending": True}
         state.setdefault("pending_reject_comments", {})[key] = sid
         save_state(config, state)
         telegram.answer_callback(callback_id, "Rejected")
+        message_id = callback_message_id(query)
+        if message_id:
+            try:
+                telegram.edit_reply_markup(config.chat_id, message_id, status_button("rejected"))
+            except TelegramError as exc:
+                print(f"telegram edit warning: {exc}", flush=True)
         telegram.send_message(config.chat_id, f"Why reject {angel.get('name')}? Reply with the comment in this thread.", config.message_thread_id)
+
+
+def callback_message_id(query: dict[str, Any]) -> int | None:
+    message = query.get("message") if isinstance(query.get("message"), dict) else {}
+    try:
+        return int(message.get("message_id"))
+    except (TypeError, ValueError):
+        return None
 
 
 def handle_message(config: Config, state: dict[str, Any], telegram: TelegramClient, message: dict[str, Any]) -> None:
@@ -776,6 +828,9 @@ def handle_message(config: Config, state: dict[str, Any], telegram: TelegramClie
         angel = state.get("angels", {}).get(sid, {})
         if isinstance(angel, dict):
             store_reject_comment(config, angel, text, user)
+            decision = state.setdefault("decisions", {}).setdefault(sid, {"status": "rejected"})
+            decision["comment"] = text
+            decision["comment_pending"] = False
             telegram.send_message(config.chat_id, f"Saved reject feedback for {angel.get('name')}. I will use this in future scoring.", config.message_thread_id)
             save_state(config, state)
         return
