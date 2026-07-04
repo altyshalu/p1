@@ -176,9 +176,10 @@ def load_candidate_pool(config: Config) -> list[dict[str, Any]]:
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
     target = max(config.batch_size * 3, 75)
-    for chunk_index in range(5):
+    for chunk_index in range(12):
+        chunk_size = min(8, target - len(pool))
         prompt = f"""
-Generate 25 fresh real startup candidates for OH.io P2 daily review.
+Generate {chunk_size} fresh real startup candidates for OH.io P2 daily review.
 
 ICP:
 {OHIO_ICP}
@@ -269,7 +270,7 @@ def gemini_json(api_key: str, prompt: str) -> dict[str, Any]:
     for attempt in prompts:
         body = {
             "contents": [{"parts": [{"text": attempt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 8192},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 16384},
         }
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=90) as response:
