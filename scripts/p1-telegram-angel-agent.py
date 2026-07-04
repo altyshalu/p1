@@ -579,13 +579,13 @@ def approve_angel(config: Config, angel: dict[str, Any]) -> str:
     if not has_google_credentials(config):
         return "Approved locally. Google credentials are not configured yet."
     try:
+        if config.google_sheet_id:
+            append_google_sheet(config, row, config.google_sheet_id)
+            return f"Approved and appended to fixed Google Sheet: {config.google_sheet_tab}."
         if config.drive_folder_id:
             spreadsheet_id = ensure_drive_spreadsheet(config)
             append_google_sheet(config, row, spreadsheet_id)
             return f"Approved and written to Google Drive file: {config.drive_file_name}."
-        if config.google_sheet_id:
-            append_google_sheet(config, row, config.google_sheet_id)
-            return "Approved and written to Google Sheet."
         return "Approved locally. Google destination is not configured yet."
     except Exception as exc:
         append_tsv(
