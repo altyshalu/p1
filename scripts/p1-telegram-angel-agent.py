@@ -5,6 +5,7 @@ import csv
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -873,21 +874,49 @@ def run() -> None:
     config.out_dir.mkdir(parents=True, exist_ok=True)
     telegram = TelegramClient(config.telegram_token)
     state = load_state(config)
+    p2_module = load_p2_module()
+    p2_config = p2_module.load_config() if p2_module else None
+    p2_state = p2_module.load_state(p2_config) if p2_module and p2_config else None
     while True:
         try:
             if next_daily_due(config, state):
                 send_daily_batch(config, state, telegram)
+            if p2_module and p2_config and p2_state and p2_module.next_daily_due(p2_config, p2_state):
+                p2_module.send_daily_batch(p2_config, p2_state, telegram)
             for update in telegram.get_updates(state.get("offset")):
                 state["offset"] = int(update["update_id"]) + 1
                 if isinstance(update.get("callback_query"), dict):
-                    handle_callback(config, state, telegram, update["callback_query"])
+                    data = str(update["callback_query"].get("data") or "")
+                    if data.startswith("p2s:") and p2_module and p2_config and p2_state is not None:
+                        p2_module.handle_callback(p2_config, p2_state, telegram, update["callback_query"])
+                    else:
+                        handle_callback(config, state, telegram, update["callback_query"])
                 elif isinstance(update.get("message"), dict):
-                    handle_message(config, state, telegram, update["message"])
+                    handled = False
+                    if p2_module and p2_config and p2_state is not None:
+                        handled = bool(p2_module.handle_message(p2_config, p2_state, telegram, update["message"]))
+                    if not handled:
+                        handle_message(config, state, telegram, update["message"])
                 save_state(config, state)
         except TelegramError as exc:
             print(f"telegram polling warning: {exc}", flush=True)
             time.sleep(30 if exc.status_code == 409 else 10)
         time.sleep(2)
+
+
+def load_p2_module() -> Any | None:
+    if os.environ.get("P2_STARTUP_ENABLED", "1").strip().lower() in {"0", "false", "no"}:
+        return None
+    path = Path(__file__).with_name("p2_telegram_startup_agent.py")
+    if not path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("p2_telegram_startup_agent", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["p2_telegram_startup_agent"] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 if __name__ == "__main__":
