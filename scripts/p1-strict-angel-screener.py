@@ -46,7 +46,9 @@ Lead:
 
 Rules:
 - Keep only people who have BOTH real B2C/consumer/marketplace/gaming/viral fintech/PLG operator experience AND personal angel/check-writer/scout/micro-fund evidence.
-- Reject heavy enterprise-only B2B SaaS, consulting-only, investor-only/VC-only without operator history, advisor-only, corporate finance, commercial banking, biotech, defense, medical equipment, heavy industry, real estate, Cyprus, US-only/non-Europe.
+- Geography mode: {geography_mode}.
+- Reject heavy enterprise-only B2B SaaS, consulting-only, investor-only/VC-only without operator history, advisor-only, corporate finance, commercial banking, biotech, defense, medical equipment, heavy industry, and real estate.
+- In Europe mode, also reject Cyprus and US-only/non-Europe profiles. In worldwide mode, geography_language_fit may pass for any geography except Cyprus.
 - b2c_plg_dna_score 0-45: 35-45 for mass-market consumer apps, gaming, viral fintech, marketplaces, social, travel, or consumer internet; 25-35 for PLG/SMB self-serve or bottom-up products like Wise, Slack, Dropbox, Box, Figma, Notion; 0 for enterprise/sales-led/consulting.
 - product_leadership_score is deprecated; return 0.
 - verified_angel_score 0-35: 25-35 for active angel/check-writer/scout/Atomico angel allocation/micro-fund/personal portfolio; 10-20 only for capital potential; 0 for no personal investing evidence.
@@ -56,7 +58,7 @@ Rules:
 - hard_gates.b2c_or_plg_product_experience true only when real B2C/PLG product experience exists.
 - hard_gates.product_leadership true for founder/CEO/CPO/CTO/product/growth leadership ownership.
 - hard_gates.verified_angel_or_check_writer true only for personal angel/check-writing/scout/micro-fund/Atomico angel evidence.
-- hard_gates.geography_language_fit true only for Europe/UK and not Cyprus.
+- hard_gates.geography_language_fit true according to the selected geography mode.
 - hard_gates.excluded_industry true for excluded industries above.
 - hard_gates.excluded_profile_type true for investor-only/VC-only/advisor-only/mentor-only without operator history.
 - evidence_urls must include the source URLs supporting the score when available.
@@ -204,7 +206,14 @@ def score_candidate(candidate: dict[str, Any], api_key: str, model: str) -> dict
         "source": "p1_strict_angel_screener",
         "evidence": candidate["evidence"],
     }
-    response = gemini_json(api_key, model, STRICT_P1_PROMPT.format(lead_json=json.dumps(lead, ensure_ascii=False)))
+    geography_mode = os.environ.get("P1_ANGEL_GEOGRAPHY_MODE", "europe").strip().lower()
+    if geography_mode not in {"europe", "worldwide"}:
+        geography_mode = "europe"
+    response = gemini_json(
+        api_key,
+        model,
+        STRICT_P1_PROMPT.format(lead_json=json.dumps(lead, ensure_ascii=False), geography_mode=geography_mode),
+    )
     return normalize_triage(response)
 
 

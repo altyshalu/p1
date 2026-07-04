@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -18,21 +18,22 @@ from zoneinfo import ZoneInfo
 
 
 DEFAULT_TZ = "Asia/Nicosia"
-DEFAULT_STATE_DIR = "/opt/p1/runtime/p1_telegram_startup_agent"
+DEFAULT_STATE_DIR = "/opt/p1/runtime/p1_telegram_angel_agent"
 DEFAULT_OUT_DIR = "/opt/p1/out"
 DEFAULT_BATCH_SIZE = 30
 DEFAULT_DAILY_TIME = "10:00"
 
 APPROVED_FIELDS = [
     "Date Added",
-    "Company Name",
-    "Website URL",
+    "Name",
+    "LinkedIn",
+    "City",
     "Country",
-    "Stage",
-    "Category",
+    "Headline",
     "P1 Score",
+    "P1 Status",
     "Verdict",
-    "Reasoning",
+    "P1 Reasoning",
     "Source",
 ]
 
@@ -52,6 +53,9 @@ class Config:
     google_sheet_id: str
     google_sheet_tab: str
     google_sa_path: str
+    google_adc_path: str
+    drive_folder_id: str
+    drive_file_name: str
 
 
 def load_env(path: str | None) -> None:
@@ -75,15 +79,18 @@ def load_config() -> Config:
         chat_id=required("TELEGRAM_CHAT_ID"),
         message_thread_id=os.environ.get("TELEGRAM_MESSAGE_THREAD_ID", "").strip(),
         gemini_api_key=required("GEMINI_API_KEY"),
-        timezone=os.environ.get("P1_STARTUP_TIMEZONE", DEFAULT_TZ).strip() or DEFAULT_TZ,
-        daily_time=os.environ.get("P1_STARTUP_DAILY_TIME", DEFAULT_DAILY_TIME).strip() or DEFAULT_DAILY_TIME,
-        batch_size=int(os.environ.get("P1_STARTUP_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
-        state_dir=Path(os.environ.get("P1_STARTUP_STATE_DIR", DEFAULT_STATE_DIR)),
-        out_dir=Path(os.environ.get("P1_STARTUP_OUT_DIR", DEFAULT_OUT_DIR)),
-        candidates_path=os.environ.get("P1_STARTUP_CANDIDATES_PATH", "").strip(),
-        google_sheet_id=os.environ.get("P1_STARTUP_GOOGLE_SHEET_ID", os.environ.get("P2_GOOGLE_SHEET_ID", "")).strip(),
-        google_sheet_tab=os.environ.get("P1_STARTUP_GOOGLE_SHEET_TAB", "P1 Approved Startups").strip(),
+        timezone=os.environ.get("P1_ANGEL_TIMEZONE", DEFAULT_TZ).strip() or DEFAULT_TZ,
+        daily_time=os.environ.get("P1_ANGEL_DAILY_TIME", DEFAULT_DAILY_TIME).strip() or DEFAULT_DAILY_TIME,
+        batch_size=int(os.environ.get("P1_ANGEL_BATCH_SIZE", DEFAULT_BATCH_SIZE)),
+        state_dir=Path(os.environ.get("P1_ANGEL_STATE_DIR", DEFAULT_STATE_DIR)),
+        out_dir=Path(os.environ.get("P1_ANGEL_OUT_DIR", DEFAULT_OUT_DIR)),
+        candidates_path=os.environ.get("P1_ANGEL_CANDIDATES_PATH", "").strip(),
+        google_sheet_id=os.environ.get("P1_ANGEL_GOOGLE_SHEET_ID", os.environ.get("P1_GOOGLE_SHEET_ID", os.environ.get("P2_GOOGLE_SHEET_ID", ""))).strip(),
+        google_sheet_tab=os.environ.get("P1_ANGEL_GOOGLE_SHEET_TAB", "P1 Approved Angels").strip(),
         google_sa_path=os.environ.get("GOOGLE_SA_PATH", "").strip(),
+        google_adc_path=os.environ.get("GOOGLE_ADC_PATH", "/root/.config/gcloud/application_default_credentials.json").strip(),
+        drive_folder_id=os.environ.get("P1_ANGEL_DRIVE_FOLDER_ID", "").strip(),
+        drive_file_name=os.environ.get("P1_ANGEL_DRIVE_FILE_NAME", "limpid leads").strip() or "limpid leads",
     )
 
 
@@ -141,7 +148,7 @@ def load_state(config: Config) -> dict[str, Any]:
     config.state_dir.mkdir(parents=True, exist_ok=True)
     path = state_path(config)
     if not path.exists():
-        return {"offset": None, "sent_dates": [], "startups": {}, "pending_reject_comments": {}, "seen_keys": []}
+        return {"offset": None, "sent_dates": [], "angels": {}, "pending_reject_comments": {}, "seen_keys": []}
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -150,16 +157,16 @@ def save_state(config: Config, state: dict[str, Any]) -> None:
     state_path(config).write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def startup_id(startup: dict[str, Any]) -> str:
-    raw = f"{startup.get('name')}|{startup.get('website')}"
+def angel_id(angel: dict[str, Any]) -> str:
+    raw = f"{angel.get('name')}|{angel.get('linkedin_url')}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def startup_key(startup: dict[str, Any]) -> str:
-    website = str(startup.get("website") or "").lower().strip().removeprefix("https://").removeprefix("http://").removeprefix("www.").rstrip("/")
-    if website:
-        return f"url:{website}"
-    return "name:" + re.sub(r"[^a-z0-9]+", "", str(startup.get("name") or "").lower())
+def angel_key(angel: dict[str, Any]) -> str:
+    linkedin_url = str(angel.get("linkedin_url") or "").lower().strip().removeprefix("https://").removeprefix("http://").removeprefix("www.").rstrip("/")
+    if linkedin_url:
+        return f"url:{linkedin_url}"
+    return "name:" + re.sub(r"[^a-z0-9]+", "", str(angel.get("name") or "").lower())
 
 
 def read_reject_feedback(config: Config, limit: int = 60) -> list[str]:
@@ -180,70 +187,88 @@ def read_reject_feedback(config: Config, limit: int = 60) -> list[str]:
 
 
 def load_candidate_pool(config: Config) -> list[dict[str, Any]]:
+    file_pool: list[dict[str, Any]] = []
     if config.candidates_path:
-        return load_candidates_from_file(Path(config.candidates_path))
+        file_path = Path(config.candidates_path)
+        if file_path.exists():
+            file_pool = load_candidates_from_file(file_path)
     feedback = read_reject_feedback(config)
-    pool: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    pool: list[dict[str, Any]] = list(file_pool)
+    seen: set[str] = {angel_key(angel) for angel in pool}
     target = max(config.batch_size * 3, 75)
+    if len(pool) >= target:
+        return pool
     for chunk_index in range(4):
         prompt = f"""
-Generate 25 fresh Europe/UK AI-native startup candidates for a VC daily review queue.
+Generate 25 fresh worldwide operator-angel candidates for a VC daily review queue.
 
 Requirements:
-- early-stage startups, AI-native or AI-enabled;
-- no duplicate obvious companies;
-- include official website URL when possible;
+- individual angels, scouts, micro-fund operators, or founder/operator check-writers;
+- must have B2C, consumer, marketplace, gaming, viral fintech, or PLG/operator DNA;
+- no duplicate obvious people;
+- include LinkedIn URL when possible;
+- include city/country/headline;
+- prefer publicly known real people with evidence that can be checked;
 - avoid profiles similar to previous reject comments:
 {json.dumps(feedback[-30:], ensure_ascii=False)}
-- avoid companies already selected in this run:
+- avoid people already selected in this run:
 {json.dumps(sorted(seen), ensure_ascii=False)}
 
 Return JSON only:
-{{"startups":[{{"name":"","website":"","country":"","stage":"","category":"","one_liner":"","source":""}}]}}
+{{"angels":[{{"name":"","linkedin_url":"","city":"","country":"","headline":"","evidence":[""],"source":""}}]}}
 """
         try:
             payload = gemini_json(config.gemini_api_key, prompt)
         except Exception as exc:
             print(f"candidate generation chunk {chunk_index + 1} failed: {exc}", flush=True)
             continue
-        startups = payload.get("startups") if isinstance(payload, dict) else []
-        for item in startups:
+        angels = payload.get("angels") if isinstance(payload, dict) else []
+        for item in angels:
             if not isinstance(item, dict):
                 continue
-            startup = normalize_startup(item)
-            key = startup_key(startup)
-            if not startup.get("name") or key in seen:
+            angel = normalize_angel(item)
+            key = angel_key(angel)
+            if not angel.get("name") or key in seen:
                 continue
             seen.add(key)
-            pool.append(startup)
+            pool.append(angel)
         if len(pool) >= target:
             break
     if not pool:
-        raise RuntimeError("Gemini did not return any usable startup candidates.")
+        raise RuntimeError("Gemini did not return any usable angel candidates.")
     return pool
 
 
 def load_candidates_from_file(path: Path) -> list[dict[str, Any]]:
     if path.suffix.lower() == ".json":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        rows = payload.get("startups") if isinstance(payload, dict) else payload
-        return [normalize_startup(item) for item in rows if isinstance(item, dict)]
+        rows = payload.get("angels") or payload.get("candidates") if isinstance(payload, dict) else payload
+        return [normalize_angel(item) for item in rows if isinstance(item, dict)]
     delimiter = "\t" if path.suffix.lower() == ".tsv" else ","
     with path.open(encoding="utf-8", newline="") as handle:
-        return [normalize_startup(row) for row in csv.DictReader(handle, delimiter=delimiter)]
+        return [normalize_angel(row) for row in csv.DictReader(handle, delimiter=delimiter)]
 
 
-def normalize_startup(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": first_text(item, "name", "Company Name", "company"),
-        "website": clean_url(first_text(item, "website", "Website URL", "url")),
-        "country": first_text(item, "country", "Country", "Country of Incorporation"),
-        "stage": first_text(item, "stage", "Startup Stage"),
-        "category": first_text(item, "category", "Direction", "sector"),
-        "one_liner": first_text(item, "one_liner", "headline", "description", "Additional Decision-Useful Info"),
-        "source": first_text(item, "source", "Source") or "gemini_daily_sourcing",
+def normalize_angel(item: dict[str, Any]) -> dict[str, Any]:
+    evidence = item.get("evidence")
+    if isinstance(evidence, str):
+        evidence_values = [part.strip() for part in re.split(r"\s*\|\s*|\n", evidence) if part.strip()]
+    elif isinstance(evidence, list):
+        evidence_values = [str(part).strip() for part in evidence if str(part).strip()]
+    else:
+        evidence_values = []
+    normalized = {
+        "name": first_text(item, "name", "Name"),
+        "linkedin_url": clean_url(first_text(item, "linkedin_url", "LinkedIn", "LinkedIn URL", "url")),
+        "city": first_text(item, "city", "City"),
+        "country": first_text(item, "country", "Country"),
+        "headline": first_text(item, "headline", "Headline", "description", "one_liner"),
+        "evidence": evidence_values,
+        "source": first_text(item, "source", "Source") or "p1_angel_sourcing",
     }
+    if isinstance(item.get("triage"), dict):
+        normalized["triage"] = item["triage"]
+    return normalized
 
 
 def first_text(item: dict[str, Any], *keys: str) -> str:
@@ -326,19 +351,19 @@ def parse_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
-def score_startup(config: Config, startup: dict[str, Any]) -> dict[str, Any]:
+def score_angel(config: Config, angel: dict[str, Any]) -> dict[str, Any]:
     feedback = read_reject_feedback(config)
     prompt = f"""
-You are the P1 startup suitability judge for an AI-native VC daily queue.
+You are the P1 angel suitability judge for an AI-native VC daily queue.
 
-Startup:
-{json.dumps(startup, ensure_ascii=False)}
+Angel:
+{json.dumps(angel, ensure_ascii=False)}
 
 Reject-comment memory to learn from:
 {json.dumps(feedback[-40:], ensure_ascii=False)}
 
-Approve only if it is a credible Europe/UK startup with strong AI-native or AI-enabled product potential, startup-like profile, and enough information to review.
-Reject if it is not a startup, not Europe/UK, agency/consulting-only, generic directory/content site, crypto spam, no official website, corporate product page, unclear AI relevance, or resembles the reject-comment memory.
+Approve only if it has BOTH real B2C/consumer/marketplace/gaming/viral fintech/PLG operator experience AND personal angel/check-writer/scout/micro-fund evidence.
+Reject VC-only, advisor-only, mentor-only, B2B SaaS-only, consulting-only, corporate finance, commercial banking, biotech, defense, medical equipment, heavy industry, real estate, Cyprus, no personal investing evidence, or profiles resembling reject memory.
 
 Return JSON only with:
 score: integer 0-100,
@@ -357,35 +382,35 @@ category: short category
         "score": score,
         "status": status,
         "reasoning": str(result.get("reasoning") or "").strip(),
-        "category": str(result.get("category") or startup.get("category") or "").strip(),
+        "category": str(result.get("category") or angel.get("category") or "").strip(),
     }
 
 
-def score_startups(config: Config, startups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def score_angels(config: Config, angels: list[dict[str, Any]]) -> list[dict[str, Any]]:
     feedback = read_reject_feedback(config)
     candidates = [
         {
             "index": index,
-            "name": startup.get("name", ""),
-            "website": startup.get("website", ""),
-            "country": startup.get("country", ""),
-            "stage": startup.get("stage", ""),
-            "category": startup.get("category", ""),
-            "one_liner": startup.get("one_liner", ""),
+            "name": angel.get("name", ""),
+            "linkedin_url": angel.get("linkedin_url", ""),
+            "city": angel.get("city", ""),
+            "country": angel.get("country", ""),
+            "headline": angel.get("headline", ""),
+            "evidence": angel.get("evidence", []),
         }
-        for index, startup in enumerate(startups)
+        for index, angel in enumerate(angels)
     ]
     prompt = f"""
-You are the P1 startup suitability judge for an AI-native VC daily queue.
+You are the P1 angel suitability judge for an AI-native VC daily queue.
 
-Score these startup candidates:
+Score these angel candidates:
 {json.dumps(candidates, ensure_ascii=False)}
 
 Reject-comment memory to learn from:
 {json.dumps(feedback[-40:], ensure_ascii=False)}
 
-Approve only if it is a credible Europe/UK startup with strong AI-native or AI-enabled product potential, startup-like profile, and enough information to review.
-Reject if it is not a startup, not Europe/UK, agency/consulting-only, generic directory/content site, crypto spam, no official website, corporate product page, unclear AI relevance, or resembles the reject-comment memory.
+Approve only if it has BOTH real B2C/consumer/marketplace/gaming/viral fintech/PLG operator experience AND personal angel/check-writer/scout/micro-fund evidence.
+Reject VC-only, advisor-only, mentor-only, B2B SaaS-only, consulting-only, corporate finance, commercial banking, biotech, defense, medical equipment, heavy industry, real estate, Cyprus, no personal investing evidence, or profiles resembling reject memory.
 
 Return JSON only:
 {{"scores":[{{"index":0,"score":0,"status":"gateway_eligible|reject|needs_enrichment","reasoning":"short practical reason","category":"short category"}}]}}
@@ -396,7 +421,7 @@ Return JSON only:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        index = bounded_int(row.get("index"), 0, len(startups) - 1)
+        index = bounded_int(row.get("index"), 0, len(angels) - 1)
         score = bounded_int(row.get("score"), 0, 100)
         status = str(row.get("status") or "reject")
         if score >= 70 and status != "reject":
@@ -407,7 +432,7 @@ Return JSON only:
             "score": score,
             "status": status,
             "reasoning": str(row.get("reasoning") or "").strip(),
-            "category": str(row.get("category") or startups[index].get("category") or "").strip(),
+            "category": str(row.get("category") or angels[index].get("category") or "").strip(),
         }
     return [
         by_index.get(
@@ -416,10 +441,10 @@ Return JSON only:
                 "score": 0,
                 "status": "reject",
                 "reasoning": "No batch score returned.",
-                "category": startup.get("category", ""),
+                "category": angel.get("category", ""),
             },
         )
-        for index, startup in enumerate(startups)
+        for index, angel in enumerate(angels)
     ]
 
 
@@ -431,29 +456,40 @@ def bounded_int(value: Any, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, number))
 
 
-def select_daily_startups(config: Config, state: dict[str, Any]) -> list[dict[str, Any]]:
+def select_daily_angels(config: Config, state: dict[str, Any]) -> list[dict[str, Any]]:
     seen = set(state.get("seen_keys") or [])
     pool = load_candidate_pool(config)
     approved: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     candidate_keys: list[str] = []
-    for startup in pool:
-        if not startup.get("name"):
+    for angel in pool:
+        if not angel.get("name"):
             continue
-        key = startup_key(startup)
+        key = angel_key(angel)
         if key in seen or key in candidate_keys:
             continue
-        candidates.append(startup)
+        candidates.append(angel)
         candidate_keys.append(key)
     for offset in range(0, len(candidates), 20):
         chunk = candidates[offset : offset + 20]
         chunk_keys = candidate_keys[offset : offset + 20]
-        print(f"scoring startup candidates {offset + 1}-{offset + len(chunk)}", flush=True)
-        triage_rows = score_startups(config, chunk)
-        for startup, key, triage in zip(chunk, chunk_keys, triage_rows, strict=False):
-            startup = {**startup, "triage": triage, "id": startup_id(startup)}
+        pretriaged = [angel.get("triage") if isinstance(angel.get("triage"), dict) else None for angel in chunk]
+        if all(row and row.get("status") == "gateway_eligible" for row in pretriaged):
+            triage_rows = [dict(row) for row in pretriaged if row]
+        else:
+            for idx, angel in enumerate(chunk):
+                if pretriaged[idx] and pretriaged[idx].get("status") == "gateway_eligible":
+                    continue
+                triage = score_angel(config, angel)
+                chunk[idx] = {**angel, "triage": triage}
+                pretriaged[idx] = triage
+                time.sleep(0.05)
+            triage_rows = [dict(row) if row else {"score": 0, "status": "reject", "reasoning": "No triage returned."} for row in pretriaged]
+        print(f"scoring angel candidates {offset + 1}-{offset + len(chunk)}", flush=True)
+        for angel, key, triage in zip(chunk, chunk_keys, triage_rows, strict=False):
+            angel = {**angel, "triage": triage, "id": angel_id(angel)}
             if triage["status"] == "gateway_eligible":
-                approved.append(startup)
+                approved.append(angel)
                 seen.add(key)
             if len(approved) >= config.batch_size:
                 break
@@ -463,26 +499,26 @@ def select_daily_startups(config: Config, state: dict[str, Any]) -> list[dict[st
     return approved
 
 
-def startup_message(index: int, startup: dict[str, Any]) -> str:
-    triage = startup["triage"]
+def angel_message(index: int, angel: dict[str, Any]) -> str:
+    triage = angel["triage"]
     return "\n".join(
         [
-            f"{index}. {startup.get('name')}",
-            f"{startup.get('website')}",
-            f"{startup.get('country')} | {startup.get('stage')} | {triage.get('category') or startup.get('category')}",
+            f"{index}. {angel.get('name')}",
+            f"{angel.get('linkedin_url')}",
+            f"{angel.get('city')}, {angel.get('country')}",
             f"Score: {triage.get('score')} | {triage.get('status')}",
-            f"{startup.get('one_liner')}",
+            f"{angel.get('headline')}",
             f"Why: {triage.get('reasoning')}",
         ]
     )
 
 
-def buttons(startup_id_value: str) -> dict[str, Any]:
+def buttons(angel_id_value: str) -> dict[str, Any]:
     return {
         "inline_keyboard": [
             [
-                {"text": "Approve", "callback_data": f"p1s:approve:{startup_id_value}"},
-                {"text": "Reject", "callback_data": f"p1s:reject:{startup_id_value}"},
+                {"text": "Approve", "callback_data": f"p1a:approve:{angel_id_value}"},
+                {"text": "Reject", "callback_data": f"p1a:reject:{angel_id_value}"},
             ]
         ]
     }
@@ -493,15 +529,26 @@ def send_daily_batch(config: Config, state: dict[str, Any], telegram: TelegramCl
     today = now.date().isoformat()
     if not force and today in set(state.get("sent_dates") or []):
         return
-    startups = select_daily_startups(config, state)
-    telegram.send_message(config.chat_id, f"P1 daily startup queue: {len(startups)} startups for {today}", config.message_thread_id)
-    state.setdefault("startups", {})
-    for index, startup in enumerate(startups, start=1):
-        state["startups"][startup["id"]] = startup
-        telegram.send_message(config.chat_id, startup_message(index, startup), config.message_thread_id, buttons(startup["id"]))
+    angels = select_daily_angels(config, state)
+    telegram.send_message(config.chat_id, f"P1 daily angel queue: {len(angels)} angels for {today}", config.message_thread_id)
+    state.setdefault("angels", {})
+    for index, angel in enumerate(angels, start=1):
+        state["angels"][angel["id"]] = angel
+        telegram.send_message(config.chat_id, angel_message(index, angel), config.message_thread_id, buttons(angel["id"]))
     if not force:
         state.setdefault("sent_dates", []).append(today)
     save_state(config, state)
+
+
+def send_now(config: Config, count: int) -> None:
+    send_config = replace(config, batch_size=count)
+    telegram = TelegramClient(send_config.telegram_token)
+    state = load_state(send_config)
+    send_daily_batch(send_config, state, telegram, force=True)
+    today = datetime.now(ZoneInfo(send_config.timezone)).date().isoformat()
+    if today not in set(state.get("sent_dates") or []):
+        state.setdefault("sent_dates", []).append(today)
+    save_state(send_config, state)
 
 
 def append_tsv(path: Path, fields: list[str], row: dict[str, Any]) -> None:
@@ -514,52 +561,166 @@ def append_tsv(path: Path, fields: list[str], row: dict[str, Any]) -> None:
         writer.writerow(row)
 
 
-def approve_startup(config: Config, startup: dict[str, Any]) -> str:
+def approve_angel(config: Config, angel: dict[str, Any]) -> str:
     row = {
         "Date Added": datetime.now(ZoneInfo(config.timezone)).date().isoformat(),
-        "Company Name": startup.get("name", ""),
-        "Website URL": startup.get("website", ""),
-        "Country": startup.get("country", ""),
-        "Stage": startup.get("stage", ""),
-        "Category": startup.get("triage", {}).get("category") or startup.get("category", ""),
-        "P1 Score": startup.get("triage", {}).get("score", ""),
+        "Name": angel.get("name", ""),
+        "LinkedIn": angel.get("linkedin_url", ""),
+        "City": angel.get("city", ""),
+        "Country": angel.get("country", ""),
+        "Headline": angel.get("headline", ""),
+        "P1 Score": angel.get("triage", {}).get("score", ""),
+        "P1 Status": angel.get("triage", {}).get("status", ""),
         "Verdict": "approve",
-        "Reasoning": startup.get("triage", {}).get("reasoning", ""),
-        "Source": startup.get("source", ""),
+        "P1 Reasoning": angel.get("triage", {}).get("reasoning", ""),
+        "Source": angel.get("source", ""),
     }
-    append_tsv(config.out_dir / "p1_approved_startups.tsv", APPROVED_FIELDS, row)
-    if config.google_sheet_id and config.google_sa_path and Path(config.google_sa_path).exists():
-        try:
-            append_google_sheet(config, row)
+    append_tsv(config.out_dir / "p1_approved_angels.tsv", APPROVED_FIELDS, row)
+    if not has_google_credentials(config):
+        return "Approved locally. Google credentials are not configured yet."
+    try:
+        if config.drive_folder_id:
+            spreadsheet_id = ensure_drive_spreadsheet(config)
+            append_google_sheet(config, row, spreadsheet_id)
+            return f"Approved and written to Google Drive file: {config.drive_file_name}."
+        if config.google_sheet_id:
+            append_google_sheet(config, row, config.google_sheet_id)
             return "Approved and written to Google Sheet."
-        except Exception as exc:
-            append_tsv(config.out_dir / "p1_sheet_write_errors.tsv", ["time", "company", "error"], {"time": datetime.utcnow().isoformat(), "company": row["Company Name"], "error": str(exc)[:500]})
-            return "Approved locally, but Google Sheet write failed. Saved to error log."
-    return "Approved locally. Google Sheet credentials are not configured yet."
+        return "Approved locally. Google destination is not configured yet."
+    except Exception as exc:
+        append_tsv(
+            config.out_dir / "p1_sheet_write_errors.tsv",
+            ["time", "name", "error"],
+            {"time": datetime.utcnow().isoformat(), "name": row["Name"], "error": str(exc)[:500]},
+        )
+        return "Approved locally, but Google write failed. Saved to error log."
 
 
-def append_google_sheet(config: Config, row: dict[str, Any]) -> None:
-    from l2l3_protocol.workers.p1_operator_worker import _google_access_token, _request_json
-
-    token = _google_access_token(config.google_sa_path)
+def append_google_sheet(config: Config, row: dict[str, Any], spreadsheet_id: str) -> None:
+    token = google_access_token(
+        config,
+        ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"],
+    )
     tab = config.google_sheet_tab
-    encoded_range = urllib.parse.quote(f"{tab}!A:J", safe="")
+    ensure_google_sheet_tab(spreadsheet_id, tab, token)
+    ensure_google_sheet_headers(spreadsheet_id, tab, token)
+    encoded_range = urllib.parse.quote(f"{tab}!A:K", safe="")
     values = [[row[field] for field in APPROVED_FIELDS]]
-    _request_json(
-        f"https://sheets.googleapis.com/v4/spreadsheets/{config.google_sheet_id}/values/{encoded_range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
-        method="POST",
-        token=token,
-        body={"values": values},
+    google_request_json(
+        "POST",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_range}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS",
+        token,
+        {"values": values},
     )
 
 
-def store_reject_comment(config: Config, startup: dict[str, Any], comment: str, user: dict[str, Any]) -> None:
+def ensure_drive_spreadsheet(config: Config) -> str:
+    token = google_access_token(
+        config,
+        ["https://www.googleapis.com/auth/drive.file", "https://www.googleapis.com/auth/spreadsheets"],
+    )
+    escaped_name = config.drive_file_name.replace("\\", "\\\\").replace("'", "\\'")
+    query = (
+        f"'{config.drive_folder_id}' in parents and "
+        f"name = '{escaped_name}' and "
+        "mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false"
+    )
+    search_url = "https://www.googleapis.com/drive/v3/files?" + urllib.parse.urlencode(
+        {"q": query, "fields": "files(id,name)", "pageSize": "10", "supportsAllDrives": "true"}
+    )
+    result = google_request_json("GET", search_url, token)
+    files = result.get("files") if isinstance(result, dict) else []
+    if isinstance(files, list) and files:
+        return str(files[0]["id"])
+    created = google_request_json(
+        "POST",
+        "https://www.googleapis.com/drive/v3/files?fields=id&supportsAllDrives=true",
+        token,
+        {
+            "name": config.drive_file_name,
+            "mimeType": "application/vnd.google-apps.spreadsheet",
+            "parents": [config.drive_folder_id],
+        },
+    )
+    return str(created["id"])
+
+
+def ensure_google_sheet_tab(spreadsheet_id: str, tab_name: str, token: str) -> None:
+    metadata = google_request_json(
+        "GET",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets.properties",
+        token,
+    )
+    sheets = metadata.get("sheets", []) if isinstance(metadata, dict) else []
+    existing = {str(item.get("properties", {}).get("title") or "") for item in sheets if isinstance(item, dict)}
+    if tab_name in existing:
+        return
+    google_request_json(
+        "POST",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}:batchUpdate",
+        token,
+        {"requests": [{"addSheet": {"properties": {"title": tab_name}}}]},
+    )
+
+
+def ensure_google_sheet_headers(spreadsheet_id: str, tab_name: str, token: str) -> None:
+    encoded_row = urllib.parse.quote(f"{tab_name}!1:1", safe="")
+    existing = google_request_json("GET", f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_row}", token)
+    values = existing.get("values") if isinstance(existing, dict) else []
+    if values:
+        return
+    google_request_json(
+        "PUT",
+        f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{encoded_row}?valueInputOption=RAW",
+        token,
+        {"values": [APPROVED_FIELDS]},
+    )
+
+
+def has_google_credentials(config: Config) -> bool:
+    return bool(
+        (config.google_sa_path and Path(config.google_sa_path).exists())
+        or (config.google_adc_path and Path(config.google_adc_path).exists())
+    )
+
+
+def google_access_token(config: Config, scopes: list[str]) -> str:
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from google.oauth2.credentials import Credentials as UserCredentials
+    from google.oauth2.service_account import Credentials
+
+    if config.google_sa_path and Path(config.google_sa_path).exists():
+        credentials = Credentials.from_service_account_file(config.google_sa_path, scopes=scopes)
+    elif config.google_adc_path and Path(config.google_adc_path).exists():
+        credentials = UserCredentials.from_authorized_user_file(config.google_adc_path, scopes=scopes)
+    else:
+        raise RuntimeError("Google credentials are not configured")
+    credentials.refresh(GoogleAuthRequest())
+    if not credentials.token:
+        raise RuntimeError("Google access token is empty")
+    return credentials.token
+
+
+def google_request_json(method: str, url: str, token: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method=method,
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        text = response.read().decode("utf-8")
+    return json.loads(text) if text else {}
+
+
+def store_reject_comment(config: Config, angel: dict[str, Any], comment: str, user: dict[str, Any]) -> None:
     path = config.state_dir / "reject_feedback.jsonl"
     item = {
         "time": datetime.utcnow().isoformat(),
-        "startup_id": startup.get("id"),
-        "company": startup.get("name"),
-        "website": startup.get("website"),
+        "angel_id": angel.get("id"),
+        "name": angel.get("name"),
+        "linkedin_url": angel.get("linkedin_url"),
         "comment": comment,
         "user_id": user.get("id"),
         "username": user.get("username"),
@@ -573,17 +734,17 @@ def handle_callback(config: Config, state: dict[str, Any], telegram: TelegramCli
     data = str(query.get("data") or "")
     callback_id = str(query.get("id") or "")
     parts = data.split(":")
-    if len(parts) != 3 or parts[0] != "p1s":
+    if len(parts) != 3 or parts[0] != "p1a":
         return
     action, sid = parts[1], parts[2]
-    startup = state.get("startups", {}).get(sid)
-    if not isinstance(startup, dict):
-        telegram.answer_callback(callback_id, "Startup not found in state.")
+    angel = state.get("angels", {}).get(sid)
+    if not isinstance(angel, dict):
+        telegram.answer_callback(callback_id, "Angel not found in state.")
         return
     if action == "approve":
-        message = approve_startup(config, startup)
+        message = approve_angel(config, angel)
         telegram.answer_callback(callback_id, "Approved")
-        telegram.send_message(config.chat_id, f"{startup.get('name')}: {message}", config.message_thread_id)
+        telegram.send_message(config.chat_id, f"{angel.get('name')}: {message}", config.message_thread_id)
         save_state(config, state)
         return
     if action == "reject":
@@ -592,7 +753,7 @@ def handle_callback(config: Config, state: dict[str, Any], telegram: TelegramCli
         state.setdefault("pending_reject_comments", {})[key] = sid
         save_state(config, state)
         telegram.answer_callback(callback_id, "Rejected")
-        telegram.send_message(config.chat_id, f"Why reject {startup.get('name')}? Reply with the comment in this thread.", config.message_thread_id)
+        telegram.send_message(config.chat_id, f"Why reject {angel.get('name')}? Reply with the comment in this thread.", config.message_thread_id)
 
 
 def handle_message(config: Config, state: dict[str, Any], telegram: TelegramClient, message: dict[str, Any]) -> None:
@@ -601,10 +762,10 @@ def handle_message(config: Config, state: dict[str, Any], telegram: TelegramClie
     user_key = str(user.get("id") or "unknown")
     if user_key in state.get("pending_reject_comments", {}) and text and not text.startswith("/"):
         sid = state["pending_reject_comments"].pop(user_key)
-        startup = state.get("startups", {}).get(sid, {})
-        if isinstance(startup, dict):
-            store_reject_comment(config, startup, text, user)
-            telegram.send_message(config.chat_id, f"Saved reject feedback for {startup.get('name')}. I will use this in future scoring.", config.message_thread_id)
+        angel = state.get("angels", {}).get(sid, {})
+        if isinstance(angel, dict):
+            store_reject_comment(config, angel, text, user)
+            telegram.send_message(config.chat_id, f"Saved reject feedback for {angel.get('name')}. I will use this in future scoring.", config.message_thread_id)
             save_state(config, state)
         return
     if text in {"/send_today", "/send_today@p1"}:
@@ -614,18 +775,19 @@ def handle_message(config: Config, state: dict[str, Any], telegram: TelegramClie
 
 
 def status_text(config: Config, state: dict[str, Any]) -> str:
-    approved_path = config.out_dir / "p1_approved_startups.tsv"
+    approved_path = config.out_dir / "p1_approved_angels.tsv"
     feedback_path = config.state_dir / "reject_feedback.jsonl"
     approved_rows = max(0, len(approved_path.read_text(encoding="utf-8").splitlines()) - 1) if approved_path.exists() else 0
     feedback_rows = len(feedback_path.read_text(encoding="utf-8").splitlines()) if feedback_path.exists() else 0
     return "\n".join(
         [
-            "P1 Telegram startup agent",
+            "P1 Telegram angel agent",
             f"daily_time: {config.daily_time} {config.timezone}",
             f"batch_size: {config.batch_size}",
             f"approved_local_rows: {approved_rows}",
             f"reject_feedback_rows: {feedback_rows}",
-            f"google_sheet_configured: {bool(config.google_sheet_id and config.google_sa_path and Path(config.google_sa_path).exists())}",
+            f"google_drive_configured: {bool(config.drive_folder_id and has_google_credentials(config))}",
+            f"google_sheet_configured: {bool(config.google_sheet_id and has_google_credentials(config))}",
         ]
     )
 
@@ -645,7 +807,7 @@ def run() -> None:
     config.out_dir.mkdir(parents=True, exist_ok=True)
     telegram = TelegramClient(config.telegram_token)
     state = load_state(config)
-    telegram.send_message(config.chat_id, "P1 Telegram startup agent is online. Use /send_today or /p1_status.", config.message_thread_id)
+    telegram.send_message(config.chat_id, "P1 Telegram angel agent is online. Use /send_today or /p1_status.", config.message_thread_id)
     while True:
         if next_daily_due(config, state):
             send_daily_batch(config, state, telegram)
@@ -660,11 +822,16 @@ def run() -> None:
 
 
 if __name__ == "__main__":
+    if "--send-now" in sys.argv[1:]:
+        index = sys.argv.index("--send-now")
+        count = int(sys.argv[index + 1]) if len(sys.argv) > index + 1 else 10
+        send_now(load_config(), count)
+        raise SystemExit(0)
     if any(arg in {"-h", "--help"} for arg in sys.argv[1:]):
         print(
             "\n".join(
                 [
-                    "P1 Telegram startup agent",
+                    "P1 Telegram angel agent",
                     "",
                     "Environment:",
                     "  P1_TELEGRAM_ENV_FILE=/opt/p1/.env",
@@ -672,9 +839,9 @@ if __name__ == "__main__":
                     "  TELEGRAM_CHAT_ID=...",
                     "  TELEGRAM_MESSAGE_THREAD_ID=...  # optional p1 topic",
                     "  GEMINI_API_KEY=...",
-                    "  P1_STARTUP_DAILY_TIME=10:00",
-                    "  P1_STARTUP_TIMEZONE=Asia/Nicosia",
-                    "  P1_STARTUP_BATCH_SIZE=30",
+                    "  P1_ANGEL_DAILY_TIME=10:00",
+                    "  P1_ANGEL_TIMEZONE=Asia/Nicosia",
+                    "  P1_ANGEL_BATCH_SIZE=30",
                     "",
                     "Telegram commands:",
                     "  /send_today",
