@@ -119,6 +119,17 @@ class TelegramClient:
                 data = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
+            if exc.code == 429:
+                retry_after = 35
+                try:
+                    retry_after = int(json.loads(body).get("parameters", {}).get("retry_after") or retry_after)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    pass
+                time.sleep(max(1, retry_after) + 1)
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                if data.get("ok") is True:
+                    return data.get("result")
             raise TelegramError(exc.code, f"Telegram {method} HTTP {exc.code}: {body[:500]}") from exc
         if data.get("ok") is not True:
             raise TelegramError(0, f"Telegram {method} failed: {data}")

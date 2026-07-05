@@ -175,9 +175,12 @@ def load_candidate_pool(config: Config) -> list[dict[str, Any]]:
     feedback = read_reject_feedback(config)
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
-    target = max(config.batch_size * 3, 75)
-    for chunk_index in range(12):
-        chunk_size = min(8, target - len(pool))
+    target = max(config.batch_size * 5, 120)
+    max_chunks = max(24, config.batch_size * 2)
+    for chunk_index in range(max_chunks):
+        chunk_size = min(5, target - len(pool))
+        if chunk_size <= 0:
+            break
         prompt = f"""
 Generate {chunk_size} fresh real startup candidates for OH.io P2 daily review.
 
@@ -397,6 +400,8 @@ def send_daily_batch(config: Config, state: dict[str, Any], telegram: Any, force
         print("p2 startup batch skipped: missing P2 message_thread_id. Send /p2_bind inside the p2 topic.", flush=True)
         return
     startups = select_daily_startups(config, state)
+    if len(startups) < config.batch_size:
+        print(f"p2 startup batch incomplete: selected {len(startups)} of {config.batch_size}", flush=True)
     telegram.send_message(config.chat_id, f"P2 daily startup queue: {len(startups)} startups for {today}", thread_id)
     state.setdefault("startups", {})
     for index, startup in enumerate(startups, start=1):
@@ -404,7 +409,7 @@ def send_daily_batch(config: Config, state: dict[str, Any], telegram: Any, force
         sent = telegram.send_message(config.chat_id, startup_message(index, startup), thread_id, buttons(startup["id"]))
         if isinstance(sent, dict) and sent.get("message_id"):
             state["startups"][startup["id"]]["telegram_message_id"] = sent["message_id"]
-    if not force:
+    if not force and len(startups) >= config.batch_size:
         state.setdefault("sent_dates", []).append(today)
     save_state(config, state)
 
