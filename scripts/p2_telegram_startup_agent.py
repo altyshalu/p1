@@ -175,14 +175,14 @@ def load_candidate_pool(config: Config) -> list[dict[str, Any]]:
     feedback = read_reject_feedback(config)
     pool: list[dict[str, Any]] = []
     seen: set[str] = set()
-    target = max(config.batch_size * 5, 120)
-    max_chunks = max(24, config.batch_size * 2)
+    target = max(config.batch_size * 3, 90)
+    max_chunks = max(45, config.batch_size * 3)
     for chunk_index in range(max_chunks):
-        chunk_size = min(5, target - len(pool))
+        chunk_size = min(1, target - len(pool))
         if chunk_size <= 0:
             break
         prompt = f"""
-Generate {chunk_size} fresh real startup candidates for OH.io P2 daily review.
+Generate {chunk_size} fresh real startup candidate for OH.io P2 daily review.
 
 ICP:
 {OHIO_ICP}
@@ -193,7 +193,7 @@ Avoid profiles similar to previous reject comments:
 Avoid companies already selected in this run:
 {json.dumps(sorted(seen), ensure_ascii=False)}
 
-Return JSON only:
+Return compact JSON only:
 {{"startups":[{{"name":"","website":"","country":"","stage":"","direction":"","one_liner":"","founder_linkedin":"","arr":"","us_gtm_gap":"","source":""}}]}}
 """
         try:
@@ -273,7 +273,7 @@ def gemini_json(api_key: str, prompt: str) -> dict[str, Any]:
     for attempt in prompts:
         body = {
             "contents": [{"parts": [{"text": attempt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 16384},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 2048},
         }
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=90) as response:

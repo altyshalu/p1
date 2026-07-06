@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 import time
 from typing import Any
 import urllib.parse
@@ -888,12 +889,31 @@ def run() -> None:
     p2_module = load_p2_module()
     p2_config = p2_module.load_config() if p2_module else None
     p2_state = p2_module.load_state(p2_config) if p2_module and p2_config else None
+    daily_running = {"p1": False, "p2": False}
+    daily_attempted: dict[str, set[str]] = {"p1": set(), "p2": set()}
+
+    def today_for(timezone: str) -> str:
+        return datetime.now(ZoneInfo(timezone)).date().isoformat()
+
+    def start_daily(name: str, timezone: str, work: Any) -> None:
+        today = today_for(timezone)
+        if daily_running.get(name) or today in daily_attempted.setdefault(name, set()):
+            return
+        daily_running[name] = True
+        daily_attempted[name].add(today)
+
+        def target() -> None:
+            try:
+                work()
+            except Exception as exc:
+                print(f"{name} daily batch warning: {exc}", flush=True)
+            finally:
+                daily_running[name] = False
+
+        threading.Thread(target=target, name=f"{name}-daily-batch", daemon=True).start()
+
     while True:
         try:
-            if next_daily_due(config, state):
-                send_daily_batch(config, state, telegram)
-            if p2_module and p2_config and p2_state and p2_module.next_daily_due(p2_config, p2_state):
-                p2_module.send_daily_batch(p2_config, p2_state, telegram)
             for update in telegram.get_updates(state.get("offset")):
                 state["offset"] = int(update["update_id"]) + 1
                 if isinstance(update.get("callback_query"), dict):
@@ -909,6 +929,10 @@ def run() -> None:
                     if not handled:
                         handle_message(config, state, telegram, update["message"])
                 save_state(config, state)
+            if next_daily_due(config, state):
+                start_daily("p1", config.timezone, lambda: send_daily_batch(config, state, telegram))
+            if p2_module and p2_config and p2_state and p2_module.next_daily_due(p2_config, p2_state):
+                start_daily("p2", p2_config.timezone, lambda: p2_module.send_daily_batch(p2_config, p2_state, telegram))
         except TelegramError as exc:
             print(f"telegram polling warning: {exc}", flush=True)
             time.sleep(30 if exc.status_code == 409 else 10)
