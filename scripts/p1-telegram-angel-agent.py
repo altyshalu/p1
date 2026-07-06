@@ -888,6 +888,7 @@ def run() -> None:
     approval_token = approval_telegram_token(config)
     approval_telegram = TelegramClient(approval_token)
     approval_is_separate = approval_token != config.telegram_token
+    approval_polling_enabled = {"value": approval_is_separate}
     state = load_state(config)
     p2_module = load_p2_module()
     p2_config = p2_module.load_config() if p2_module else None
@@ -915,6 +916,9 @@ def run() -> None:
 
         threading.Thread(target=target, name=f"{name}-daily-batch", daemon=True).start()
 
+    def lead_telegram() -> TelegramClient:
+        return approval_telegram if approval_polling_enabled["value"] else telegram
+
     def handle_update(update: dict[str, Any], bot: TelegramClient, message_mode: str) -> None:
         if isinstance(update.get("callback_query"), dict):
             data = str(update["callback_query"].get("data") or "")
@@ -940,15 +944,22 @@ def run() -> None:
                 state["offset"] = int(update["update_id"]) + 1
                 handle_update(update, telegram, "commands")
                 save_state(config, state)
-            if approval_is_separate:
-                for update in approval_telegram.get_updates(state.get("approval_offset")):
-                    state["approval_offset"] = int(update["update_id"]) + 1
-                    handle_update(update, approval_telegram, "pending_only")
-                    save_state(config, state)
+            if approval_polling_enabled["value"]:
+                try:
+                    for update in approval_telegram.get_updates(state.get("approval_offset")):
+                        state["approval_offset"] = int(update["update_id"]) + 1
+                        handle_update(update, approval_telegram, "pending_only")
+                        save_state(config, state)
+                except TelegramError as exc:
+                    if exc.status_code == 409:
+                        approval_polling_enabled["value"] = False
+                        print("plg approval polling disabled: another PLG bot instance is already polling getUpdates", flush=True)
+                    else:
+                        raise
             if next_daily_due(config, state):
-                start_daily("p1", config.timezone, lambda: send_daily_batch(config, state, approval_telegram))
+                start_daily("p1", config.timezone, lambda: send_daily_batch(config, state, lead_telegram()))
             if p2_module and p2_config and p2_state and p2_module.next_daily_due(p2_config, p2_state):
-                start_daily("p2", p2_config.timezone, lambda: p2_module.send_daily_batch(p2_config, p2_state, approval_telegram))
+                start_daily("p2", p2_config.timezone, lambda: p2_module.send_daily_batch(p2_config, p2_state, lead_telegram()))
         except TelegramError as exc:
             print(f"telegram polling warning: {exc}", flush=True)
             time.sleep(30 if exc.status_code == 409 else 10)
