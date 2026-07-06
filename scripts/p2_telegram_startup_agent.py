@@ -193,7 +193,7 @@ Avoid profiles similar to previous reject comments:
 Avoid companies already selected in this run:
 {json.dumps(sorted(seen), ensure_ascii=False)}
 
-Keep every field short. Return compact JSON only:
+Use a real founder LinkedIn URL in founder_linkedin when it is known. Keep every field short. Return compact JSON only:
 {{"startups":[{{"name":"","website":"","country":"","stage":"","direction":"","one_liner":"","founder_linkedin":"","arr":"","us_gtm_gap":"","source":""}}]}}
 """
         try:
@@ -420,6 +420,7 @@ def startup_message(index: int, startup: dict[str, Any]) -> str:
             f"{startup.get('country')} | {startup.get('stage')} | {triage.get('direction') or startup.get('direction')}",
             f"Score: {triage.get('score')} | {triage.get('status')}",
             f"{startup.get('one_liner')}",
+            f"Founders LinkedIn: {startup.get('founder_linkedin') or 'N/A'}",
             f"US GTM gap: {triage.get('us_gtm_gap') or startup.get('us_gtm_gap')}",
             f"Why: {triage.get('reasoning')}",
         ]
