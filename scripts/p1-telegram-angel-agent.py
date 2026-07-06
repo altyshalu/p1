@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 DEFAULT_TZ = "Asia/Nicosia"
 DEFAULT_STATE_DIR = "/opt/p1/runtime/p1_telegram_angel_agent"
 DEFAULT_OUT_DIR = "/opt/p1/out"
-DEFAULT_BATCH_SIZE = 30
+DEFAULT_BATCH_SIZE = 10
 DEFAULT_DAILY_TIME = "10:00"
 
 APPROVED_FIELDS = [
@@ -974,7 +974,7 @@ if __name__ == "__main__":
                     "  GEMINI_API_KEY=...",
                     "  P1_ANGEL_DAILY_TIME=10:00",
                     "  P1_ANGEL_TIMEZONE=Asia/Nicosia",
-                    "  P1_ANGEL_BATCH_SIZE=30",
+                    "  P1_ANGEL_BATCH_SIZE=10",
                     "",
                     "Telegram commands:",
                     "  /send_today",

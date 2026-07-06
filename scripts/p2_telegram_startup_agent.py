@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 DEFAULT_TZ = "Asia/Nicosia"
 DEFAULT_STATE_DIR = "/opt/p1/runtime/p2_telegram_startup_agent"
 DEFAULT_OUT_DIR = "/opt/p1/out"
-DEFAULT_BATCH_SIZE = 30
+DEFAULT_BATCH_SIZE = 10
 DEFAULT_DAILY_TIME = "10:00"
 DEFAULT_SHEET_ID = "1ETOYOo792ZLUXppZ9zCKBDNZtAV_cn_isaBYJaef25Q"
 DEFAULT_SHEET_TAB = "New / External"
