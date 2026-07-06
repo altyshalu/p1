@@ -193,7 +193,7 @@ Avoid profiles similar to previous reject comments:
 Avoid companies already selected in this run:
 {json.dumps(sorted(seen), ensure_ascii=False)}
 
-Return compact JSON only:
+Keep every field short. Return compact JSON only:
 {{"startups":[{{"name":"","website":"","country":"","stage":"","direction":"","one_liner":"","founder_linkedin":"","arr":"","us_gtm_gap":"","source":""}}]}}
 """
         try:
@@ -213,9 +213,54 @@ Return compact JSON only:
             pool.append(startup)
         if len(pool) >= target:
             break
+    if len(pool) < target:
+        for item in fallback_startup_candidates():
+            startup = normalize_startup(item)
+            key = startup_key(startup)
+            if not startup.get("name") or key in seen:
+                continue
+            seen.add(key)
+            pool.append(startup)
+            if len(pool) >= target:
+                break
     if not pool:
         raise RuntimeError("Gemini did not return usable P2 startup candidates.")
     return pool
+
+
+def fallback_startup_candidates() -> list[dict[str, Any]]:
+    rows = [
+        ("GitGuardian", "https://www.gitguardian.com", "France", "Series B", "B2B developer security", "Secrets detection and code security platform.", "Revenue / enterprise customers", "French security company with US enterprise expansion upside."),
+        ("Yokoy", "https://yokoy.io", "Switzerland", "Series B", "B2B fintech automation", "AI spend management for finance teams.", "Revenue / enterprise customers", "Swiss B2B SaaS with US GTM expansion opportunity."),
+        ("Gravitee", "https://www.gravitee.io", "France / UK", "Series B", "B2B API management", "API management and event-native gateway platform.", "Revenue / enterprise customers", "European infrastructure company with US GTM room."),
+        ("Quix", "https://quix.io", "United Kingdom", "Series A", "B2B streaming data", "Real-time data pipeline and stream processing platform.", "Early revenue / production users", "UK data infrastructure startup with US commercial gap."),
+        ("Monite", "https://monite.com", "Germany", "Series A", "B2B embedded finance", "Embedded AP and AR workflows for B2B platforms.", "Early revenue / platform customers", "German fintech infrastructure with US platform sales opportunity."),
+        ("Root Signals", "https://www.rootsignals.ai", "Finland", "Seed", "B2B AI evaluation", "Evaluation and monitoring platform for LLM applications.", "Early customers", "Nordic AI infrastructure with US GTM opportunity."),
+        ("Sifflet", "https://www.siffletdata.com", "France", "Series A", "B2B data observability", "Data observability platform for analytics and data teams.", "Revenue / enterprise customers", "French data tooling startup with US enterprise sales upside."),
+        ("BforeAI", "https://www.bfore.ai", "France", "Series A", "B2B cybersecurity AI", "Predictive security platform for malicious infrastructure detection.", "Revenue / security customers", "French AI security company with US GTM expansion gap."),
+        ("Synthesized", "https://www.synthesized.io", "United Kingdom", "Series A", "B2B synthetic data", "Synthetic and test data platform for enterprises.", "Revenue / enterprise customers", "UK data infrastructure company with US expansion opportunity."),
+        ("Klu", "https://klu.ai", "United Kingdom", "Seed", "B2B LLM platform", "Platform for building and evaluating AI applications.", "Early customers", "UK AI software startup with US GTM opportunity."),
+        ("Apaleo", "https://apaleo.com", "Germany", "Series A", "B2B hospitality software", "API-first property management platform for hotel groups.", "Revenue / hospitality customers", "German vertical SaaS with US market expansion gap."),
+        ("Tacto", "https://www.tacto.ai", "Germany", "Series A", "B2B procurement software", "Procurement operating system for industrial mid-market companies.", "Revenue / customers", "German B2B workflow startup with US GTM potential."),
+        ("Parloa", "https://www.parloa.com", "Germany", "Series B", "B2B conversational AI", "AI voice and customer service automation platform.", "Revenue / enterprise customers", "German AI software company with US sales expansion opportunity."),
+        ("QuantPi", "https://www.quantpi.com", "Germany", "Seed", "B2B AI governance", "AI trust, risk, and compliance platform for enterprises.", "Early customers", "German AI governance startup with US enterprise GTM opportunity."),
+        ("Encord", "https://encord.com", "United Kingdom", "Series B", "B2B AI data platform", "Data and evaluation platform for computer vision AI teams.", "Revenue / enterprise customers", "UK AI infrastructure company with US GTM upside."),
+    ]
+    return [
+        {
+            "name": name,
+            "website": website,
+            "country": country,
+            "stage": stage,
+            "direction": direction,
+            "one_liner": one_liner,
+            "founder_linkedin": "",
+            "arr": arr,
+            "us_gtm_gap": gap,
+            "source": "p2_fallback_ohio_icp_seed",
+        }
+        for name, website, country, stage, direction, one_liner, arr, gap in rows
+    ]
 
 
 def load_candidates_from_file(path: Path) -> list[dict[str, Any]]:
@@ -273,7 +318,7 @@ def gemini_json(api_key: str, prompt: str) -> dict[str, Any]:
     for attempt in prompts:
         body = {
             "contents": [{"parts": [{"text": attempt}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 2048},
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0, "maxOutputTokens": 4096},
         }
         req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=90) as response:
